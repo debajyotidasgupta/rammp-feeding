@@ -24,7 +24,10 @@ ARCHTAG    := $(shell uname -m | sed 's/arm64/aarch64/; s/x86_64/x86-64/; s/amd6
 SDK        := $(HOME)/kortex_api_2.8.0_$(ARCHTAG)
 # Arm commands run inside the driver container, which is where the KORTEX SDK
 # lives. It mounts this tree at /work, so an edit here is live immediately.
-INARM      := docker exec tcp_rec python3 -u -m
+# PYTHONDONTWRITEBYTECODE because the container runs as root: without it every
+# invocation leaves root-owned __pycache__ in the synced tree, which then blocks
+# sync.sh --delete and needs sudo to clear.
+INARM      := docker exec -e PYTHONDONTWRITEBYTECODE=1 tcp_rec python3 -u -m
 
 .PHONY: sdk kortex vision images depth clean-depth status state start capture
 

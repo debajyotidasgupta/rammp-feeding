@@ -59,11 +59,17 @@ vision:
 
 images: kortex vision
 
-# depth_camera_info_url is NOT optional. Without it kinova_vision publishes the
-# package's generic default_depth_calib_480x270.ini (fx=fy=360.013), and THIS
-# arm reports 334.810 -- 7.53% off, a scale error on every deprojected point
-# worth about 8 mm at the plate edge. calibration/ holds the device's own
-# values; see calibration/README.md.
+# This arm's depth sensor reports fx=fy=334.810; the package's shipped default
+# is 360.013 -- 7.53% off, a scale error on every deprojected point worth about
+# 8 mm at the plate edge. calibration/depth_480x270.ini holds the device's own
+# values (see calibration/README.md).
+#
+# CAVEAT, measured: passing depth_camera_info_url does NOT give you a populated
+# /camera/depth/camera_info -- kinova_vision publishes it with width=height=0
+# when the URL is custom. The image topic is fine (30.0 Hz measured). So a
+# consumer must read the .ini directly rather than subscribing to camera_info.
+# The flag is kept because it stops the WRONG intrinsics being advertised, not
+# because it makes the right ones available.
 depth:
 	-docker rm -f kinova_vision 2>/dev/null
 	docker run -d --name kinova_vision --network host --ipc host --restart unless-stopped \

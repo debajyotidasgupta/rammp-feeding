@@ -7,6 +7,7 @@
 #   make start     back to feeding_start  (retraces from food_detect_start)
 #   make detect    feeding_start -> food_detect_start  (smooth lift, then swing)
 #   make perceive  from food_detect_start: capture, detect, depth, target
+#   make over      move so the utensil is over the target food
 #
 #   make capture   re-measure feeding_start from the parked arm (rarely: see README)
 #   make sdk / images / depth   build and run the containers
@@ -30,7 +31,7 @@ SDK        := $(HOME)/kortex_api_2.8.0_$(ARCHTAG)
 # sync.sh --delete and needs sudo to clear.
 INARM      := docker exec -e PYTHONDONTWRITEBYTECODE=1 tcp_rec python3 -u -m
 
-.PHONY: sdk kortex vision images depth clean-depth status state start detect perceive capture
+.PHONY: sdk kortex vision images depth clean-depth status state start detect perceive over capture
 
 # --- the arm ----------------------------------------------------------------
 # Every motion goes through kinova/scripts/safe_move.py: utensil kept pointing
@@ -51,6 +52,11 @@ detect:
 # the optional Depth Anything 3 cross-check.
 perceive:
 	@feeding/stage1.sh
+
+# Acquisition, one verified step at a time. Uses the latest make perceive run.
+over:
+	@docker cp "$$(ls -d $$HOME/rammp_runs/*/ | tail -1)target.json" tcp_rec:/tmp/target.json
+	@$(INARM) kinova.scripts.acquire over
 
 capture:
 	@$(INARM) kinova.scripts.capture_home --out /work/calibration/home_pose.json

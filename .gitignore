@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.py[cod]
+.DS_Store
+captures/
+sim/assets/smplx/*.npz
+sim/out/
+# Meshes posed from SMPL-X. Derivatives of a licensed body model, so they are
+# not redistributed here -- regenerate with `python sim/pose_human.py` (needs
+# torch + smplx and SMPLX_NEUTRAL.npz in sim/assets/smplx/).
+sim/assets/human/*.obj
+MUJOCO_LOG.TXT

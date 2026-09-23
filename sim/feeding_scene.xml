@@ -1,0 +1,200 @@
+<mujoco model="rammp_feeding">
+  <!-- Minimal feeding scene: Gen3 + 2F-85 + fork, SMPL-X seated user in a
+       wheelchair, table with a plate of food cubes.
+
+       Frame: Z-up, user faces +X, user's LEFT is +Y  (so the arm, mounted on
+       their right, sits at -Y  -- matching the trial video).
+       Landmarks (sim/assets/human/landmarks.json, same frame):
+         mouth (0.101, -0.001, 1.207)   nose (0.115, 0.000, 1.236)
+         head  (-0.004, 0.011, 1.225)   head radius 0.123
+  -->
+  <compiler angle="radian" autolimits="true"/>
+  <!-- 1 kHz: the real arm's cyclic rate. Bite detection reads a torque
+       residual over a ~100 ms window, so the control rate is not a free
+       parameter - halving it halves the samples the detector gets. -->
+  <option integrator="implicitfast" timestep="0.001"/>
+
+  <visual>
+    <!-- must be at least as large as the biggest camera we render: the 1280x720
+         colour stream. MuJoCo's default offscreen buffer is 640x480. -->
+    <global offwidth="1280" offheight="720"/>
+  </visual>
+
+  <asset>
+    <model name="gen3"  file="assets/kinova_gen3/gen3_fork.xml"/>
+    <mesh name="human_lower" file="assets/human/human_lower.obj"/>
+    <mesh name="human_upper" file="assets/human/human_upper.obj"/>
+    <texture type="skybox" builtin="gradient" rgb1="0.25 0.3 0.35" rgb2="0.05 0.05 0.08" width="64" height="256"/>
+    <texture name="grid" type="2d" builtin="checker" rgb1="0.2 0.2 0.2" rgb2="0.3 0.3 0.3" width="300" height="300"/>
+    <material name="grid" texture="grid" texrepeat="6 6" reflectance="0.1"/>
+    <material name="skin"  rgba="0.80 0.68 0.60 1"/>
+    <material name="chair" rgba="0.15 0.15 0.17 1"/>
+    <material name="tabletop" rgba="0.80 0.70 0.55 1"/>
+    <material name="plate" rgba="0.92 0.92 0.95 1"/>
+    <material name="food"  rgba="0.85 0.55 0.25 1"/>
+    <material name="steel" rgba="0.85 0.85 0.88 1"/>
+  </asset>
+
+  <default>
+    <default class="food">
+      <!-- light, fairly high friction so a skewered cube does not slide off -->
+      <geom type="box" material="food" mass="0.008" friction="1.2 0.02 0.001"
+            solref="0.008 1" solimp="0.9 0.95 0.001"/>
+    </default>
+    <default class="nogo">
+      <!-- the user's body: collision only, never visual; contype 0 so it does
+           not self-collide with the chair, but the arm WILL hit it -->
+      <geom group="3" rgba="1 0 0 0.25" contype="1" conaffinity="1"/>
+    </default>
+  </default>
+
+  <worldbody>
+    <light pos="0.6 0 2.2" dir="0 0 -1" diffuse="0.8 0.8 0.8"/>
+    <light pos="-0.5 -1 2.0" dir="0.3 0.5 -1" diffuse="0.35 0.35 0.35"/>
+    <geom name="floor" type="plane" size="4 4 0.05" material="grid"/>
+
+    <!-- ============================ user ============================ -->
+    <!-- Split at the lumbar spine (z=0.715) into a seated lower body and an
+         upper body on a pitch hinge. "The user leans into the fork during
+         approach" is the scenario the safety architecture exists for
+         (docs/feeding-architecture.md Sec. 0 and Sec. 10) and a single rigid
+         mesh cannot express it. At 20 deg of lean the mouth travels 161 mm
+         forward - further than the 90 mm PRESENT standoff, i.e. the user can
+         close on the fork faster than the arm can withdraw. -->
+    <body name="user_lower" pos="0 0 0">
+      <geom name="user_lower_visual" type="mesh" mesh="human_lower" material="skin"
+            contype="0" conaffinity="0" group="2"/>
+      <geom class="nogo" name="lap_nogo" type="box" size="0.20 0.20 0.06" pos="0.22 0 0.60"/>
+      <geom class="nogo" name="pelvis_nogo" type="sphere" size="0.15" pos="0.01 0 0.64"/>
+    </body>
+
+    <body name="user_upper" pos="0 0 0">
+      <!-- Torso+head+arms: ~38 kg. Inertia is a coarse estimate about the
+           hinge, not a measurement - it sets how hard the lean actuator has to
+           work, and nothing downstream depends on it being exact. -->
+      <inertial pos="0 0 1.00" mass="38" diaginertia="2.2 2.2 0.9"/>
+      <joint name="user_lean" type="hinge" axis="0 1 0" pos="-0.016 0 0.715"
+             range="-0.17 0.52" damping="12" armature="0.5"/>
+      <geom name="user_upper_visual" type="mesh" mesh="human_upper" material="skin"
+            contype="0" conaffinity="0" group="2"/>
+      <!-- collision proxies. Deliberately simple: these ARE the no-go volumes
+           the safety monitor reasons about, so they should be conservative
+           rather than a faithful mesh. -->
+      <geom class="nogo" name="head_nogo"  type="sphere"  size="0.123" pos="-0.004 0.011 1.225"/>
+      <geom class="nogo" name="torso_nogo" type="capsule" size="0.16" fromto="0 0 0.74  0 0 1.08"/>
+      <!-- landmark markers (no collision) for the perception stack to target.
+           They ride the hinge, so a lean moves the mouth exactly as it moves
+           the head sphere - ground truth and no-go volume cannot drift apart. -->
+      <site name="mouth" pos="0.101 -0.001 1.207" size="0.012" rgba="1 0.2 0.2 0.9"/>
+      <site name="nose"  pos="0.115  0.000 1.236" size="0.008" rgba="0.2 0.6 1 0.9"/>
+    </body>
+
+    <!-- ========================== wheelchair ========================== -->
+    <body name="wheelchair" pos="0 0 0">
+      <geom name="seat"      type="box" material="chair" size="0.22 0.24 0.03" pos="0.02 0 0.50"/>
+      <geom name="backrest"  type="box" material="chair" size="0.03 0.24 0.26" pos="-0.22 0 0.78"/>
+      <geom name="footplate" type="box" material="chair" size="0.14 0.20 0.02" pos="0.40 0 0.10"/>
+      <geom name="wheel_l"   type="cylinder" material="chair" size="0.30 0.02" pos="0 0.30 0.30" euler="1.5708 0 0"/>
+      <geom name="wheel_r"   type="cylinder" material="chair" size="0.30 0.02" pos="0 -0.30 0.30" euler="1.5708 0 0"/>
+      <!-- mount column: alongside and level with the KNEE, not the hip - the
+           arm in the trial video rises forward of the thigh, not beside the seat -->
+      <geom name="post" type="cylinder" material="chair" size="0.035 0.26" pos="0.34 -0.32 0.28"/>
+      <geom name="post_rail" type="box" material="chair" size="0.17 0.03 0.025" pos="0.18 -0.32 0.52"/>
+      <!-- Static face camera. Architecture Sec. 4.3: the WRIST camera cannot
+           track the face during approach - it is on the moving arm, and the
+           fork and food occlude the lower half of the frame exactly when the
+           mouth matters. Face tracking needs a second, fixed camera. This is a
+           hardware addition the real chair does not have yet; modelling it here
+           is how we find out what it has to see before buying one.
+           Mounted on the user's LEFT (+Y), opposite the arm, so the arm never
+           crosses between it and the face. -->
+      <geom name="cam_post" type="cylinder" material="chair" size="0.02 0.40" pos="0.45 0.28 0.90"/>
+      <camera name="face_cam" pos="0.45 0.28 1.30" fovy="55"
+              xyaxes="-0.6263 0.7779 0  -0.1583 -0.1275 0.9791" resolution="640 480"/>
+    </body>
+
+    <!-- ===================== arm, on the user's RIGHT ===================== -->
+    <body name="arm_mount" pos="0.34 -0.32 0.55" euler="0 0 1.5708">
+      <attach model="gen3" body="base_link" prefix="arm_"/>
+    </body>
+
+    <!-- ============================ table ============================ -->
+    <body name="table" pos="0.84 0 0">
+      <!-- near edge at x=0.49, clear of the arm mount at x=0.34. With the mount
+           moved forward to knee level the previous table overhung it and the
+           shoulder link jammed into the underside by 41 mm. -->
+      <geom name="tabletop" type="box" material="tabletop" size="0.35 0.45 0.02" pos="0 0 0.73"/>
+      <geom name="leg1" type="cylinder" material="chair" size="0.025 0.365" pos="0.30 0.40 0.365"/>
+      <geom name="leg2" type="cylinder" material="chair" size="0.025 0.365" pos="0.30 -0.40 0.365"/>
+    </body>
+
+    <!-- plate + food cubes. 15 mm cubes, the size a fork can actually take. -->
+    <body name="plate" pos="0.72 -0.10 0.755">
+      <geom name="plate_base" type="cylinder" material="plate" size="0.11 0.006"/>
+      <geom name="plate_rim"  type="cylinder" material="plate" size="0.12 0.012" pos="0 0 0.004"
+            contype="1" conaffinity="1"/>
+    </body>
+    <body name="food0" pos="0.69 -0.13 0.782"><freejoint/><geom class="food" name="food0_geom" size="0.0075 0.0075 0.0075"/></body>
+    <body name="food1" pos="0.74 -0.08 0.782"><freejoint/><geom class="food" name="food1_geom" size="0.0075 0.0075 0.0075"/></body>
+    <body name="food2" pos="0.72 -0.14 0.782"><freejoint/><geom class="food" name="food2_geom" size="0.0075 0.0075 0.0075"/></body>
+    <body name="food3" pos="0.76 -0.12 0.782"><freejoint/><geom class="food" name="food3_geom" size="0.0075 0.0075 0.0075"/></body>
+
+    <!-- scene cameras -->
+    <camera name="side"  pos="0.9 -1.5 1.5" xyaxes="0.85 0.52 0 -0.25 0.41 0.88"/>
+    <camera name="front" pos="1.9 0 1.35" xyaxes="0 1 0 -0.4 0 0.92"/>
+    <camera name="user_view" pos="0.35 -0.9 1.45" xyaxes="0.93 0.36 0 -0.18 0.47 0.86"/>
+  </worldbody>
+
+  <actuator>
+    <!-- The user's lean is COMMANDED, not passive: a person leaning toward the
+         fork is doing it deliberately, and the fault-injection cases need it
+         repeatable. High gain so contact with the arm does not push the user
+         around, while the contact force still shows up in the arm's torque
+         residual. Gravity at full lean needs ~45 Nm, hence the range. -->
+    <position name="user_lean" joint="user_lean" kp="6000" kv="400"
+              ctrlrange="-0.17 0.52" forcerange="-400 400"/>
+  </actuator>
+
+  <equality>
+    <!-- The skewered cube is held by a weld that is ENABLED when the tines are
+         actually inserted, not by teleporting the body. That way "did it stay
+         on the fork?" is a property of the model we can switch off and test,
+         rather than something the demo asserts. -->
+    <weld name="hold_food0" body1="arm_fork" body2="food0" active="false" solref="0.004 1"/>
+    <weld name="hold_food1" body1="arm_fork" body2="food1" active="false" solref="0.004 1"/>
+    <weld name="hold_food2" body1="arm_fork" body2="food2" active="false" solref="0.004 1"/>
+    <weld name="hold_food3" body1="arm_fork" body2="food3" active="false" solref="0.004 1"/>
+  </equality>
+
+  <contact>
+    <!-- The user's own no-go proxies overlap each other by design (they are
+         deliberately oversized volumes, not anatomy). Before the lumbar split
+         both lived on one static body so MuJoCo discarded the pairs; now that
+         the upper body has a joint they would self-collide and fight the lean
+         actuator. The pairs that matter are proxy-vs-ARM, and those stay on. -->
+    <exclude body1="user_upper" body2="user_lower"/>
+    <exclude body1="user_upper" body2="wheelchair"/>
+    <!-- Adjacent links overlap slightly in the menagerie meshes; the submodel's
+         own exclusions do not survive <attach>. This is a model artifact, not a
+         real self-collision - excluding it keeps the contact list meaningful so
+         a genuine collision (e.g. fork vs user) actually stands out. -->
+    <exclude body1="arm_base_link" body2="arm_shoulder_link"/>
+    <exclude body1="arm_shoulder_link" body2="arm_half_arm_1_link"/>
+    <exclude body1="arm_half_arm_1_link" body2="arm_half_arm_2_link"/>
+    <exclude body1="arm_half_arm_2_link" body2="arm_forearm_link"/>
+    <exclude body1="arm_forearm_link" body2="arm_spherical_wrist_1_link"/>
+    <exclude body1="arm_spherical_wrist_1_link" body2="arm_spherical_wrist_2_link"/>
+    <exclude body1="arm_spherical_wrist_2_link" body2="arm_bracelet_link"/>
+    <exclude body1="arm_bracelet_link" body2="arm_fork"/>
+    <!-- Rigid contact cannot represent PIERCING: with contact on, the tines
+         simply punt an 8 g cube across the table instead of entering it. Real
+         food yields and closes around the tines. So fork-vs-food contact is
+         excluded and the grasp is represented by the weld, enabled once the tip
+         is inside the piece. The limitation is the rigid-body model, not the
+         plan - a deformable food model would remove the need for this. -->
+    <exclude body1="arm_fork" body2="food0"/>
+    <exclude body1="arm_fork" body2="food1"/>
+    <exclude body1="arm_fork" body2="food2"/>
+    <exclude body1="arm_fork" body2="food3"/>
+  </contact>
+</mujoco>

@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Push this tree to another machine. The Mac is the source of truth; remote
+# copies are replicas (--delete), so edit here, never there.
+#
+#   ./sync.sh                # -> triphammer:~/rammp
+#   ./sync.sh cascadilla     # any tailnet host
+#
+# Excluded, because they are per-machine and must NOT be replicated:
+#   .venv/                     arm64 vs x86-64 python wheels
+#   docker/vendor/kortex_api_* the staged KORTEX SDK (arch-specific; `make sdk`)
+#   sim/out/                   render output; thousands of PNGs, all regenerable
+set -euo pipefail
+cd "$(dirname "$0")"
+
+HOST="${1:-triphammer}"
+USER="${SYNC_USER:-debajyoti}"
+DEST="${SYNC_DEST:-rammp}"
+
+echo "syncing -> $USER@$HOST:$DEST/"
+rsync -az --delete \
+  --exclude '.venv/' \
+  --exclude '__pycache__/' \
+  --exclude '*.pyc' \
+  --exclude '.DS_Store' \
+  --exclude 'docker/vendor/kortex_api_*' \
+  --exclude 'sim/out/' \
+  ./ "$USER@$HOST:$DEST/"
+
+echo "remote status:"
+ssh "$USER@$HOST" "cd $DEST && make status" 2>&1 | sed 's/^/  /'

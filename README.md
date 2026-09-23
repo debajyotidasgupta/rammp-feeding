@@ -26,19 +26,36 @@ Measured on this installation and checked in as `calibration/home_pose.json`.
 
 | | |
 |---|---|
-| joints (deg) | `-89.998, 8.074, -0.003, -139.195, 0.447, -40.078, -174.305` |
-| tool point | `(0.0247, -0.2238, 0.2121)` m in the arm base frame |
-| fork direction | `(-0.005, -0.164, -0.986)` — **80.6° below horizontal** |
-| joint 1 holding torque | 0.291 N·m |
+| joints (deg) | `-90.000, 8.071, 0.000, -139.199, 0.446, -49.528, -174.304` |
+| tool point | `(0.0236, -0.1766, 0.2082)` m in the arm base frame |
+| fork direction | `(-0.009, -0.000, -1.000)` — **89.5° below horizontal, i.e. straight down** |
+
+**Tool orientation is the same at every stage.** The fork points straight down
+here and stays that way through the whole pipeline, so stages differ only in
+POSITION. That is not cosmetic: on 2026-09-23 the fork was destroyed by a wrist
+rotation, and holding orientation fixed removes the reason to ever command one.
+
+The residual 0.50° sits in `axis_x`, which J2/J4/J6 cannot correct — all three
+pitch in the same plane, so only a roll joint could, at the cost of a large
+reorientation. 0.50° is 8.8 mm per metre travelled, under 0.5 mm over a
+bite-sized descent.
+
+**Watch the Base Protection Zone.** The arm has one enabled: a cylinder r=150 mm,
+h=160 mm at z=0.07. This pose puts the tool at radius **178 mm — only 28 mm of
+margin**. A trajectory whose swept path dips inside is rejected outright with a
+generic `METHOD_FAILED`, which is very likely what blocked several moves home.
 
 It is safe at rest by construction, not by monitoring: **joint 1 at −90°** swings
 the whole arm clockwise, clear of the user on their right, and the fork points at
 the floor. Nothing has to be running for that to hold.
 
 **Joint 3 is squared to 0** so the folded forearm lies in the joint-1 plane
-instead of splaying out of it. That is not cosmetic — it dropped joint 1's
-holding torque from 0.858 to 0.291 N·m by taking the off-axis moment off the
-base joint. A large joint-1 holding torque is a hint the pose has drifted.
+instead of splaying out of it. That took the off-axis moment off the base joint.
+
+**J1 and J3 are stored as their intended exact values**, not as measured.
+Commanding `-90.000000` lands at `-89.998138` every single time — a
+deterministic servo offset worth 7 microns at the tool. Re-capturing the
+measurement into the target would let it drift a little further each time.
 
 Re-measure it with `make capture` after any re-park, then pull the file back to
 the Mac before the next `sync.sh` (which runs `--delete`).

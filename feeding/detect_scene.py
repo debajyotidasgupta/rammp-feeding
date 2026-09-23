@@ -99,17 +99,24 @@ def main() -> int:
         t0 = time.perf_counter()
         if a.single:
             b = la.locate_one(img, query, max_new_tokens=a.max_new_tokens)
-            boxes = [b] if b else []
+            found = [(query, [b] if b else [])]
         else:
-            boxes = la.detect(img, cats, max_new_tokens=a.max_new_tokens)
+            found = la.detect_labelled(img, cats, max_new_tokens=a.max_new_tokens)
         dt = time.perf_counter() - t0
-        print("\n  %-28s %2d box(es) in %5.2f s" % (repr(query), len(boxes), dt))
-        for i, b in enumerate(boxes):
-            cx, cy = b.centre
-            print("     %d  (%4.0f,%4.0f)-(%4.0f,%4.0f)  centre (%4.0f,%4.0f)  "
-                  "%3.0fx%3.0f px" % (i + 1, b.x1, b.y1, b.x2, b.y2, cx, cy,
-                                      b.x2 - b.x1, b.y2 - b.y1))
-        groups.append((cats[0] if len(cats) == 1 else query.replace("</c>", "+"), boxes))
+        total = sum(len(bs) for _, bs in found)
+        print("\n  %s  ->  %d box(es) in %.2f s" % (repr(query), total, dt))
+        for name, boxes in found:
+            print("    %-14s %d" % (name, len(boxes)))
+            for i, b in enumerate(boxes):
+                cx, cy = b.centre
+                print("       %d  (%4.0f,%4.0f)-(%4.0f,%4.0f)  centre (%4.0f,%4.0f)  "
+                      "%3.0fx%3.0f px" % (i + 1, b.x1, b.y1, b.x2, b.y2, cx, cy,
+                                          b.x2 - b.x1, b.y2 - b.y1))
+        missing = [c for c in cats if not any(c == n for n, _ in found)]
+        if missing:
+            print("    NOT RETURNED: %s  (the model ran out of tokens before "
+                  "reaching it -- put it earlier in the prompt)" % ", ".join(missing))
+        groups.extend(found)
 
     draw(img, groups, a.out)
     print("\nwrote %s" % Path(a.out).resolve())

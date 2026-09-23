@@ -36,6 +36,13 @@ from dataclasses import dataclass
 
 MODEL_ID = "nvidia/LocateAnything-3B"
 BOX_RE = re.compile(r"<box><(\d+)><(\d+)><(\d+)><(\d+)></box>")
+# The model tags each category before its boxes:
+#   <ref>food pieces</ref><box>..</box><box>..</box><ref>bowl</ref><box>..</box>
+# Matching only <box> throws that away and leaves every detection sharing one
+# label, which is useless downstream -- the arm has to know which box is food
+# and which is the bowl. Walk both tokens in order instead.
+TOKEN_RE = re.compile(
+    r"<ref>(.*?)</ref>|<box><(\d+)><(\d+)><(\d+)><(\d+)></box>")
 
 
 @dataclass
@@ -88,6 +95,35 @@ def parse_boxes(answer: str, width: int, height: int, label: str = "",
         out.append(Box(x1 / 1000 * width, y1 / 1000 * height,
                        x2 / 1000 * width, y2 / 1000 * height, label))
     return dedupe(out) if merge else out
+
+
+def parse_labelled(answer: str, width: int, height: int,
+                   merge: bool = True) -> list[tuple[str, list[Box]]]:
+    """Model output -> [(category, boxes)], in the order the model emitted them.
+
+    Deduping is per category, not globally: a berry sitting inside the bowl
+    overlaps the bowl box almost completely, so a global NMS would silently
+    drop whichever it sorted second.
+    """
+    groups: dict[str, list[Box]] = {}
+    order: list[str] = []
+    current = ""
+    for m in TOKEN_RE.finditer(answer):
+        ref = m.group(1)
+        if ref is not None:
+            current = ref.strip()
+            if current not in groups:
+                groups[current] = []
+                order.append(current)
+            continue
+        x1, y1, x2, y2 = (int(g) for g in m.groups()[1:])
+        if current not in groups:
+            groups[current] = []
+            order.append(current)
+        groups[current].append(Box(x1 / 1000 * width, y1 / 1000 * height,
+                                   x2 / 1000 * width, y2 / 1000 * height,
+                                   current))
+    return [(k, dedupe(groups[k]) if merge else groups[k]) for k in order]
 
 
 class LocateAnything:
@@ -147,11 +183,28 @@ class LocateAnything:
         return max(boxes, key=lambda b: b.area) if boxes else None
 
     def detect(self, image, categories: list[str], **kw) -> list[Box]:
-        """Multi-category detection. Categories are joined with the model's </c>."""
+        """Multi-category detection, flattened. Prefer detect_labelled()."""
+        return [b for _, bs in self.detect_labelled(image, categories, **kw) for b in bs]
+
+    def detect_labelled(self, image, categories: list[str],
+                        **kw) -> list[tuple[str, list[Box]]]:
+        """Multi-category detection, keeping which box belongs to which category.
+
+        Categories are joined with the model's own "</c>". A comma-joined string
+        is read as one long phrase instead and the model falls back to emitting
+        regions -- measured 9 boxes, 6 of them junk, against 4 correct ones.
+
+        Category ORDER matters, and not for the reason you would guess. The
+        model can get stuck repeating one box: asked for
+        "food pieces</c>bowl</c>fork" it emitted the bowl ~60 times, exhausted
+        max_new_tokens, and never reached "fork" at all. Dedupe hides the
+        repeats but cannot recover the category that was starved. So put what
+        you actually need FIRST, and give it room.
+        """
         answer = self.predict(
             image, "Locate all the instances that matches the following description: %s."
             % "</c>".join(categories), **kw)
-        return parse_boxes(answer, image.width, image.height, ",".join(categories))
+        return parse_labelled(answer, image.width, image.height)
 
     # -------------------------------------------------------------- measuring
     def benchmark(self, image, phrase: str = "face", n: int = 5,

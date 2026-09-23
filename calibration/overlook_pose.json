@@ -55,5 +55,5 @@
       0.0473
     ]
   },
-  "note": "tool_pose is the CONFIGURED TOOL frame, not the flange: the arm carries a 120 mm z-offset for the 2F-85. The fork adds more. Measured camera-to-tine-tip is ~105 mm, so the reported point lands within a few cm of the real tip -- good enough to report and to stand off by, NOT good enough for the 4 mm flesh/bowl window, which is terminated on torque instead."
+  "note": "tool_pose is the CONFIGURED TOOL frame, not the flange: the arm carries a 120 mm z-offset for the 2F-85. The utensil adds more. Measured camera-to-tine-tip is ~105 mm, so the reported point lands within a few cm of the real tip -- good enough to report and to stand off by, NOT good enough for the 4 mm flesh/bowl window, which is terminated on torque instead."
 }

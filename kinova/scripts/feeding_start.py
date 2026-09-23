@@ -7,7 +7,7 @@
 Poses live in calibration/<name>_pose.json and are measured on this
 installation with kinova.scripts.capture_home:
 
-    home         feeding_start    -- parked, arm swung clear, fork at the floor
+    home         feeding_start    -- parked, arm swung clear, utensil at the floor
     food_detect  food_detect_start -- above the bowl, camera straight down and
                                       rolled to a multiple of 90 deg
 
@@ -20,7 +20,7 @@ The one subtlety kept: Kortex reports joint angles in [0, 360) and joints
 (-180, 180]. Without that, "go to -174" from +170 reads as a 344 degree journey
 instead of a 16 degree one.
 
-NEVER touches the gripper -- the 2F-85 is holding the fork. No gripper RPC is
+NEVER touches the gripper -- the 2F-85 is holding the utensil. No gripper RPC is
 imported in this file.
 """
 

@@ -1,9 +1,11 @@
 # rammp — robot-assisted feeding, Kinova Gen3
 
-Starting again from a known state. One arm, one fork, one command.
+Starting again from a known state. One arm, one utensil, one command.
 
 The arm is a **Kinova Gen3 7-DoF** on a wheelchair mount at the user's right,
-holding a **fixed inline fork** in a Robotiq 2F-85. There is **no wrist
+holding a **fixed utensil** in a Robotiq 2F-85 — a fork originally, a spoon since
+2026-09-23. "Utensil" throughout means whatever is clamped there; it must be
+able to pierce the food. There is **no wrist
 force/torque sensor** — all force sensing is joint torque. Compute is a **Jetson
 AGX Orin** running the driver in a container.
 
@@ -28,9 +30,9 @@ Measured on this installation and checked in as `calibration/home_pose.json`.
 |---|---|
 | joints (deg) | `-90.000, 8.071, 0.000, -139.199, 0.446, -49.528, -174.304` |
 | tool point | `(0.0236, -0.1766, 0.2082)` m in the arm base frame |
-| fork direction | `(-0.009, -0.000, -1.000)` — **89.5° below horizontal, i.e. straight down** |
+| utensil direction | `(-0.009, -0.000, -1.000)` — **89.5° below horizontal, i.e. straight down** |
 
-**Tool orientation is the same at every stage.** The fork points straight down
+**Tool orientation is the same at every stage.** The utensil points straight down
 here and stays that way through the whole pipeline, so stages differ only in
 POSITION. That is not cosmetic: on 2026-09-23 the fork was destroyed by a wrist
 rotation, and holding orientation fixed removes the reason to ever command one.
@@ -46,7 +48,7 @@ margin**. A trajectory whose swept path dips inside is rejected outright with a
 generic `METHOD_FAILED`, which is very likely what blocked several moves home.
 
 It is safe at rest by construction, not by monitoring: **joint 1 at −90°** swings
-the whole arm clockwise, clear of the user on their right, and the fork points at
+the whole arm clockwise, clear of the user on their right, and the utensil points at
 the floor. Nothing has to be running for that to hold.
 
 **Joint 3 is squared to 0** so the folded forearm lies in the joint-1 plane
@@ -63,7 +65,7 @@ the Mac before the next `sync.sh` (which runs `--delete`).
 ## Two facts that constrain everything
 
 **1. The arm reports a configured TOOL frame, not the flange.** There is a
-120 mm z-offset and 0.831 kg registered (`GetToolConfiguration`). The fork adds
+120 mm z-offset and 0.831 kg registered (`GetToolConfiguration`). The utensil adds
 more: camera-to-tine-tip measures ~105 mm by hand. So the reported `tool_pose`
 lands within a few cm of the real tine tip — good enough to stand off by, not
 good enough for fine work. Do not read `tool_pose` as the flange or as the tip.
@@ -93,7 +95,7 @@ third_party/               kinova-gen3-ros2 (submodule)
 ```
 
 The gripper is **never commanded** anywhere in this tree. It is holding the
-fork; opening it drops the fork. `arm_state` reports gripper position and that
+utensil; opening it drops the utensil. `arm_state` reports gripper position and that
 is the extent of it.
 
 ## Machines

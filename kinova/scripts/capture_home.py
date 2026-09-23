@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Capture the arm's present configuration as the canonical feeding start pose.
 
-Read-only: it commands no motion and never touches the gripper (the fork is
+Read-only: it commands no motion and never touches the gripper (the utensil is
 held in a closed 2F-85; opening it drops the tool).
 
 Every feeding sequence begins from this pose, so it is a fixed constant of the
@@ -100,7 +100,7 @@ def main() -> int:
                        theta_z_deg=tool[5]),
         tool_config=tool_cfg,
         note=("tool_pose is the CONFIGURED TOOL frame, not the flange: the arm "
-              "carries a 120 mm z-offset for the 2F-85. The fork adds more. "
+              "carries a 120 mm z-offset for the 2F-85. The utensil adds more. "
               "Measured camera-to-tine-tip is ~105 mm, so the reported point "
               "lands within a few cm of the real tip -- good enough to report "
               "and to stand off by, NOT good enough for the 4 mm flesh/bowl "

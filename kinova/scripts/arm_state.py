@@ -3,11 +3,11 @@
 
     python -m kinova.scripts.arm_state [--watch]
 
-Read-only. Reports the joint vector, the tool point, which way the fork is
+Read-only. Reports the joint vector, the tool point, which way the utensil is
 pointing, and how far the arm is from the feeding start pose. `--watch` repeats
 until interrupted, which is the useful form while someone is teleoperating.
 
-The gripper is REPORTED but never commanded -- the 2F-85 is holding the fork.
+The gripper is REPORTED but never commanded -- the 2F-85 is holding the utensil.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ def fold(d: float) -> float:
 
 
 def approach_axis(theta_x, theta_y, theta_z):
-    """Tool +z -- the direction the fork points -- in base coords. Kortex gives
+    """Tool +z -- the direction the utensil points -- in base coords. Kortex gives
     fixed-frame XYZ Euler angles, so R = Rz @ Ry @ Rx and this is column 3."""
     tx, ty, tz = (math.radians(v) for v in (theta_x, theta_y, theta_z))
     cx, sx = math.cos(tx), math.sin(tx)
@@ -57,11 +57,11 @@ def report(conn, home) -> None:
     print("  tool   : (%.4f %.4f %.4f) m   rpy (%.2f %.2f %.2f) deg"
           % (b.tool_pose_x, b.tool_pose_y, b.tool_pose_z,
              b.tool_pose_theta_x, b.tool_pose_theta_y, b.tool_pose_theta_z))
-    print("  fork   : (%.3f %.3f %.3f), %.1f deg below horizontal"
+    print("  utensil: (%.3f %.3f %.3f), %.1f deg below horizontal"
           % (ax[0], ax[1], ax[2], tilt))
     try:
         g = fb.interconnect.gripper_feedback.motor[0].position
-        print("  gripper: %.1f%% closed  (holding the fork; never commanded here)" % g)
+        print("  gripper: %.1f%% closed  (holding the utensil; never commanded here)" % g)
     except (AttributeError, IndexError):
         pass
     print("  faults : a=0x%08X b=0x%08X" % (b.fault_bank_a, b.fault_bank_b))

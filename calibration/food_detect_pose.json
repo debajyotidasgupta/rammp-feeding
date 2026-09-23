@@ -1,0 +1,59 @@
+{
+  "label": "food_detect_start",
+  "captured": "2026-09-23T21:02:20+0000",
+  "n_samples": 41,
+  "joints_deg": [
+    176.725,
+    -4.099,
+    -4.213,
+    -57.083,
+    -0.254,
+    -119.242,
+    81.886
+  ],
+  "joints_spread_deg": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "holding_torque_nm": [
+    1.219,
+    -8.666,
+    0.898,
+    -7.803,
+    0.121,
+    -0.131,
+    0.184
+  ],
+  "tool_pose": {
+    "x_m": 0.3036,
+    "y_m": 0.0616,
+    "z_m": 0.5694,
+    "theta_x_deg": 179.99,
+    "theta_y_deg": 0.3748,
+    "theta_z_deg": 89.6202
+  },
+  "tool_config": {
+    "transform_m": [
+      0.0,
+      0.0,
+      0.12
+    ],
+    "rotation_deg": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "mass_kg": 0.831,
+    "mass_centre_m": [
+      0.0,
+      0.0,
+      0.0473
+    ]
+  },
+  "note": "tool_pose is the CONFIGURED TOOL frame, not the flange: the arm carries a 120 mm z-offset for the 2F-85. The fork adds more. Measured camera-to-tine-tip is ~105 mm, so the reported point lands within a few cm of the real tip -- good enough to report and to stand off by, NOT good enough for the 4 mm flesh/bowl window, which is terminated on torque instead."
+}

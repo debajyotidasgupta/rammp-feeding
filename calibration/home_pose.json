@@ -3,9 +3,9 @@
   "captured": "2026-09-23T19:39:29+0000",
   "n_samples": 62,
   "joints_deg": [
-    -89.998,
+    -90.0,
     8.074,
-    -0.003,
+    0.0,
     -139.195,
     0.447,
     -40.078,
@@ -55,5 +55,5 @@
       0.0473
     ]
   },
-  "note": "tool_pose is the CONFIGURED TOOL frame, not the flange: the arm carries a 120 mm z-offset for the 2F-85. The fork adds more. Measured camera-to-tine-tip is ~105 mm, so the reported point lands within a few cm of the real tip -- good enough to report and to stand off by, NOT good enough for the 4 mm flesh/bowl window, which is terminated on torque instead."
+  "note": "tool_pose is the CONFIGURED TOOL frame, not the flange: the arm carries a 120 mm z-offset for the 2F-85. The fork adds more. Measured camera-to-tine-tip is ~105 mm, so the reported point lands within a few cm of the real tip -- good enough to report and to stand off by, NOT good enough for the 4 mm flesh/bowl window, which is terminated on torque instead.  J1 and J3 are held at their INTENDED exact values (-90.000 and 0.000), not the measured -89.998/-0.003: those two were commanded to be exact and the residual is servo steady-state error, so baking a measurement back in would let it drift a little further every time the pose is re-captured."
 }

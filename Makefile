@@ -4,6 +4,7 @@
 #   make status    where is everything
 #   make state     where is the ARM, right now
 #   make start     go to the feeding start pose
+#   make detect-pose  go to the food-detection overlook pose
 #   make lift      raise the tool vertically to the reach limit (stage 1)
 #   make capture   re-measure the feeding start pose from the parked arm
 #
@@ -30,7 +31,7 @@ SDK        := $(HOME)/kortex_api_2.8.0_$(ARCHTAG)
 # sync.sh --delete and needs sudo to clear.
 INARM      := docker exec -e PYTHONDONTWRITEBYTECODE=1 tcp_rec python3 -u -m
 
-.PHONY: sdk kortex vision images depth clean-depth status state start lift capture
+.PHONY: sdk kortex vision images depth clean-depth status state start detect-pose lift capture
 
 # --- the arm ----------------------------------------------------------------
 
@@ -39,6 +40,11 @@ state:
 
 start:
 	@$(INARM) kinova.scripts.feeding_start $(if $(SPEED),--speed $(SPEED),)
+
+# The overlook pose: above the bowl, camera straight down, rolled to a multiple
+# of 90 deg. Where detection runs from.
+detect-pose:
+	@$(INARM) kinova.scripts.feeding_start --pose food_detect $(if $(SPEED),--speed $(SPEED),)
 
 # Stage 1: raise the tool on a pure vertical, then swing the base round to face
 # the table. Vertical FIRST so nothing is swept on the way round.

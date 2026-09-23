@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
-"""`feeding start` -- move the arm to the canonical feeding start pose.
+"""Move the arm to one of the named, measured poses.
 
-    python -m kinova.scripts.feeding_start [--dry-run] [--speed 10]
+    python -m kinova.scripts.feeding_start                    # feeding_start
+    python -m kinova.scripts.feeding_start --pose food_detect # over the bowl
 
-The pose is calibration/home_pose.json, measured on this installation with
-kinova.scripts.capture_home. A feeding sequence always begins here, and on
-deployment the arm is always near it already, so this is a direct joint move --
-no staging, no path search.
+Poses live in calibration/<name>_pose.json and are measured on this
+installation with kinova.scripts.capture_home:
+
+    home         feeding_start    -- parked, arm swung clear, fork at the floor
+    food_detect  food_detect_start -- above the bowl, camera straight down and
+                                      rolled to a multiple of 90 deg
+
+Every sequence begins at feeding_start, and on deployment the arm is always
+near whichever pose it is going to, so this is a direct joint move -- no
+staging, no path search.
 
 The one subtlety kept: Kortex reports joint angles in [0, 360) and joints
 1/3/5/7 are continuous, so a target near the wrap must be compared on
@@ -34,14 +41,20 @@ def fold(d: float) -> float:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(prog="feeding start")
+    ap = argparse.ArgumentParser(prog="goto pose")
     ap.add_argument("--ip", default=None)
-    ap.add_argument("--home", default="calibration/home_pose.json")
+    ap.add_argument("--pose", default="home",
+                    help="name: resolves calibration/<name>_pose.json")
+    ap.add_argument("--home", default=None, help="explicit path, overrides --pose")
     ap.add_argument("--speed", type=float, default=10.0, help="deg/s per joint")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
 
-    rec = json.loads(Path(a.home).read_text())
+    path = Path(a.home) if a.home else Path("calibration") / ("%s_pose.json" % a.pose)
+    if not path.exists():
+        print("no such pose: %s" % path)
+        return 2
+    rec = json.loads(path.read_text())
     target = [fold(v) for v in rec["joints_deg"]]
 
     with kinova_connection(ip=a.ip) as conn:
@@ -50,7 +63,7 @@ def main() -> int:
         delta = [fold(t - c) for t, c in zip(target, q0)]
         worst = max(abs(d) for d in delta)
 
-        print("feeding start  ->  %s  (captured %s)" % (rec["label"], rec["captured"]))
+        print("-> %s   (captured %s)" % (rec["label"], rec["captured"]))
         print("           " + "".join("%9s" % ("J%d" % (i + 1)) for i in range(7)))
         print("  current: " + "".join("%9.3f" % v for v in q0))
         print("  target : " + "".join("%9.3f" % v for v in target))
@@ -61,7 +74,7 @@ def main() -> int:
             print("\ndry run, nothing commanded")
             return 0
         if worst < 0.05:
-            print("\nalready at feeding start")
+            print("\nalready at %s" % rec["label"])
             return 0
 
         cja = Base_pb2.ConstrainedJointAngles()
@@ -91,9 +104,9 @@ def main() -> int:
               % (fb.base.fault_bank_a, fb.base.fault_bank_b))
 
         if max(abs(e) for e in err) > 0.2:
-            print("\nFAILED: did not reach the start pose")
+            print("\nFAILED: did not reach %s" % rec["label"])
             return 1
-        print("\nat feeding start")
+        print("\nat %s" % rec["label"])
     return 0
 
 

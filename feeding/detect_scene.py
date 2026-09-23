@@ -6,10 +6,24 @@
 Stage 1 of finding the goal: from the overlook pose the wrist camera sees the
 whole workspace, and this says where the bowl and the food are in that frame.
 
-Prompt choice is not cosmetic. The categories are joined with the model's own
-"</c>" separator, and asking for the container and its contents together --
-"food pieces</c>bowl" -- measured better than either alone: the bowl gives the
-model a spatial anchor for what counts as food.
+Prompt choice is not cosmetic, and the SEPARATOR is the part that matters.
+Categories must be joined with the model's own "</c>", not with commas.
+Measured on the overlook frame, three strawberries in a bowl:
+
+    'food pieces</c>bowl</c>fork'   4 boxes,  9.9 s   bowl + 3 berries, all correct
+    'food pieces, bowl, fork'       9 boxes, 15.1 s   the same 3 berries, plus SIX
+                                                      junk boxes (whole frame, the
+                                                      table, the arm base, ...)
+
+Commas get read as one long phrase, so the model has no category structure to
+decode against and falls back to emitting regions. Same content, same order --
+only the separator differs, and it is the difference between a usable detection
+and one that needs filtering.
+
+Asking for the container alongside its contents also helps: the bowl gives the
+model a spatial anchor for what counts as food. With an EMPTY bowl, though,
+"food pieces" has no valid target and latches onto the white fork instead -- so
+a detection with no food in frame is not a null result, it is a wrong one.
 
 Output boxes are PIXELS in this image. Turning them into something the arm can
 reach still needs the depth frame; this stage only answers "what, and where in

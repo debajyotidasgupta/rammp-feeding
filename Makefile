@@ -1,16 +1,15 @@
 # One entry point, identical on every machine. Architecture is detected;
-# nothing here is host-specific.
+# nothing here is host-specific. Arm commands run on the jetson.
 #
-#   make status    where is everything
+#   make status    what is running, is the arm reachable
 #   make state     where is the ARM, right now
-#   make start     go to the feeding start pose
-#   make detect-pose  go to the food-detection overlook pose
-#   make lift      raise the tool vertically to the reach limit (stage 1)
-#   make capture   re-measure the feeding start pose from the parked arm
 #
-#   make sdk       fetch the KORTEX SDK for this arch
-#   make images    build the real-arm image, then the vision image on top
-#   make depth     run the depth node (container)
+#   make start     back to feeding_start  (retraces from food_detect_start)
+#   make detect    feeding_start -> food_detect_start  (smooth lift, then swing)
+#   make perceive  from food_detect_start: capture, detect, depth, target
+#
+#   make capture   re-measure feeding_start from the parked arm (rarely: see README)
+#   make sdk / images / depth   build and run the containers
 SHELL      := /bin/bash
 ARM_IP     ?= 192.168.2.67
 # RTSP transport for the depth stream. The session drops periodically either way
@@ -31,31 +30,34 @@ SDK        := $(HOME)/kortex_api_2.8.0_$(ARCHTAG)
 # sync.sh --delete and needs sudo to clear.
 INARM      := docker exec -e PYTHONDONTWRITEBYTECODE=1 tcp_rec python3 -u -m
 
-.PHONY: sdk kortex vision images depth clean-depth status state start detect-pose lift capture
+.PHONY: sdk kortex vision images depth clean-depth status state start detect perceive capture
 
 # --- the arm ----------------------------------------------------------------
+# Every motion goes through kinova/scripts/safe_move.py: utensil kept pointing
+# down, joint torque watched for contact, joint limits checked, and the
+# controller's own reason reported if it refuses a move.
 
 state:
 	@$(INARM) kinova.scripts.arm_state
 
 start:
-	@$(INARM) kinova.scripts.feeding_start $(if $(SPEED),--speed $(SPEED),)
+	@$(INARM) kinova.scripts.sequence home
 
-# The overlook pose: above the bowl, camera straight down, rolled to a multiple
-# of 90 deg. Where detection runs from.
-detect-pose:
-	@$(INARM) kinova.scripts.feeding_start --pose food_detect $(if $(SPEED),--speed $(SPEED),)
+detect:
+	@$(INARM) kinova.scripts.sequence detect
 
-# Stage 1: raise the tool on a pure vertical, then swing the base round to face
-# the table. Vertical FIRST so nothing is swept on the way round.
-lift:
-	@$(INARM) kinova.scripts.lift_vertical --to-limit
+# Runs on the jetson HOST (it drives both containers and the GPU venv). Results
+# go to ~/rammp_runs/<timestamp>/, outside the synced tree. STAGE1_DA3=1 adds
+# the optional Depth Anything 3 cross-check.
+perceive:
+	@feeding/stage1.sh
 
 capture:
 	@$(INARM) kinova.scripts.capture_home --out /work/calibration/home_pose.json
 	@echo
 	@echo "NOTE: that wrote into the synced tree. Pull it back to the Mac before"
-	@echo "      the next 'sync.sh', which runs with --delete."
+	@echo "      the next 'sync.sh', which runs with --delete. Then restore J1 = -90"
+	@echo "      and J3 = 0 exactly in the file -- see README."
 
 # --- build ------------------------------------------------------------------
 

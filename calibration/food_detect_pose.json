@@ -1,41 +1,41 @@
 {
   "label": "food_detect_start",
-  "captured": "2026-09-23T21:39:12+0000",
-  "n_samples": 43,
+  "captured": "2026-09-23T22:46:08+0000",
+  "n_samples": 41,
   "joints_deg": [
-    177.472,
-    -9.684,
-    -5.303,
-    -51.564,
-    0.628,
-    -119.427,
-    82.121
+    176.973,
+    7.795,
+    -4.804,
+    -73.442,
+    -1.175,
+    -114.949,
+    81.197
   ],
   "joints_spread_deg": [
-    0.0001,
-    0.0004,
-    0.0,
     0.0,
     0.0001,
-    0.0001,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
     0.0
   ],
   "holding_torque_nm": [
-    1.17,
-    -11.025,
-    0.912,
-    -7.574,
-    0.175,
-    0.327,
-    0.454
+    0.533,
+    -5.347,
+    0.361,
+    -7.287,
+    0.077,
+    0.192,
+    0.182
   ],
   "tool_pose": {
-    "x_m": 0.3439,
+    "x_m": 0.2254,
     "y_m": 0.0616,
-    "z_m": 0.5641,
-    "theta_x_deg": -179.7901,
-    "theta_y_deg": 0.5605,
-    "theta_z_deg": 89.6881
+    "z_m": 0.5445,
+    "theta_x_deg": -179.8686,
+    "theta_y_deg": 0.5604,
+    "theta_z_deg": 89.6938
   },
   "tool_config": {
     "transform_m": [
@@ -55,5 +55,17 @@
       0.0473
     ]
   },
-  "note": "tool_pose is the CONFIGURED TOOL frame, not the flange: the arm carries a 120 mm z-offset for the 2F-85. The utensil adds more. Measured camera-to-tine-tip is ~105 mm, so the reported point lands within a few cm of the real tip -- good enough to report and to stand off by, NOT good enough for the 4 mm flesh/bowl window, which is terminated on torque instead."
+  "note": "tool_pose is the CONFIGURED TOOL frame, not the flange: the arm carries a 120 mm z-offset for the 2F-85. The utensil adds more. Measured camera-to-tine-tip is ~105 mm, so the reported point lands within a few cm of the real tip -- good enough to report and to stand off by, NOT good enough for the 4 mm flesh/bowl window, which is terminated on torque instead.",
+  "utensil_px": [
+    646,
+    464,
+    756,
+    719
+  ],
+  "utensil_tip_px": [
+    703,
+    464
+  ],
+  "utensil_note": "The utensil is fixed to the arm and so is the camera, so at this pose it occupies the SAME pixels in every frame: (646-652, 464)-(756, 718-719) across four runs. Stored here instead of detected: a 'spoon' query once returned the whole BOWL box (the spoon sits in the bowl in the image), which then suppressed every berry as 'inside the utensil'. Re-measure if the utensil is changed or re-gripped. tip = top-centre of the box.",
+  "pose_note": "Chosen 2026-09-23 with J2 ~+8 deg (arm leaning toward the table) instead of -9.7: same camera orientation (J4 compensates, J2+J4 unchanged), but the camera sits ~120 mm nearer the base, so no berry is hidden behind the utensil and J2 holding torque roughly halves. Then +17 mm X to bring the top of the rim into frame and -20 mm Z for J6 margin: 5.4 deg from its -120.3 limit, was 1.1. Full rim AND a clear view past the utensil is not possible at this bowl size -- the bowl is ~560 px tall, the clear area above the utensil tip ~460 px; this frames the rim top at the image edge."
 }

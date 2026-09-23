@@ -1,0 +1,11 @@
+{
+  "profile": "1280x720",
+  "fx": 1297.673,
+  "fy": 1298.631,
+  "cx": 657.4,
+  "cy": 225.7,
+  "factory_cx": 620.914,
+  "factory_cy": 238.280,
+  "measured": "2026-09-23",
+  "note": "fx/fy are device-reported. cx/cy were measured, not taken from the device: at food_detect_start (camera straight down) three UNOCCLUDED berries were located in both the depth sensor and the colour frame and each gave the principal point under the factory depth->colour extrinsic, agreeing to +-9 px (cx) and +-3.5 px (cy); 1 px is ~0.34 mm at berry depth. This is a constant of the camera, so it is frozen here rather than re-estimated each run -- re-estimating it from whatever fruit is in view made an intrinsic depend on the fruit, and a half-occluded berry dragged cy by 24 px. locate_target checks every run's correspondences against it instead. The factory cy is NOT wrong -- within 13 px; cy/h = 0.33 is simply an off-centre 16:9 crop of the 4:3 sensor."
+}

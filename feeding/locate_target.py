@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -49,25 +50,16 @@ from PIL import Image, ImageDraw
 FXD = FYD = 334.810; CXD = 238.536; CYD = 139.694          # depth, device
 FXC, FYC = 1297.673, 1298.631                              # colour, device
 T_D2C = np.array([-0.02706, -0.00997, -0.00471])            # factory extrinsic
+FACTORY_PP = (620.914, 238.280)                             # colour, device-reported
+MIN_FOOD_MM, MAX_FOOD_MM = 12.0, 60.0                       # food height above the floor
 
 
-def berries_in_depth(D, centre=(240, 170), rim_r=64):
-    from scipy import ndimage as ndi
-    H, W = D.shape
-    yy, xx = np.mgrid[0:H, 0:W]
-    interior = np.hypot(xx - centre[0], yy - centre[1]) < rim_r - 12
-    floor = float(np.median(D[interior & (D > 465) & (D < 485)]))
-    mask = ndi.binary_opening(interior & (D > 0) & (D < floor - 15), iterations=1)
-    lab, n = ndi.label(mask)
-    sizes = ndi.sum(mask, lab, range(1, n + 1))
-    out = []
-    for i in np.argsort(-sizes)[:3]:
-        ys, xs = np.nonzero(lab == i + 1)
-        z = D[ys, xs]
-        w = floor - z
-        out.append(dict(u=float(np.average(xs, weights=w)), v=float(np.average(ys, weights=w)),
-                        top=float(np.percentile(z, 10)), mean=float(z.mean()), px=int(len(xs))))
-    return floor, out
+def colour_to_depth(u, v, z_m, cx, cy):
+    """Colour pixel at depth z_m (colour-frame z) -> depth-frame pixel."""
+    X = (u - cx) * z_m / FXC - T_D2C[0]
+    Y = (v - cy) * z_m / FYC - T_D2C[1]
+    Z = z_m - T_D2C[2]
+    return FXD * X / Z + CXD, FYD * Y / Z + CYD
 
 
 def to_colour(u, v, z_m, cx, cy):
@@ -81,8 +73,13 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--det", required=True)
     ap.add_argument("--depth", required=True, help="sensor depth .npy, mm, 480x270")
-    ap.add_argument("--da3", required=True, help="DA3 metric .npy, m, colour size")
+    ap.add_argument("--da3", default=None,
+                    help="DA3 metric .npy (m, colour size). OPTIONAL cross-check only: "
+                         "scored against physical checks it overstated berry relief 2-3x "
+                         "raw and flattened it to 9-14 mm fused; the sensor got 31-32 mm")
     ap.add_argument("--image", default=None)
+    ap.add_argument("--intrinsics", default=str(Path(__file__).resolve().parent.parent
+                                                / "calibration" / "colour_intrinsics.json"))
     ap.add_argument("--tool", type=float, nargs=3, required=True, help="current tool xyz, m")
     ap.add_argument("--z-tip", type=float, default=0.105,
                     help="camera -> utensil tip along the axis, m. MEASURED 105 mm for "
@@ -92,60 +89,99 @@ def main() -> int:
 
     det = json.loads(open(a.det).read())
     D = np.load(a.depth).astype(np.float64)
-    A = np.load(a.da3).astype(np.float64)
+    A = np.load(a.da3).astype(np.float64) if a.da3 else None
 
-    # 1. depth
-    floor, bd = berries_in_depth(D)
-    print("DEPTH (sensor)")
-    print("  bowl floor %.0f mm" % floor)
-    for b in bd:
-        print("  berry  depth-px (%5.1f,%5.1f)  top %.0f mm  height %.0f mm" % (b["u"], b["v"], b["top"], floor - b["top"]))
+    # 1+2. DEPTH PER DETECTION, and a registration check that falls out of it.
+    #
+    # No blob segmentation. The bowl floor is CONCAVE, rising toward the rim,
+    # so no single floor level separates berries from the bowl wall; every
+    # threshold tried let a different slice of wall merge into a different
+    # berry, and blob centroids wandered by tens of pixels. Instead each colour
+    # box is mapped into the depth frame through the frozen principal point and
+    # depth is read locally:
+    #   top    = nearest surface within ~20 mm of the mapped centre
+    #   floor  = far end of a ~45 mm window around it (the bowl just beside it)
+    # The offset between where that nearest surface actually is and where the
+    # mapping predicted it is the per-run registration residual.
+    cal = json.loads(open(a.intrinsics).read())
+    cx, cy = cal["cx"], cal["cy"]
+    H, W = D.shape
+    col = list(det["food"])
+    areas = [(f["x2"] - f["x1"]) * (f["y2"] - f["y1"]) for f in col]
+    med = float(np.median(areas)) if areas else 0.0
+    print("DEPTH (sensor, read at each detection)")
+    res = []
+    for f, ar in zip(col, areas):
+        ud, vd = colour_to_depth(f["cx"], f["cy"], 0.44, cx, cy)
+        r_in = max(4, int(round(0.25 * (f["x2"] - f["x1"]) * FXD / FXC)))   # ~ berry half-width
+        r_out = int(round(2.2 * r_in))
+        u0, u1 = int(max(0, ud - r_out)), int(min(W, ud + r_out + 1))
+        v0, v1 = int(max(0, vd - r_out)), int(min(H, vd + r_out + 1))
+        win = D[v0:v1, u0:u1]
+        yy, xx = np.mgrid[v0:v1, u0:u1]
+        rr = np.hypot(xx - ud, yy - vd)
+        inner = win[(rr <= r_in) & (win > 0)]
+        outer = win[(rr > r_in) & (rr <= r_out) & (win > 0)]
+        f["_occluded"] = ar < 0.6 * med
+        if inner.size < 5 or outer.size < 5:
+            print("  berry at (%4.0f,%4.0f): no depth return here -- skipped" % (f["cx"], f["cy"]))
+            continue
+        top = float(np.percentile(inner, 5))
+        floor_here = float(np.percentile(outer, 85))
+        near = (win > 0) & (win <= top + 3) & (rr <= r_out)
+        pu, pv = float(xx[near].mean()), float(yy[near].mean())
+        f["_depth"] = dict(top=top, floor=floor_here, u=pu, v=pv)
+        tag = "  (partly hidden)" if f["_occluded"] else ""
+        print("  berry at (%4.0f,%4.0f)  top %.0f mm  floor beside it %.0f mm  height %.0f mm%s"
+              % (f["cx"], f["cy"], top, floor_here, floor_here - top, tag))
+        if not f["_occluded"]:
+            cu_, cv_, _ = to_colour(pu, pv, (top + 8.0) / 1000.0, cx, cy)
+            res.append((f["cx"] - cu_, f["cy"] - cv_))
+    col = [f for f in col if "_depth" in f]
+    floor = float(np.median([f["_depth"]["floor"] for f in col])) if col else float("nan")
+    print("\nREGISTRATION CHECK against the frozen principal point (%.1f, %.1f)" % (cx, cy))
+    if res:
+        r = np.array(res)
+        print("  %d unoccluded landmark(s): mean offset (%+.1f, %+.1f) px, spread %.1f px"
+              "   (1 px ~ 0.34 mm at berry depth)"
+              % (len(r), r[:, 0].mean(), r[:, 1].mean(), float(np.hypot(*r.std(0)))))
+        if np.hypot(*r.mean(0)) > 25:
+            print("  WARNING: >25 px systematic offset -- camera, utensil or pose may have changed")
 
-    # 2. registration from berry correspondences (match by order along u)
-    col = sorted(det["food"], key=lambda f: f["cx"])
-    bd = sorted(bd, key=lambda b: b["u"])
-    cxs, cys = [], []
-    for f, b in zip(col, bd):
-        z = (b["top"] + 8.0) / 1000.0
-        u0, v0, _ = to_colour(b["u"], b["v"], z, 0.0, 0.0)
-        cxs.append(f["cx"] - u0); cys.append(f["cy"] - v0)
-        f["_depth"] = b
-    cx, cy = float(np.mean(cxs)), float(np.mean(cys))
-    print("\nREGISTRATION (3 berry correspondences)")
-    print("  colour principal point  cx %.1f +- %.1f   cy %.1f +- %.1f px  (factory 620.9 / 238.3)"
-          % (cx, np.std(cxs), cy, np.std(cys)))
-
-    # 3. DA3 fused against the sensor: scale + shift + plane
-    vs, us = np.nonzero(D)
-    Zs = D[vs, us] / 1000.0
-    k = (Zs > 0.30) & (Zs < 0.65)
-    uc, vc, Zc = to_colour(us[k], vs[k], Zs[k], cx, cy)
-    ui, vi = np.round(uc).astype(int), np.round(vc).astype(int)
-    ok = (ui >= 0) & (ui < A.shape[1]) & (vi >= 0) & (vi < A.shape[0])
-    da, zt = A[vi[ok], ui[ok]], Zc[ok]
-    M = np.stack([da, np.ones_like(da), ui[ok] / A.shape[1], vi[ok] / A.shape[0]], 1)
-    p, *_ = np.linalg.lstsq(M, zt, rcond=None)
-    r = np.abs(M @ p - zt)
-    inl = r < np.percentile(r, 80)
-    p, *_ = np.linalg.lstsq(M[inl], zt[inl], rcond=None)
-    fit_err = float(np.median(np.abs(M @ p - zt)))
-    H, W = A.shape
-    yy, xx = np.mgrid[0:H, 0:W]
-    F = p[0] * A + p[1] + p[2] * xx / W + p[3] * yy / H
-    np.save(a.out + "_fused.npy", F.astype(np.float32))
-    print("\nDA3 FUSED to the sensor   Z = %.3f*DA3 %+.3f %+.3f*u/W %+.3f*v/H   median |err| %.1f mm"
-          % (p[0], p[1], p[2], p[3], 1000 * fit_err))
+    # 3. DA3 fused against the sensor -- optional cross-check
+    F = None
+    if A is not None:
+        vs, us = np.nonzero(D)
+        Zs = D[vs, us] / 1000.0
+        k = (Zs > 0.30) & (Zs < 0.65)
+        uc, vc, Zc = to_colour(us[k], vs[k], Zs[k], cx, cy)
+        ui, vi = np.round(uc).astype(int), np.round(vc).astype(int)
+        ok = (ui >= 0) & (ui < A.shape[1]) & (vi >= 0) & (vi < A.shape[0])
+        da, zt = A[vi[ok], ui[ok]], Zc[ok]
+        M = np.stack([da, np.ones_like(da), ui[ok] / A.shape[1], vi[ok] / A.shape[0]], 1)
+        p, *_ = np.linalg.lstsq(M, zt, rcond=None)
+        r = np.abs(M @ p - zt)
+        inl = r < np.percentile(r, 80)
+        p, *_ = np.linalg.lstsq(M[inl], zt[inl], rcond=None)
+        fit_err = float(np.median(np.abs(M @ p - zt)))
+        H, W = A.shape
+        yy, xx = np.mgrid[0:H, 0:W]
+        F = p[0] * A + p[1] + p[2] * xx / W + p[3] * yy / H
+        np.save(a.out + "_fused.npy", F.astype(np.float32))
+        print("\nDA3 FUSED to the sensor   Z = %.3f*DA3 %+.3f %+.3f*u/W %+.3f*v/H   median |err| %.1f mm"
+              % (p[0], p[1], p[2], p[3], 1000 * fit_err))
 
     # 4. per-berry 3D and the target
-    ute = det["utensil"][0] if det.get("utensil") else None
-    p_tip = np.array([(ute["x1"] + ute["x2"]) / 2.0, ute["y1"]]) if ute else None
+    ute = det["utensil"][0]
+    p_tip = np.array([(ute["x1"] + ute["x2"]) / 2.0, ute["y1"]])   # stored region, top-centre
     bowl = det["bowl"][0]
     bc = np.array([bowl["cx"], bowl["cy"]])
     print("\nFOOD")
     rows = []
     for i, f in enumerate(col):
-        zb_s = (f["_depth"]["top"] + 8.0) / 1000.0
-        zb_f = float(np.median(F[int(f["y1"]):int(f["y2"]), int(f["x1"]):int(f["x2"])]))
+        zb_s = (f["_depth"]["top"] + 8.0) / 1000.0     # centre of the visible cap
+        zb_f = (float(np.median(F[int(f["y1"]):int(f["y2"]), int(f["x1"]):int(f["x2"])]))
+                if F is not None else float("nan"))
         # camera-frame point of the bbox centre at the sensor depth
         Xc = (f["cx"] - cx) * zb_s / FXC; Yc = (f["cy"] - cy) * zb_s / FYC
         d_rim = float(np.hypot(*(np.array([f["cx"], f["cy"]]) - bc)))
@@ -154,7 +190,8 @@ def main() -> int:
               "cam (%+.0f,%+.0f) mm   %.0f px from bowl centre"
               % (i + 1, f["cx"], f["cy"], 1000 * zb_s, 1000 * zb_f, 1000 * Xc, 1000 * Yc, d_rim))
 
-    pick = min(rows, key=lambda r: r[6])          # most central: most clearance from the rim
+    visible = [r for r in rows if not r[1].get("_occluded")]
+    pick = min(visible or rows, key=lambda r: r[6])   # most central visible: most rim clearance
     i, f, zb, _, _, _, _ = pick
     pp = np.array([cx, cy])
     p_star = pp + (p_tip - pp) * (a.z_tip / zb)
@@ -174,7 +211,7 @@ def main() -> int:
     print("  tool goal  (%.4f %.4f %.4f) m" % tgt)
     print("  uncertainty from Z_tip (%.0f mm assumed, +-25 mm): +-%.1f mm" % (1000 * a.z_tip, sens))
 
-    json.dump(dict(principal_point=[cx, cy], da3_fit=list(map(float, p)), bowl_floor_mm=floor,
+    json.dump(dict(principal_point=[cx, cy], bowl_floor_mm=floor,
                    berry=i + 1, berry_bbox_centre=[f["cx"], f["cy"]], berry_depth_m=zb,
                    p_star=list(map(float, p_star)), delta_xy_m=[dX, dY],
                    tool_now=list(a.tool), tool_goal=list(tgt), z_tip_assumed_m=a.z_tip),

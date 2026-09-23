@@ -16,8 +16,12 @@ a few seconds and remove the failure outright.
   food     multi-instance -- there are several pieces
   bowl     single-instance -- one container; this path was 2.4 s and within
            ~12 px of the rim
-  utensil  single-instance -- it is in the gripper, its position is known from
-           kinematics; detected only as a cross-check
+  utensil  NOT detected for use. It is fixed to the arm, and so is the camera,
+           so at food_detect_start it occupies the same pixels every time; that
+           region is stored in calibration/food_detect_pose.json. A 'spoon'
+           query once returned the whole bowl box, which then suppressed every
+           berry. It is still queried, only to warn if the stored region looks
+           stale (utensil changed or re-gripped).
 
 Boxes that cannot be a real object are dropped: a 10x310 px sliver came back as
 'food pieces' on the same frame as three correct berries.
@@ -35,10 +39,38 @@ import json
 import time
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
-from feeding.detect_scene import draw
 from feeding.locate_anything import LocateAnything
+
+PALETTE = [(239, 68, 68), (34, 197, 94), (59, 130, 246), (234, 179, 8),
+           (168, 85, 247), (20, 184, 166), (249, 115, 22)]
+
+
+def font(sz):
+    for p in ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+              "/System/Library/Fonts/Supplemental/Arial Bold.ttf"):
+        try:
+            return ImageFont.truetype(p, sz)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+def draw(img, groups, out_path):
+    im = img.convert("RGB").copy()
+    d = ImageDraw.Draw(im)
+    f = font(17)
+    for gi, (name, boxes) in enumerate(groups):
+        col = PALETTE[gi % len(PALETTE)]
+        for i, b in enumerate(boxes):
+            d.rectangle([b.x1, b.y1, b.x2, b.y2], outline=col, width=4)
+            tag = "%s %d" % (name, i + 1)
+            tb = d.textbbox((b.x1 + 3, max(0, b.y1 - 21)), tag, font=f)
+            d.rectangle([tb[0] - 3, tb[1] - 2, tb[2] + 3, tb[3] + 2], fill=col)
+            d.text((b.x1 + 3, max(0, b.y1 - 21)), tag, fill=(255, 255, 255), font=f)
+    im.save(out_path, quality=92)
+
 
 MIN_SIDE_PX = 25
 MAX_ASPECT = 3.0
@@ -56,7 +88,10 @@ def main() -> int:
     ap.add_argument("--image", required=True)
     ap.add_argument("--out", default="scene_det")
     ap.add_argument("--food", default="food pieces")
-    ap.add_argument("--utensil", default="spoon")
+    ap.add_argument("--utensil", default="spoon", help="phrase for the cross-check only")
+    ap.add_argument("--pose", default=str(Path(__file__).resolve().parent.parent
+                                          / "calibration" / "food_detect_pose.json"),
+                    help="pose file carrying the fixed utensil_px region")
     a = ap.parse_args()
 
     img = Image.open(a.image).convert("RGB")
@@ -74,7 +109,21 @@ def main() -> int:
         return ([b] if b and plausible(b) else []), time.perf_counter() - t
 
     bowl, t_bowl = one("bowl")
-    ute, t_ute = one(a.utensil)
+    seen, t_ute = one(a.utensil)
+
+    from feeding.locate_anything import Box
+    pose = json.loads(Path(a.pose).read_text())
+    ux1, uy1, ux2, uy2 = pose["utensil_px"]
+    ute = [Box(ux1, uy1, ux2, uy2, "utensil")]
+    stale = ""
+    if seen:
+        s_ = seen[0]
+        ix = max(0.0, min(s_.x2, ux2) - max(s_.x1, ux1))
+        iy = max(0.0, min(s_.y2, uy2) - max(s_.y1, uy1))
+        iou = ix * iy / max(1.0, s_.area + ute[0].area - ix * iy)
+        if iou < 0.5:
+            stale = ("   (cross-check: detector's '%s' box has IoU %.2f with the stored "
+                     "region -- ignore unless the utensil was changed)" % (a.utensil, iou))
 
     def inside_frac(b, u):
         ix = max(0.0, min(b.x2, u.x2) - max(b.x1, u.x1))
@@ -88,13 +137,36 @@ def main() -> int:
     else:
         n_utensil = 0
 
+    # A bowl is round, seen from straight above. When its box comes back much
+    # taller than wide, the extra is the utensil merging in at the bottom edge
+    # (measured 549x644 against the true 549x544), which drags the bowl centre
+    # down. Keep the width and the top edge, which are reliable.
+    bowl_fixed = False
+    if bowl:
+        bb = bowl[0]
+        w, h = bb.x2 - bb.x1, bb.y2 - bb.y1
+        if h > 1.08 * w:
+            bb.y2 = bb.y1 + w
+            bowl_fixed = True
+        # Food outside the bowl is not food we will pick: a 47x108 px object
+        # at the image edge came back as 'food pieces' with three real berries.
+        n0 = len(food)
+        food = [b for b in food if inside_frac(b, bb) > 0.8]
+        n_outside = n0 - len(food)
+    else:
+        n_outside = 0
+
     for name, boxes, dt, extra in (("food", food, t_food, len(food_all) - len(food)),
                                    ("bowl", bowl, t_bowl, 0),
                                    ("utensil", ute, t_ute, 0)):
         note = ""
         if name == "food" and extra:
-            note = "   (%d dropped: %d inside the utensil, %d implausible shape)" % (
-                extra, n_utensil, extra - n_utensil)
+            note = "   (%d dropped: %d inside the utensil, %d outside the bowl, %d implausible shape)" % (
+                extra, n_utensil, n_outside, extra - n_utensil - n_outside)
+        if name == "bowl" and bowl_fixed:
+            note = "   (box squared: it had merged with the utensil below)"
+        if name == "utensil":
+            note = "   (stored region, not detected)" + stale
         print("  %-8s %d box(es) in %5.2f s%s" % (name, len(boxes), dt, note))
         for i, b in enumerate(boxes):
             cx, cy = b.centre

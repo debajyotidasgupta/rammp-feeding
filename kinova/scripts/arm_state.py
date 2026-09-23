@@ -19,24 +19,9 @@ import time
 from pathlib import Path
 
 from kinova.connection import kinova_connection
+from kinova.scripts.safe_move import approach_axis, fold
 
 HOME_JSON = Path(__file__).resolve().parent.parent.parent / "calibration" / "home_pose.json"
-
-
-def fold(d: float) -> float:
-    """Kortex reports [0, 360); joints 1/3/5/7 are continuous and sit near the
-    wrap, so always compare on (-180, 180]."""
-    return (d + 180.0) % 360.0 - 180.0
-
-
-def approach_axis(theta_x, theta_y, theta_z):
-    """Tool +z -- the direction the utensil points -- in base coords. Kortex gives
-    fixed-frame XYZ Euler angles, so R = Rz @ Ry @ Rx and this is column 3."""
-    tx, ty, tz = (math.radians(v) for v in (theta_x, theta_y, theta_z))
-    cx, sx = math.cos(tx), math.sin(tx)
-    cy, sy = math.cos(ty), math.sin(ty)
-    cz, sz = math.cos(tz), math.sin(tz)
-    return (cz * sy * cx + sz * sx, sz * sy * cx - cz * sx, cy * cx)
 
 
 def report(conn, home) -> None:
@@ -45,7 +30,7 @@ def report(conn, home) -> None:
     tau = [a.torque for a in fb.actuators]
     b = fb.base
     ax = approach_axis(b.tool_pose_theta_x, b.tool_pose_theta_y, b.tool_pose_theta_z)
-    tilt = math.degrees(math.asin(max(-1.0, min(1.0, -ax[2])))) 
+    tilt = math.degrees(math.asin(max(-1.0, min(1.0, -ax[2]))))
 
     print("           " + "".join("%9s" % ("J%d" % (i + 1)) for i in range(7)))
     print("  joints : " + "".join("%9.3f" % v for v in q))

@@ -1,116 +1,180 @@
 # rammp — robot-assisted feeding, Kinova Gen3
 
-Starting again from a known state. One arm, one utensil, one command.
-
 The arm is a **Kinova Gen3 7-DoF** on a wheelchair mount at the user's right,
 holding a **fixed utensil** in a Robotiq 2F-85 — a fork originally, a spoon since
-2026-09-23. "Utensil" throughout means whatever is clamped there; it must be
-able to pierce the food. There is **no wrist
-force/torque sensor** — all force sensing is joint torque. Compute is a **Jetson
-AGX Orin** running the driver in a container.
+2026-09-23. "Utensil" means whatever is clamped there; it must be able to pierce
+the food. There is **no wrist force/torque sensor**: all force sensing is joint
+torque. Compute is a **Jetson AGX Orin** running the driver in a container.
 
-## The command
+## Commands
 
 ```
-make start            # go to the feeding start pose
-make state            # where is the arm right now
-make status           # what is running, is the arm reachable
+make status      what is running, is the arm reachable
+make state       where is the arm right now
+
+make start       back to feeding_start       (retraces the outbound path)
+make detect      feeding_start -> food_detect_start
+make perceive    at food_detect_start: capture, detect, depth, target
 ```
 
-`feeding start` is the only motion command that exists. Every feeding sequence
-begins and ends at that pose. It is a direct, speed-limited joint move: on
-deployment the arm always stops near the pose already, so there is no path
-planning and none is needed.
+Stage 1 — finding the food — is **frozen** at these three: `start`, `detect`,
+`perceive`. Everything below documents what they do and why.
 
-## The feeding start pose
+## The motions (`kinova/scripts/sequence.py`)
 
-Measured on this installation and checked in as `calibration/home_pose.json`.
+```
+feeding_start ──[one smooth vertical lift, 337 mm]──> top of lift
+              ──[joint swing, via its midpoint]─────> food_detect_start
+```
 
-| | |
+`make start` is exactly that backwards, then a joint snap onto the pose.
+
+- **Up first.** feeding_start sits *below table height*, parked beside it. Going
+  straight up first puts the whole swing ~300 mm above the bowl.
+- **Smooth**, not a staircase: one straight-line Cartesian move each way.
+- **The swing goes via its midpoint**, which makes the direction of travel
+  explicit. The short way for J1 goes round the *back*, away from the table.
+- **home is a retrace.** It re-uses the recorded waypoints, and refuses to start
+  from any pose it doesn't recognise rather than improvising a path.
+
+Measured: both directions run cleanly, utensil never more than 1.2° off
+vertical; two consecutive round trips land the camera view within **1 px**
+(≈0.3 mm at berry depth) of each other.
+
+### Every move goes through `safe_move.py`
+
+Each check exists because its absence cost something on this arm:
+
+| check | why |
 |---|---|
-| joints (deg) | `-90.000, 8.071, 0.000, -139.199, 0.446, -49.528, -174.304` |
-| tool point | `(0.0236, -0.1766, 0.2082)` m in the arm base frame |
-| utensil direction | `(-0.009, -0.000, -1.000)` — **89.5° below horizontal, i.e. straight down** |
+| **utensil stays down** | Tool pitch is set by the sum J2+J4+J6 ≈ −180°. Moving *one* of them alone swung the fork 79° off vertical (2026-09-23). Only complete 7-joint targets are accepted. |
+| **joint-torque contact abort** | The fork was then broken by its own wrist — tines dragged across the joint-6 housing — with the tool *angle* legal throughout. There is no self-collision model yet, so a torque step is the only thing that notices contact. |
+| **time-synchronised joint moves** | A per-joint *speed* constraint makes a joint with a sliver of travel accelerate and stop within it; the controller refuses with a bare `METHOD_FAILED`. The real reason (`INVALID_JOINT_ACCELERATION`) is only in `GetTrajectoryErrorReport()`, now read on every abort. A *duration* constraint fixes it — and is also what actually keeps J2+J4+J6 interpolating linearly. |
+| **joint limits pre-checked** | Kortex silently ignores a target past a limit. |
+| **fail fast** | If nothing moves within 3 s, stop and report the controller's reason. |
 
-**Tool orientation is the same at every stage.** The utensil points straight down
-here and stays that way through the whole pipeline, so stages differ only in
-POSITION. That is not cosmetic: on 2026-09-23 the fork was destroyed by a wrist
-rotation, and holding orientation fixed removes the reason to ever command one.
+Don't infer a refused move's cause from the arm state: it reads
+`SERVOING_MANUALLY_CONTROLLED` for a while after *any* trajectory, ours included.
+Several wrong theories (the gamepad, angle-wrap encoding, the deprecated API)
+were tested and disproved before the error report was read. **Read the report
+first.**
 
-The residual 0.50° sits in `axis_x`, which J2/J4/J6 cannot correct — all three
-pitch in the same plane, so only a roll joint could, at the cost of a large
-reorientation. 0.50° is 8.8 mm per metre travelled, under 0.5 mm over a
-bite-sized descent.
+## Perception (`make perceive` → `feeding/stage1.sh`)
 
-**Watch the Base Protection Zone.** The arm has one enabled: a cylinder r=150 mm,
-h=160 mm at z=0.07. This pose puts the tool at radius **178 mm — only 28 mm of
-margin**. A trajectory whose swept path dips inside is rejected outright with a
-generic `METHOD_FAILED`, which is very likely what blocked several moves home.
+Runs on the jetson host; results go to `~/rammp_runs/<timestamp>/`, **outside**
+the synced tree. Refuses unless the arm is at food_detect_start, because the
+image→motion mapping was measured in exactly that orientation.
 
-It is safe at rest by construction, not by monitoring: **joint 1 at −90°** swings
-the whole arm clockwise, clear of the user on their right, and the utensil points at
-the floor. Nothing has to be running for that to hold.
+1. **Detect** (`perceive.py`, LocateAnything-3B) — **one query per category.** A
+   combined prompt gets stuck repeating one category and silently drops the
+   rest, and *which* one repeats isn't stable. Food must lie inside the bowl
+   box; a bowl box that merged with the utensil is squared. **The utensil is
+   not detected** — it's fixed to the arm, as is the camera, so it occupies the
+   same pixels every time (`utensil_px` in `food_detect_pose.json`). A `spoon`
+   query once returned the whole bowl and suppressed every berry.
+2. **Depth** (sensor, 20-frame median) — read *at each detection*, not by
+   segmenting the bowl: the floor is concave, so no single floor level separates
+   berries from the wall. Measured berries 23–31 mm tall. A berry hidden under
+   the utensil has no return and is skipped, not guessed.
+3. **Registration check** against the frozen colour principal point
+   (`calibration/colour_intrinsics.json`). It's a camera constant, so it's
+   calibrated once and each run only checks agreement (typically a few px, where
+   1 px ≈ 0.34 mm).
+4. **Target** (`locate_target.py`) — the most central visible berry. With the
+   camera vertical, the utensil tip's vertical line lands at
+   `p* = pp + (p_tip − pp)·Z_tip/Z_berry`, and the tool translates until the
+   berry sits there. No hand–eye calibration needed.
 
-**Joint 3 is squared to 0** so the folded forearm lies in the joint-1 plane
-instead of splaying out of it. That took the off-axis moment off the base joint.
+### Which depth source
 
-**J1 and J3 are stored as their intended exact values**, not as measured.
-Commanding `-90.000000` lands at `-89.998138` every single time — a
-deterministic servo offset worth 7 microns at the tool. Re-capturing the
-measurement into the target would let it drift a little further each time.
+Scored against checks independent of all of them (a flat table; a strawberry is
+~25–35 mm tall):
 
-Re-measure it with `make capture` after any re-park, then pull the file back to
-the Mac before the next `sync.sh` (which runs `--delete`).
+| | table noise | berry heights |
+|---|---|---|
+| **sensor** | 5.1 mm | **32, 31, 31 mm** |
+| Depth Anything 3 raw | 12.4 mm, invents a 39 mm tilt | 88, 58, 74 mm |
+| DA3 fused to the sensor | 2.1 mm | 13, 9, 14 mm — smooth and wrong |
 
-## Two facts that constrain everything
+**The sensor is the truth.** DA3 is available as an optional cross-check
+(`STAGE1_DA3=1`) and is only worth anything where the sensor returns nothing.
 
-**1. The arm reports a configured TOOL frame, not the flange.** There is a
-120 mm z-offset and 0.831 kg registered (`GetToolConfiguration`). The utensil adds
-more: camera-to-tine-tip measures ~105 mm by hand. So the reported `tool_pose`
-lands within a few cm of the real tine tip — good enough to stand off by, not
-good enough for fine work. Do not read `tool_pose` as the flange or as the tip.
+## Poses (`calibration/`)
 
-**2. The user-facing camera cannot drive motion.** It carries ~100 mm of error,
-and at deployment it mounts on the **wheelchair armrest** — so its transform to
-the arm base is not fixed and cannot be calibrated, because there is no constant
-to calibrate. It can hold an *abort* authority (presence, and the frame-to-frame
-*change* in mouth position, which is far more trustworthy than the absolute).
-It cannot hold a *setpoint* authority at any precision.
+| file | pose |
+|---|---|
+| `home_pose.json` | **feeding_start** — J1 −90° (arm swung clear of the user), utensil straight down, tool (0.0236, −0.1766, 0.2082) |
+| `lift_pose.json` | top of the lift — feeding_start's xy, z 0.545, J6 3.6° off its limit |
+| `food_detect_pose.json` | **food_detect_start** — over the bowl, camera straight down, tool (0.2254, 0.0616, 0.5445); also the fixed utensil image region |
+| `colour_intrinsics.json` | colour principal point, measured |
+| `depth_480x270.ini` | this depth sensor's own intrinsics, not the package default |
+
+**food_detect_start leans J2 ~+8° toward the table**, not −9.7° back. The camera
+orientation is identical either way (J4 compensates; J2+J4 doesn't change), but
+the camera sits ~120 mm nearer the base: no berry is hidden behind the utensil,
+J2 holding torque roughly halves, and J6 has 5.4° to its limit (was 1.1°). The
+rim's top sits at the image edge — at this bowl size (~560 px) the full rim and
+a clear view past the utensil (~460 px) can't both fit.
+
+**Orientation is the same at every stage** — utensil straight down (0.5°) — so
+stages differ only in position, and nothing ever needs a wrist rotation. The
+0.5° residual is in a direction J2/J4/J6 can't reach (they all pitch in one
+plane).
+
+**J1 and J3 are stored as intended exact values** (−90.000, 0.000), not as
+measured: commanding −90.000000 lands at −89.998138 every time. If you ever
+`make capture`, restore those two by hand.
+
+## Known open
+
+- **The spoon's camera-to-tip distance is unmeasured.** 105 mm was the fork's.
+  It dominates the target's ±4.7 mm; calipers would bring that to ~±1 mm. So
+  does its lateral offset from the tool axis — the quantity that swept the fork
+  into joint 6.
+- **No self-collision model.** Torque is the only contact detector.
+- **Disk is at 95%** on the jetson. The unused Depth Anything V2 weights
+  (~390 MB) can go.
+- The tool frame is the **configured** one (120 mm, 0.831 kg), not the flange.
+- The user-facing camera can **abort** motion but never drive it: ~100 mm error,
+  and on the armrest its extrinsic to the arm isn't fixed.
 
 ## Layout
 
 ```
 kinova/
-  connection.py            session, routers, teardown
+  connection.py              session, routers, teardown
   scripts/
-    feeding_start.py       THE command: go to the start pose
-    arm_state.py           where is the arm, --watch to follow it
-    capture_home.py        re-measure the start pose from the parked arm
-    check_connection.py    identity, firmware, live joint state
-calibration/
-  home_pose.json           the start pose, measured
-  depth_480x270.ini        this camera's own depth intrinsics, not the default
-docker/                    driver and vision images
-third_party/               kinova-gen3-ros2 (submodule)
+    sequence.py              the frozen motions: detect / home
+    safe_move.py             every move goes through here
+    feeding_start.py         `feeding start` == sequence home
+    arm_state.py             where is the arm (--watch)
+    capture_home.py          re-measure a pose
+    check_connection.py      identity, firmware, live joints
+feeding/
+  stage1.sh                  make perceive
+  perceive.py                detection
+  locate_anything.py         LocateAnything-3B wrapper, label-aware parsing
+  depth_probe.py             median depth frame (runs in the vision container)
+  locate_target.py           depth per detection, registration check, target
+  run_depth_anything3.py     optional DA3 cross-check
+calibration/                 measured poses and intrinsics (above)
+docker/                      driver and vision images
+third_party/                 kinova-gen3-ros2 (submodule)
 ```
 
-The gripper is **never commanded** anywhere in this tree. It is holding the
-utensil; opening it drops the utensil. `arm_state` reports gripper position and that
-is the extent of it.
+The gripper is **never commanded** anywhere in this tree.
 
 ## Machines
 
 | host | role |
 |---|---|
-| jetson | AGX Orin, arm64, runs the driver container `tcp_rec`; talks to the arm |
-| triphammer | x86-64, RTX 4070 Ti, GPU work; no PREEMPT_RT, on wifi |
-| the Mac | source of truth for this tree; `./sync.sh [host]` pushes with `--delete` |
+| jetson | AGX Orin, arm64; driver container `tcp_rec`, vision `kinova_vision`, GPU venv `~/venvs/la` |
+| triphammer | x86-64, RTX 4070 Ti; no PREEMPT_RT, on wifi |
+| the Mac | source of truth; `./sync.sh [host]` pushes with `--delete` |
 
-Arm is at **192.168.2.67**. Edit on the Mac, never on a replica.
+Arm at **192.168.2.67**. Edit on the Mac, never on a replica.
 
 ## History
 
-Everything before the reset — the MuJoCo testbed, the perception stack, the
-skill work, the architecture and poster documents — is in the first commit and
-nothing else. It was deleted rather than carried because the setup it assumed
-is not the setup being built. `git show a85881d` for what it established.
+Everything before the reset — MuJoCo testbed, earlier perception and skill work,
+architecture and poster documents — is in `a85881d` and nothing else.

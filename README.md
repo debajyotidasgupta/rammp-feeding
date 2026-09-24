@@ -20,7 +20,7 @@ make acquire     over -> approach -> punch -> scoop
                   resume: make acquire START_AT=hover30|hover10|punch|scoop)
 ```
 
-Frozen 2026-09-24 after a run the user called "the most perfect": fork, strawberry, picked up and held.
+Frozen 2026-09-24 (tag `acquire-v1`): two consecutive full runs, fork on strawberries, both picked up and held ("the most perfect scoop"). Run to run: OVER 82/81 mm, punch 45.3/44.3 mm down, scoop 6.3/6.2 s, rise 164.5/163.8 mm, 1.0/1.0 mm off vertical.
 
 ## Acquisition (`make acquire` -> `feeding/acquire.sh` -> `kinova/scripts/acquire.py`)
 

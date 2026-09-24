@@ -196,7 +196,7 @@ Scored against checks independent of all of them (a flat table; a strawberry is
 |---|---|
 | `home_pose.json` | **feeding_start** — J1 −90° (arm swung clear of the user), utensil straight down, tool (0.0236, −0.1766, 0.2082) |
 | `lift_pose.json` | top of the lift — feeding_start's xy, z 0.545, J6 3.6° off its limit |
-| `food_detect_pose.json` | **food_detect_start** — over the bowl, camera straight down, tool (0.2254, 0.0616, 0.5445); also the fixed utensil image region |
+| `food_detect_pose.json` | **food_detect_start** — over the bowl, **in front of the user** (2026-09-24), camera straight down, tool (0.2205, 0.2826, 0.5344); also the fixed utensil image region. The old pose (bowl to the user's right) is kept as `previous_pose` |
 | `colour_intrinsics.json` | colour principal point, measured |
 | `depth_480x270.ini` | this depth sensor's own intrinsics, not the package default |
 

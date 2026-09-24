@@ -16,7 +16,8 @@ make start       back to feeding_start       (retraces the outbound path)
 make detect      feeding_start -> food_detect_start
 make perceive    at food_detect_start: capture, detect, depth, target
 make acquire     over -> approach -> punch -> scoop
-                 (stop partway: make acquire STOP_AFTER=over|hover30|hover10|punch)
+                 (stop partway: make acquire STOP_AFTER=over|hover30|hover10|punch;
+                  resume: make acquire START_AT=hover30|hover10|punch|scoop)
 ```
 
 Frozen 2026-09-23 after running end to end with a fork on a strawberry.
@@ -27,13 +28,13 @@ Frozen 2026-09-23 after running end to end with a fork on a strawberry.
 |---|---|---|
 | OVER | translate at the overlook height until the tip's vertical line meets the food | berry within 1.2 mm of the line |
 | approach | down to 30 mm above the food top, **re-measure from there**, down to **10 mm** above | 10 mm, centred — user-confirmed |
-| PUNCH | re-measure floor and top, down to **bowl floor + 5 mm** | first run: floor + h/3, 35.0 mm down as planned |
+| PUNCH | re-measure floor and top, down to **bowl floor + 7 mm** | first run: floor + h/3, 35.0 mm down as planned |
 | SCOOP | food rises straight up while the utensil turns vertical -> horizontal toward the user (+Y) | rose 156 mm, 0.2 mm off vertical — geometry "perfectly correct" |
 
 The first full run **dropped the berry**: the scoop took 25 s and the food slid off as the
 utensil tilted. The frozen version, on the user's instruction: scoops at **20 °/s** (the
 controller validates the trajectory first and it slows only if refused), punches deeper to
-**floor + 5 mm**, and aims **5 mm further along Y, away from the user** (`aim_offset_base_m` = −5 mm). **None of these changes has run on the arm yet.**
+**floor + 7 mm**, aims **5 mm along −Y (away from the user) and 5 mm along +X (into the bulk of the flesh past the tines)** (`aim_offset_base_m` = (+5, −5) mm). **None of these changes has run on the arm yet.**
 
 Why each piece is the way it is:
 - **Re-measure at every stage, from where the arm is.** At a 30 mm hover the food was

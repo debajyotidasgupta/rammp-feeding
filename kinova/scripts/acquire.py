@@ -51,7 +51,7 @@ from kinova.scripts.safe_move import (MoveError, TorqueGuard, _events, fold, got
 
 CAL = Path(__file__).resolve().parent.parent.parent / "calibration"
 MAX_OVER_M = 0.08          # OVER is a small correction, never a transit
-PUNCH_FLOOR_M = 0.005      # user, 2026-09-23: punch to bowl floor + 5 mm (h/3 was conservative)
+PUNCH_FLOOR_M = 0.007      # user, 2026-09-24: bowl floor + 5-7 mm, start with 7 (h/3 was conservative)
 LIMITS = {1: 128.9, 3: 147.8, 5: 120.3}
 # Kinova's model (gen3_7dof.urdf): the colour camera sits at (0, 56.39, -3.05) mm
 # in the end-effector (flange) frame; the configured tool point is 120 mm out

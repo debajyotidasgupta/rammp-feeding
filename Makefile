@@ -8,7 +8,7 @@
 #   make detect    feeding_start -> food_detect_start  (smooth lift, then swing)
 #   make perceive  from food_detect_start: capture, detect, depth, target
 #   make over      move so the utensil is over the target food
-#   make acquire   over -> approach -> punch -> scoop (STOP_AFTER=over|hover30|hover10|punch)
+#   make acquire   over -> approach -> punch -> scoop (STOP_AFTER=over|hover30|hover10|punch, START_AT=...)
 #
 #   make capture   re-measure feeding_start from the parked arm (rarely: see README)
 #   make sdk / images / depth   build and run the containers
@@ -59,10 +59,11 @@ over:
 	@STOP_AFTER=over feeding/acquire.sh
 
 # Food acquisition from food_detect_start: OVER, down to 30 mm, re-measure, down
-# to 10 mm, re-measure, PUNCH to bowl floor + 5 mm, SCOOP. Uses the latest
-# perceive run. Stop partway with e.g. `make acquire STOP_AFTER=hover10`.
+# to 10 mm, re-measure, PUNCH to bowl floor + 7 mm, SCOOP. Uses the latest
+# perceive run. Stop partway with e.g. `make acquire STOP_AFTER=hover10`, and
+# resume from there with `make acquire START_AT=punch`.
 acquire:
-	@STOP_AFTER=$(STOP_AFTER) feeding/acquire.sh
+	@STOP_AFTER=$(STOP_AFTER) START_AT=$(or $(START_AT),over) feeding/acquire.sh
 
 capture:
 	@$(INARM) kinova.scripts.capture_home --out /work/calibration/home_pose.json

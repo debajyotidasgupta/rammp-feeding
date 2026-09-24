@@ -75,10 +75,10 @@
   "approach_stop_note": "Real-world rule (user, 2026-09-23): stop 10 mm above any surface being approached. 5 mm was seen in practice and judged too close. The PUNCH into food uses floor + food height / 3 instead.",
   "utensil_tip_note": "FORK tip pixel set to u=658 (was 707, the top-centre of the fork's image box). At a 10 mm hover the user saw the fork ~10 mm too far left (image-left = the user's left = +Y); at that depth 10 mm is ~49 px of tip pixel, which lands on u=658 -- the column of the knife tip (657-659) and of the fork's handle in the gripper, i.e. the tool axis. The fork head is wide and curled to image-right, so its box centre is NOT where it meets the food.",
   "aim_offset_base_m": [
-    0.0,
+    0.005,
     -0.005
   ],
-  "aim_offset_note": "User, 2026-09-23: after the fork punch, the aim should have been 5 mm further along Y, AWAY from the user (-Y in the arm base frame; the user sits at +Y). Same ~5 mm Y error seen over the ArUco tag earlier. Applied in OVER as a base-frame (x, y) offset. Sign confirmed by the user.",
-  "punch_floor_margin_m": 0.005,
-  "punch_note": "User, 2026-09-23: punch to bowl floor + 5 mm. floor + height/3 was correct but conservative ('could have gone deeper'). The floor is read BESIDE the food, so the bowl's concavity is inside this 5 mm."
+  "aim_offset_note": "Base-frame (x, y) aim correction applied in OVER. Y: -5 mm, AWAY from the user (user sits at +Y) -- set 2026-09-23 after the first fork punch, and on 2026-09-24 the user confirmed the Y at the 10 mm hover was 'perfect' with it (an extra -5 mm nudge that day was a misunderstanding). X: +5 mm (user, 2026-09-24): the fork's tines extend forward, so aim into the bulk of the flesh. Image at food_detect_start: +X = up, +Y = left.",
+  "punch_floor_margin_m": 0.007,
+  "punch_note": "User: 2026-09-23 floor + 5 mm (h/3 was conservative); 2026-09-24 'floor + 5 to 7 mm, start with 7'. The floor is read BESIDE the food, so the bowl's concavity is inside this margin."
 }

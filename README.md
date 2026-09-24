@@ -34,7 +34,7 @@ Frozen 2026-09-23 after running end to end with a fork on a strawberry.
 The first full run **dropped the berry**: the scoop took 25 s and the food slid off as the
 utensil tilted. The frozen version, on the user's instruction: scoops at **20 °/s** (the
 controller validates the trajectory first and it slows only if refused), punches deeper to
-**floor + 7 mm**, aims **5 mm along +X, into the bulk of the flesh past the tines, with Y as detected** (`aim_offset_base_m` = (+5, 0) mm). **None of these changes has run on the arm yet.**
+**floor + 7 mm**, aims **+5 mm X (into the bulk of the flesh past the tines) and −6 mm Y (the fork head's curve)** (`aim_offset_base_m` = (+5, −6) mm, fork-specific, confirmed at a 10 mm hover 2026-09-24). **None of these changes has run on the arm yet.**
 
 Why each piece is the way it is:
 - **Re-measure at every stage, from where the arm is.** At a 30 mm hover the food was
@@ -57,6 +57,7 @@ Why each piece is the way it is:
 | `camera_to_tip_m` | **0.265** | at food_detect_start: ruler from the tip to **bare table** (state the unit!) + the sensor's bare-table depth; cross-check with camera-case-to-tip |
 | `utensil_tip_px` | (658, 470) | where the utensil meets the food, **not** its image box centre (a fork's head is wide) — a 10 mm hover and your eye settle it |
 | `utensil_px` | fork's image region | so detection never calls the utensil food |
+| `aim_offset_base_m` | (+5, −6) mm | at a 10 mm hover, by eye: where the tines actually meet the food vs the tool axis |
 
 Both breakages on 2026-09-23 came from one wrong number: camera-to-tip taken as
 105/115 mm (inches read as centimetres) when it is ~260 mm.

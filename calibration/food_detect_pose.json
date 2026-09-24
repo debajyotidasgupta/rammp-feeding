@@ -76,9 +76,9 @@
   "utensil_tip_note": "FORK tip pixel set to u=658 (was 707, the top-centre of the fork's image box). At a 10 mm hover the user saw the fork ~10 mm too far left (image-left = the user's left = +Y); at that depth 10 mm is ~49 px of tip pixel, which lands on u=658 -- the column of the knife tip (657-659) and of the fork's handle in the gripper, i.e. the tool axis. The fork head is wide and curled to image-right, so its box centre is NOT where it meets the food.",
   "aim_offset_base_m": [
     0.005,
-    0.0
+    -0.006
   ],
-  "aim_offset_note": "Base-frame (x, y) aim correction applied in OVER. X: +5 mm (user, 2026-09-24): the fork's tines extend forward, so aim into the bulk of the flesh. Y: 0 -- the user, shown the detected centre on the 2026-09-24 overlook image, said its Y is correct as detected (the -5 mm Y from 2026-09-23 is withdrawn). Image at food_detect_start: +X = up, +Y = left (user's side).",
+  "aim_offset_note": "Base-frame (x, y) aim correction applied in OVER, user-confirmed by eye at a 10 mm hover on 2026-09-24 ('this looks perfect'). X +5 mm: the fork's tines extend forward, so aim into the bulk of the flesh. Y -6 mm (away from the user): the detected centre is right, but the fork head curves, so the tines meet the food ~5-7 mm off the tool axis. Fork-specific: re-check when the utensil changes. Image at food_detect_start: +X = up, +Y = left (user's side).",
   "punch_floor_margin_m": 0.007,
   "punch_note": "User: 2026-09-23 floor + 5 mm (h/3 was conservative); 2026-09-24 'floor + 5 to 7 mm, start with 7'. The floor is read BESIDE the food, so the bowl's concavity is inside this margin."
 }

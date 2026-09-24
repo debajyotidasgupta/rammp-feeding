@@ -186,6 +186,27 @@ def _timing(path, peak, ramp):
     return [max(0.02, d) for d in np.diff(t)]
 
 
+def _waypoints(conn, path, top_speed, ramp, what):
+    """The joint path as one WaypointList the controller has validated; slower if refused."""
+    raw = [x.position for x in conn.base_cyclic.RefreshFeedback().actuators]
+    for speed in (top_speed, top_speed * 0.75, top_speed * 0.5, top_speed * 0.35):
+        durs = _timing(path, speed, ramp)
+        wl = Base_pb2.WaypointList(); wl.duration = 0.0; wl.use_optimal_blending = False
+        cur, prev = list(raw), path[0]
+        for k, (q, dt) in enumerate(zip(path[1:], durs), 1):
+            cur = [c + fold(x - y) for c, x, y in zip(cur, q, prev)]
+            w = wl.waypoints.add(); w.name = "w%02d" % k
+            w.angular_waypoint.angles.extend(cur)
+            w.angular_waypoint.duration = dt
+            prev = q
+        errs = list(conn.base.ValidateWaypointList(wl).trajectory_error_report.trajectory_error_elements)
+        if not errs:
+            return wl, speed
+        print("    %.0f deg/s refused by the controller: %s" % (speed, " ".join(str(errs[0]).split())))
+    raise MoveError("controller refused the %s even at %.0f deg/s -- nothing moved" % (what, top_speed * 0.35))
+
+
+
 def scoop(conn, a):
     pose, _ = cal()
     done = json.loads(Path("/tmp/punch_done.json").read_text()) if Path("/tmp/punch_done.json").exists() else {}
@@ -239,24 +260,7 @@ def scoop(conn, a):
     #    Timed with a smooth speed profile (ease in, cruise, ease out): giving every
     #    waypoint the cruise speed asks for full speed within the first ~0.1 s, and
     #    the controller refuses that at any speed (INVALID_JOINT_ACCELERATION).
-    raw = [x.position for x in conn.base_cyclic.RefreshFeedback().actuators]
-    for speed in (a.speed, a.speed * 0.75, a.speed * 0.5, a.speed * 0.35):
-        durs = _timing(path, speed, a.ramp)
-        wl = Base_pb2.WaypointList(); wl.duration = 0.0; wl.use_optimal_blending = False
-        cur, prev = list(raw), path[0]
-        for k, (q, dt) in enumerate(zip(path[1:], durs), 1):
-            cur = [c + fold(x - y) for c, x, y in zip(cur, q, prev)]
-            w = wl.waypoints.add(); w.name = "s%02d" % k
-            w.angular_waypoint.angles.extend(cur)
-            w.angular_waypoint.duration = dt
-            prev = q
-        errs = list(conn.base.ValidateWaypointList(wl).trajectory_error_report.trajectory_error_elements)
-        if not errs:
-            break
-        e = errs[0]
-        print("    %.0f deg/s refused by the controller: %s" % (speed, " ".join(str(e).split())))
-    else:
-        raise MoveError("controller refused the scoop even at %.0f deg/s -- nothing moved" % (a.speed * 0.35))
+    wl, speed = _waypoints(conn, path, a.speed, a.ramp, "scoop")
     total = sum(w.angular_waypoint.duration for w in wl.waypoints)
     print("    cruising at %.0f deg/s (ramps %.0f%% each end): %.1f s" % (speed, 100 * a.ramp, total))
     if a.validate_only:

@@ -160,13 +160,15 @@ def swing(conn, a):
     p = tool_pose(conn); q0 = joints(conn); R0 = R_from_kortex(*p[3:])
     if axis(R0)[1] < 0.99:
         raise MoveError("utensil is not pointing at the user (+Y) -- run from the end of the scoop")
-    z0 = p[2]; up = (p[0], p[1], z0 + LIFT_M)
-    lift = [_ik(conn, (p[0], p[1], z0 + LIFT_M * k / 10), tuple(p[3:]), q0) for k in range(1, 11)]
-    if not all(lift):
-        raise MoveError("the %.0f mm lift is not reachable -- nothing moved" % (1000 * LIFT_M))
-    q80 = _ik(conn, (p[0], p[1], z0 + 0.080), tuple(p[3:]), q0)      # the return's arm shape, for retract
-    if not a.validate_only:
-        goto_cartesian(conn, up, tuple(p[3:]), speed=0.02, label="up %.0f mm" % (1000 * LIFT_M), max_tilt=95.0)
+    z0 = p[2]; up = (p[0], p[1], z0 + LIFT_M); T0 = np.array(p[:3])
+    # a steered joint path, not a plain Cartesian move: from a scoop that ends nearer the base, the
+    # controller's own straight lift runs J-limits out at +70 mm; steering the redundancy reaches 175
+    n_lift = 35
+    lift, err = homotopy(conn, q0, lambda s: (T0 + np.array([0, 0, LIFT_M * s]), R0), n_lift)
+    if lift is None:
+        raise MoveError("the %.0f mm lift is not reachable (%s) -- nothing moved" % (1000 * LIFT_M, err))
+    q80 = lift[round(n_lift * 0.080 / LIFT_M)]                  # the return's arm shape, for retract
+    run_path(conn, lift, dps_for(lift, LIFT_M, 0.020), "up %.0f mm" % (1000 * LIFT_M), not a.validate_only)
     qs = joints(conn) if not a.validate_only else lift[-1]       # plan from where the lift left the arm
     tip0 = np.array(up) + R0 @ tip_in_tool(); ax0 = axis(R0)
     best = None

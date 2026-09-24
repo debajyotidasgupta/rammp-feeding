@@ -15,9 +15,9 @@ make state       where is the arm right now
 make start       back to feeding_start       (retraces the outbound path)
 make detect      feeding_start -> food_detect_start
 make perceive    at food_detect_start: capture, detect, depth, target
-make acquire     over -> approach -> punch -> scoop
-                 (stop partway: make acquire STOP_AFTER=over|hover30|hover10|punch;
-                  resume: make acquire START_AT=hover30|hover10|punch|scoop)
+make acquire     over -> plunge -> scoop
+                 (STOP_AFTER=over|plunge; the old stepped route for aim checks:
+                  STOP_AFTER=hover30|hover10, then START_AT=punch)
 make deliver     swing -> present -> bite -> retract   (from the end of the scoop)
                  (STOP_AFTER=swing|present|bite, START_AT=present|bite|retract, VALIDATE=1)
 make retract     back from the user to food_detect_start
@@ -30,9 +30,14 @@ Frozen 2026-09-24 (tag `acquire-v1`): two consecutive full runs, fork on strawbe
 | step | what | measured |
 |---|---|---|
 | OVER | translate at the overlook height until the tip's vertical line meets the food | 82 mm, aim user-confirmed at the hover |
-| approach | down to 30 mm above the food top, **re-measure from there**, down to **10 mm** above | nominal 10 mm reads 15–20 mm by eye (camera-to-tip stored long) |
-| PUNCH | re-measure floor and top, down to the **measured bowl floor** nominal (really ~5–10 mm above it: camera-to-tip stored long, floor read beside the food) | 45.3 mm down; berry pierced cleanly |
+| PLUNGE | **one smooth move** from the overlook to the **measured bowl floor** (nominal; really ~5–10 mm above it): 20 mm/s, easing to 5 mm/s from 20 mm above the food top | 2026-09-24: 173 mm in 20.2 s, same end depth as the stepped punch |
 | SCOOP | food rises straight up while the utensil turns vertical -> horizontal toward the user (+Y); the turn **starts the moment the food lifts** (90°·s^0.8) | 6.3 s at 20 °/s; rose 164.5 mm, 1.0 mm off vertical; berry held |
+
+**Why one plunge, not steps.** The stepped route stopped at 30 and 10 mm to re-measure, because the overlook
+reads the food TOP 4–7 mm high. But the punch aims at the FLOOR, and the overlook's floor reading matched the
+close re-measures to within 1 mm on every run (e.g. 172.3 mm, then 65.3 after 107 mm down: predicted 65.3).
+The slow zone starts 20 mm above the top reading, which covers its error. The stepped route stays for aim
+checks at a 10 mm hover (STOP_AFTER=hover10).
 
 How it got here (2026-09-23/24), each change the user's call:
 - the first full run **dropped the berry**: a 25 s scoop, and the food slid off while the fork was steep ->

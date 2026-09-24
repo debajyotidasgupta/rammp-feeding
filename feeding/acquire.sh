@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Food acquisition from food_detect_start, frozen 2026-09-23. Runs ON THE JETSON.
 #
-#   feeding/acquire.sh                 # over -> hover 30 -> hover 10 -> punch -> scoop
-#   STOP_AFTER=hover10 feeding/acquire.sh   # stop at a stage: over | hover30 | hover10 | punch
-#   START_AT=punch feeding/acquire.sh       # resume from a stop: hover30 | hover10 | punch | scoop
+#   feeding/acquire.sh                      # over -> plunge (one smooth move to the floor) -> scoop
+#   STOP_AFTER=over|plunge feeding/acquire.sh
+#   STOP_AFTER=hover10 feeding/acquire.sh   # the stepped route, for aim checks: hover 30 -> hover 10 (-> punch)
+#   START_AT=punch|plunge|scoop feeding/acquire.sh
 #
 # Uses the latest `make perceive` run for the target. Every depth reading is taken
 # FROM WHERE THE ARM IS before the next move: at a 30 mm hover the food was
@@ -24,7 +25,7 @@ measure() {   # $1 = label; depth from the vision container, analysed on the hos
   PYTHONPATH=. "$PY" -m feeding.measure_under --depth "$RUN/acq_$1.npy" --out "$RUN/under_$1.json" --guess "${2:-0.30}"
   docker cp "$RUN/under_$1.json" tcp_rec:/tmp/under.json >/dev/null
 }
-STAGES="over hover30 hover10 punch scoop"
+STAGES="over hover30 hover10 punch plunge scoop"
 case " $STAGES " in *" $START_AT "*) ;; *) echo "START_AT must be one of: $STAGES"; exit 2 ;; esac
 started=0
 run() { [ "$1" = "$START_AT" ] && started=1; [ "$started" = 1 ]; }   # $1 = stage: run it?
@@ -33,10 +34,17 @@ stop_here() { [ "$STOP_AFTER" = "$1" ] && { echo; echo "stopped after $1 (STOP_A
 echo "target from: $RUN"
 docker cp "$RUN/target.json" tcp_rec:/tmp/target.json >/dev/null
 
-if run over;    then echo "[1/5] OVER";          $ARM over 2>&1 | grep -v Deprecation;   stop_here over; fi
-if run hover30; then echo "[2/5] down to 30 mm"; measure over 0.41;  $ARM descend --to-above 0.030 2>&1 | grep -v Deprecation; stop_here hover30; fi
-if run hover10; then echo "[3/5] down to 10 mm"; measure hover30 0.29; $ARM descend --to-above 0.010 2>&1 | grep -v Deprecation; stop_here hover10; fi
-if run punch;   then echo "[4/5] PUNCH";         measure hover10 0.275; $ARM punch 2>&1 | grep -v Deprecation; stop_here punch; fi
-if run scoop;   then echo "[5/5] SCOOP";         $ARM scoop 2>&1 | grep -v Deprecation; fi
+# Default: OVER -> PLUNGE (one smooth move to the floor, aimed from the overlook reading) -> SCOOP.
+# STOP_AFTER=hover30|hover10 (or START_AT at one of them) takes the old stepped route, for aim checks.
+STEPPED=""; case "$STOP_AFTER $START_AT" in *hover30*|*hover10*|*punch*) STEPPED=1 ;; esac
+if run over;    then echo "[1/3] OVER";          $ARM over 2>&1 | grep -v Deprecation;   stop_here over; fi
+if [ -n "$STEPPED" ]; then
+  if run hover30; then echo "  down to 30 mm";   measure over 0.41;  $ARM descend --to-above 0.030 2>&1 | grep -v Deprecation; stop_here hover30; fi
+  if run hover10; then echo "  down to 10 mm";   measure hover30 0.29; $ARM descend --to-above 0.010 2>&1 | grep -v Deprecation; stop_here hover10; fi
+  if run punch;   then echo "  PUNCH";           measure hover10 0.275; $ARM punch 2>&1 | grep -v Deprecation; stop_here punch; fi
+elif run plunge; then
+  echo "[2/3] PLUNGE";  measure over 0.41; $ARM plunge 2>&1 | grep -v Deprecation; stop_here plunge
+fi
+if run scoop;   then echo "[3/3] SCOOP";         $ARM scoop 2>&1 | grep -v Deprecation; fi
 docker cp tcp_rec:/tmp/scoop_log.json "$RUN/scoop_log.json" >/dev/null 2>&1 || true
 echo; echo "logs: $RUN"

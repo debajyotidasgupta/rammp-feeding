@@ -155,6 +155,75 @@ def punch(conn, a):
     Path("/tmp/punch_done.json").write_text(json.dumps(dict(height=u["height"], floor_m=a.floor_m)))
 
 
+PLUNGE_FAST = 0.020        # m/s down to SLOW_ABOVE the food top
+PLUNGE_SLOW = 0.005        # m/s through the food, to the floor
+SLOW_ABOVE = 0.020         # the overlook reads the food top 4-7 mm high; this covers it
+
+
+def plunge(conn, a):
+    """OVER -> punch in ONE smooth move (user, 2026-09-24: no stopping on the way down).
+
+    Aimed at the FLOOR read from the overlook, which matched the later close re-measures to within 1 mm
+    on every run (the food TOP read 4-7 mm high -- why the stepped route re-measured; the slow zone
+    starts SLOW_ABOVE the top to cover that). One joint trajectory along the vertical, fast then easing
+    to 5 mm/s through the food, validated by the controller, watched for torque."""
+    u = json.loads(Path(a.under).read_text())
+    if "floor" not in u:
+        raise MoveError("no floor reading under the tip -- cannot punch safely")
+    down = u["gap_floor"] - a.floor_m
+    if not 0.080 < down < 0.250:
+        raise MoveError("plunge of %.0f mm is outside the sane range (80-250) -- re-measure" % (1000 * down))
+    if not 0.010 < u["height"] < 0.060:
+        raise MoveError("food %.0f mm tall is implausible -- re-measure" % (1000 * u["height"]))
+    slow_at = max(0.0, u["gap_top"] - SLOW_ABOVE)          # distance travelled when the slow zone starts
+    p = tool_pose(conn); q0 = joints(conn); T0 = np.array(p[:3])
+    n = int(math.ceil(down / 0.004)); path = [q0]; prev = q0; d = [0.0]
+    for k in range(1, n + 1):
+        dk = down * k / n
+        q = _ik(conn, (T0[0], T0[1], T0[2] - dk), tuple(p[3:]), prev)
+        if q is None or max(abs(fold(x - y)) for x, y in zip(q, prev)) > 8:
+            raise MoveError("no continuous plunge path at %.0f mm -- nothing moved" % (1000 * dk))
+        prev = q; path.append(q); d.append(dk)
+
+    def v(x):                                               # smooth: ramp in, fast, ease to slow
+        ramp = min(1.0, 0.25 + x / 0.015)
+        w = min(1.0, max(0.0, (x - (slow_at - 0.015)) / 0.015))
+        w = w * w * (3 - 2 * w)
+        return ramp * (PLUNGE_FAST + (PLUNGE_SLOW - PLUNGE_FAST) * w)
+    raw = [x.position for x in conn.base_cyclic.RefreshFeedback().actuators]
+    for scale in (1.0, 0.75, 0.5):
+        wl = Base_pb2.WaypointList(); wl.duration = 0.0; wl.use_optimal_blending = False
+        cur, pq = list(raw), path[0]; total = 0.0
+        for k, q in enumerate(path[1:], 1):
+            cur = [c + fold(x - y) for c, x, y in zip(cur, q, pq)]
+            dt = (d[k] - d[k - 1]) / (scale * v(0.5 * (d[k] + d[k - 1]))); total += dt
+            w_ = wl.waypoints.add(); w_.name = "p%02d" % k
+            w_.angular_waypoint.angles.extend(cur); w_.angular_waypoint.duration = dt; pq = q
+        errs = list(conn.base.ValidateWaypointList(wl).trajectory_error_report.trajectory_error_elements)
+        if not errs:
+            break
+        print("    x%.2f speed refused by the controller: %s" % (scale, " ".join(str(errs[0]).split())))
+    else:
+        raise MoveError("controller refused the plunge -- nothing moved")
+    print("    food %.1f mm tall: %.0f mm down to the floor + %.0f mm, slow from %.0f mm; %.1f s"
+          % (1000 * u["height"], 1000 * down, 1000 * a.floor_m, 1000 * slow_at, total))
+    if a.validate_only:
+        print("    validate-only: controller accepted it, nothing moved")
+        return
+    ev = _events(conn); ev.clear(); guard = TorqueGuard(); t0 = time.time()
+    conn.base.ExecuteWaypointTrajectory(wl)
+    while time.time() - t0 < total + 15:
+        time.sleep(0.02)
+        hit = guard.update([x.torque for x in conn.base_cyclic.RefreshFeedback().actuators])
+        if hit or any(e[0] == "ACTION_ABORT" for e in ev):
+            conn.base.Stop()
+            raise MoveError("plunge stopped: %s" % ("joint %d torque step" % (hit[0] + 1) if hit else "controller aborted"))
+        if any(e[0] == "ACTION_END" for e in ev):
+            break
+    print("    plunge done in %.1f s" % (time.time() - t0))
+    Path("/tmp/punch_done.json").write_text(json.dumps(dict(height=u["height"], floor_m=a.floor_m)))
+
+
 def _ik(conn, T, rpy, g):
     d = Base_pb2.IKData(); p = d.cartesian_pose
     p.x, p.y, p.z = map(float, T); p.theta_x, p.theta_y, p.theta_z = map(float, rpy)
@@ -302,7 +371,7 @@ def scoop(conn, a):
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("step", choices=["over", "descend", "punch", "scoop"])
+    ap.add_argument("step", choices=["over", "descend", "punch", "plunge", "scoop"])
     ap.add_argument("--target", default="/tmp/target.json")
     ap.add_argument("--under", default="/tmp/under.json", help="measure_under.py output")
     ap.add_argument("--to-above", type=float, default=0.010, help="descend: stop this far above the food top")
@@ -318,7 +387,7 @@ def main() -> int:
     a = ap.parse_args()
     with kinova_connection() as conn:
         try:
-            dict(over=over, descend=descend, punch=punch, scoop=scoop)[a.step](conn, a)
+            dict(over=over, descend=descend, punch=punch, plunge=plunge, scoop=scoop)[a.step](conn, a)
             p = tool_pose(conn)
             print("  %s done: tool (%.4f %.4f %.4f), utensil %.1f deg off vertical"
                   % (a.step, p[0], p[1], p[2], tilt_deg(conn)))

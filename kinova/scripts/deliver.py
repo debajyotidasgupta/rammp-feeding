@@ -88,7 +88,14 @@ def fk_tip(conn, q):
     ja = Base_pb2.JointAngles()
     for i, v in enumerate(q):
         j = ja.joint_angles.add(); j.joint_identifier = i; j.value = v % 360.0
-    p = conn.base.ComputeForwardKinematics(ja)
+    for attempt in range(5):             # has failed once (METHOD_FAILED) right after a trajectory
+        try:
+            p = conn.base.ComputeForwardKinematics(ja)
+            break
+        except Exception:  # noqa: BLE001
+            if attempt == 4:
+                raise MoveError("forward kinematics keeps failing -- stopped")
+            time.sleep(0.3)
     return np.array([p.x, p.y, p.z]) + R_from_kortex(p.theta_x, p.theta_y, p.theta_z) @ tip_in_tool()
 
 
@@ -300,11 +307,20 @@ def retract(conn, a):
     p = tool_pose(conn); q0 = joints(conn); T0 = np.array(p[:3]); R0 = R_from_kortex(*p[3:])
     if abs(axis(R0)[2]) > 0.1:
         raise MoveError("utensil is not level -- not at the user")
+    RS = R_from_kortex(*st["start_rpy"]); axS = axis(RS); TS = np.array(st["start_tool"])
+    # resuming after legs 1-2 (utensil already turned back, at the swing's start): straight to leg 3.
+    # Leg 1 from here would "back off" toward the swing's END, i.e. toward the user.
+    resumed = axis(R0) @ axS > 0.99 and np.linalg.norm(T0 - TS) < 0.020
+    if not resumed and axis(R0) @ axS > 0.5:
+        raise MoveError("utensil is neither at the user nor back at the swing's start -- not guessing a path")
     # 1. back off along the utensil, to where the swing ended
-    Te = np.array(st["end_tool"]); L = np.linalg.norm(Te - T0)
+    Te = np.array(st["end_tool"]); L = 0.0 if resumed else np.linalg.norm(Te - T0)
     if L > 0.400:
         raise MoveError("%.0f mm from the swing's end -- not retracing from here" % (1000 * L))
-    if L > 0.003:
+    if resumed:
+        print("    legs 1-2 already done (at the swing's start): going home")
+        q1 = q0
+    elif L > 0.003:
         path, err = homotopy(conn, q0, lambda s: (T0 + (Te - T0) * s, R0), 40)
         if path is None:
             raise MoveError("back off " + err + " -- nothing moved")
@@ -313,8 +329,7 @@ def retract(conn, a):
     else:
         q1 = q0
     # 2. reverse the swing
-    RS = R_from_kortex(*st["start_rpy"]); axS = axis(RS); tipv_t = tip_in_tool()
-    TS = np.array(st["start_tool"]); tipS = TS + RS @ tipv_t
+    tipv_t = tip_in_tool(); tipS = TS + RS @ tipv_t
     R1 = R0 if not go else R_from_kortex(*tool_pose(conn)[3:]); ax1 = axis(R1)
     th = math.degrees(math.atan2(np.cross(axS, ax1)[2], axS @ ax1)); u0 = th / 90.0
     tip1 = (Te if L > 0.003 else T0) + R1 @ tipv_t
@@ -323,11 +338,14 @@ def retract(conn, a):
     def at2(s):
         u = u0 * (1 - s); R = Rz(90.0 * u) @ RS
         return swing_tip(tipS, axS, st["retract_m"], u) + (1 - s) * e - R @ tipv_t, R
-    path2, err = homotopy(conn, q1, at2, 60)
-    if path2 is None:
-        raise MoveError("reverse swing " + err)
-    run_path(conn, path2, RETRACT_SWING_DPS, "reverse swing %.0f deg" % th, go, from_here=go or L <= 0.003)
-    q2 = joints(conn) if go else path2[-1]
+    if resumed:
+        q2 = q0
+    else:
+        path2, err = homotopy(conn, q1, at2, 60)
+        if path2 is None:
+            raise MoveError("reverse swing " + err)
+        run_path(conn, path2, RETRACT_SWING_DPS, "reverse swing %.0f deg" % th, go, from_here=go or L <= 0.003)
+        q2 = joints(conn) if go else path2[-1]
     # 3. down to the scoop end + 80 mm in the scoop's own arm shape, then the proven joint move
     Ta = TS; Td = np.array([TS[0], TS[1], st["scoop_end_z"] + 0.080])
     path3, err = homotopy(conn, q2, lambda s: (Ta + (Td - Ta) * s, RS), 40, toward=st["q80"])
@@ -338,7 +356,7 @@ def retract(conn, a):
     print("    return: utensil tip never below %.0f mm" % (1000 * lo))
     if lo < MIN_TIP_Z:
         raise MoveError("the return would dip the utensil tip to %.0f mm -- stopped" % (1000 * lo))
-    run_path(conn, path3, RETRACT_DOWN_DPS, "down to scoop end + 80 mm", go, from_here=go)
+    run_path(conn, path3, RETRACT_DOWN_DPS, "down to scoop end + 80 mm", go, from_here=go or resumed)
     if go:
         try:
             goto(conn, qd, speed=RETRACT_HOME_DPS, label="-> food_detect_start", max_tilt=95.0)
@@ -367,6 +385,9 @@ def main() -> int:
             rc = dict(swing=swing, approach=approach, sidestep=sidestep, bite=bite, retract=retract)[a.step](conn, a)
         except MoveError as e:
             print("\n  STOPPED: %s" % e, file=sys.stderr)
+            return 1
+        except Exception as e:  # noqa: BLE001 -- a controller error mid-sequence: stop, say where
+            print("\n  STOPPED on a controller error: %s" % " ".join(str(e).split())[:300], file=sys.stderr)
             return 1
     return rc or 0
 

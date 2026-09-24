@@ -50,7 +50,7 @@ from kinova.scripts.safe_move import (MoveError, TorqueGuard, _events, fold, got
                                       joints, tilt_deg, tool_pose)
 
 CAL = Path(__file__).resolve().parent.parent.parent / "calibration"
-MAX_OVER_M = 0.08          # OVER is a small correction, never a transit
+MAX_OVER_M = 0.10          # OVER stays inside the bowl, never a transit (central berries sit ~70-80 mm out + the aim offset)
 PUNCH_FLOOR_M = 0.002      # 2026-09-24: 7 mm left the fork shallow; +5 mm deeper picked the berry up
 LIMITS = {1: 128.9, 3: 147.8, 5: 120.3}
 # Kinova's model (gen3_7dof.urdf): the colour camera sits at (0, 56.39, -3.05) mm

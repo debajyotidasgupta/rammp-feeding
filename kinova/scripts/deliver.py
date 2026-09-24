@@ -340,7 +340,15 @@ def retract(conn, a):
         raise MoveError("the return would dip the utensil tip to %.0f mm -- stopped" % (1000 * lo))
     run_path(conn, path3, RETRACT_DOWN_DPS, "down to scoop end + 80 mm", go, from_here=go)
     if go:
-        goto(conn, qd, speed=RETRACT_HOME_DPS, label="-> food_detect_start", max_tilt=95.0)
+        try:
+            goto(conn, qd, speed=RETRACT_HOME_DPS, label="-> food_detect_start", max_tilt=95.0)
+        except MoveError as e:
+            # braking at the end of this faster move reads as a torque step (J2 -7.8 -> -4.8 N.m on
+            # 2026-09-24, nothing touched): if the arm is already there, it arrived
+            off = max(abs(fold(x - y)) for x, y in zip(joints(conn), qd))
+            if "torque" not in str(e) or off > 0.2:
+                raise
+            print("    -> food_detect_start: arrived (%.2f deg off); the torque step was the braking" % off)
         STATE.unlink()
 
 

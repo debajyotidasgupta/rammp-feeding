@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""What is directly under the utensil tip, from one depth frame.
+
+    python -m feeding.measure_under --depth frame.npy --out under.json [--guess 0.30]
+
+Reports, along the utensil tip's vertical line:
+  top    nearest surface (the food's top, when over food), m from the camera
+  floor  the bowl floor just beside it, m from the camera
+  plus the tip's clearance to each, using the calibrated camera-to-tip.
+
+Read at close range on purpose. Every approach today re-measured at a ~30 mm
+hover and found the food 4.7-6.7 mm closer than the overlook reading predicted;
+a reading taken from where the arm now is beats one taken 150 mm further away.
+
+The vertical line is projected through the image of TRUE vertical
+(colour_intrinsics.json vertical_vp) and the MEASURED tip pixel
+(food_detect_pose.json utensil_tip_px) -- not the utensil box's centre, which
+was ~10 mm off for a fork.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+
+import numpy as np
+
+CAL = Path(__file__).resolve().parent.parent / "calibration"
+FXD = FYD = 334.810; CXD = 238.536; CYD = 139.694          # depth, device
+T_D2C = np.array([-0.02706, -0.00997, -0.00471])            # factory extrinsic
+FOOD_HALF_M = 0.017                                         # half a strawberry, for the floor ring
+
+
+def measure(depth_mm: np.ndarray, guess: float = 0.30) -> dict:
+    cal = json.loads((CAL / "colour_intrinsics.json").read_text())
+    pose = json.loads((CAL / "food_detect_pose.json").read_text())
+    cx, cy, fx, fy = cal["cx"], cal["cy"], cal["fx"], cal["fy"]
+    vp = np.array(cal["vertical_vp"])
+    tip = np.array(pose["utensil_tip_px"], dtype=float)
+    zt = pose["camera_to_tip_m"]
+    if not zt:
+        raise SystemExit("camera_to_tip_m is not set for this utensil -- measure it first")
+    D = depth_mm.astype(float)
+    H, W = D.shape
+    yy, xx = np.mgrid[0:H, 0:W]
+    z = guess
+    for _ in range(8):
+        p = vp + (tip - vp) * zt / z
+        X = (p[0] - cx) * z / fx - T_D2C[0]
+        Y = (p[1] - cy) * z / fy - T_D2C[1]
+        Zd = z - T_D2C[2]
+        ud, vd = FXD * X / Zd + CXD, FYD * Y / Zd + CYD
+        rr = np.hypot(xx - ud, yy - vd)
+        inner = D[(rr <= 7) & (D > 0)]
+        if inner.size < 10:
+            raise SystemExit("no depth return under the tip (depth px %.0f,%.0f)" % (ud, vd))
+        z = np.percentile(inner, 10) / 1000.0 + T_D2C[2]
+    top = z
+    r_b = FOOD_HALF_M * FXD / top
+    ring = D[(rr > 1.3 * r_b) & (rr < 2.6 * r_b) & (D > 0)]
+    floor = np.percentile(ring, 85) / 1000.0 + T_D2C[2] if ring.size > 10 else None
+    out = dict(camera_to_tip=zt, top=float(top), gap_top=float(top - zt),
+               depth_px=[float(ud), float(vd)])
+    if floor is not None:
+        out.update(floor=float(floor), gap_floor=float(floor - zt), height=float(floor - top))
+    return out
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--depth", required=True, help="depth_probe .npy (mm, 480x270)")
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--guess", type=float, default=0.30, help="rough depth, m, to start from")
+    a = ap.parse_args()
+    m = measure(np.load(a.depth), a.guess)
+    Path(a.out).write_text(json.dumps(m, indent=2))
+    s = "  under the tip: top %.1f mm (tip %.1f mm above it)" % (1000 * m["top"], 1000 * m["gap_top"])
+    if "floor" in m:
+        s += ", floor %.1f mm (tip %.1f mm above it), food %.1f mm tall" % (
+            1000 * m["floor"], 1000 * m["gap_floor"], 1000 * m["height"])
+    print(s)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

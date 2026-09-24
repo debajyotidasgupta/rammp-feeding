@@ -172,7 +172,9 @@ def main() -> int:
 
     # 4. per-berry 3D and the target
     ute = det["utensil"][0]
-    p_tip = np.array([(ute["x1"] + ute["x2"]) / 2.0, ute["y1"]])   # stored region, top-centre
+    # Prefer the MEASURED tip pixel: a fork's head is wide and curled, so the
+    # top-centre of its image box was ~10 mm off where it meets the food.
+    p_tip = np.array(det.get("utensil_tip") or [(ute["x1"] + ute["x2"]) / 2.0, ute["y1"]])
     bowl = det["bowl"][0]
     bc = np.array([bowl["cx"], bowl["cy"]])
     print("\nFOOD")

@@ -63,8 +63,8 @@
     719
   ],
   "utensil_tip_px": [
-    705,
-    478
+    658,
+    470
   ],
   "utensil_note": "The utensil is fixed to the arm and so is the camera, so at this pose it occupies the SAME pixels in every frame: (646-652, 464)-(756, 718-719) across four runs. Stored here instead of detected: a 'spoon' query once returned the whole BOWL box (the spoon sits in the bowl in the image), which then suppressed every berry as 'inside the utensil'. Re-measure if the utensil is changed or re-gripped. tip = top-centre of the box.",
   "pose_note": "Chosen 2026-09-23 with J2 ~+8 deg (arm leaning toward the table) instead of -9.7: same camera orientation (J4 compensates, J2+J4 unchanged), but the camera sits ~120 mm nearer the base, so no berry is hidden behind the utensil and J2 holding torque roughly halves. Then +17 mm X to bring the top of the rim into frame and -20 mm Z for J6 margin: 5.4 deg from its -120.3 limit, was 1.1. Full rim AND a clear view past the utensil is not possible at this bowl size -- the bowl is ~560 px tall, the clear area above the utensil tip ~460 px; this frames the rim top at the image edge.",
@@ -72,5 +72,13 @@
   "camera_to_tip_m": 0.265,
   "camera_to_tip_note": "FORK, 2026-09-23. Two independent closures agree: ruler tine-tips-to-bare-table 7 in (177.8 mm) against a sensor bare-table depth of 438.8 mm -> 261.0 mm; camera case to tip 10.5 in (266.7 mm) minus the 6.7 mm case-to-depth-frame offset found with the knife -> 260.0 mm. Stored as 265: the knife, closed the same way, proved ~5 mm short in a hover test, and erring long keeps every stop higher. Caution learned here: at food_detect_start the point straight below the tip is the bowl's outer wall (407 mm), not table -- close against bare table, not 'under the tip'.",
   "approach_stop_m": 0.01,
-  "approach_stop_note": "Real-world rule (user, 2026-09-23): stop 10 mm above any surface being approached. 5 mm was seen in practice and judged too close. The PUNCH into food uses floor + food height / 3 instead."
+  "approach_stop_note": "Real-world rule (user, 2026-09-23): stop 10 mm above any surface being approached. 5 mm was seen in practice and judged too close. The PUNCH into food uses floor + food height / 3 instead.",
+  "utensil_tip_note": "FORK tip pixel set to u=658 (was 707, the top-centre of the fork's image box). At a 10 mm hover the user saw the fork ~10 mm too far left (image-left = the user's left = +Y); at that depth 10 mm is ~49 px of tip pixel, which lands on u=658 -- the column of the knife tip (657-659) and of the fork's handle in the gripper, i.e. the tool axis. The fork head is wide and curled to image-right, so its box centre is NOT where it meets the food.",
+  "aim_offset_base_m": [
+    0.0,
+    0.005
+  ],
+  "aim_offset_note": "User, 2026-09-23: after the fork punch, the aim should have been 5 mm further 'along the Y axis' -- the same ~5 mm Y error seen over the ArUco tag earlier. Applied in OVER as a base-frame (x, y) offset. SIGN NOT CONFIRMED: +Y (toward the user) assumed; if the 10 mm hover shows it went the wrong way, flip it to -0.005.",
+  "punch_floor_margin_m": 0.005,
+  "punch_note": "User, 2026-09-23: punch to bowl floor + 5 mm. floor + height/3 was correct but conservative ('could have gone deeper'). The floor is read BESIDE the food, so the bowl's concavity is inside this 5 mm."
 }

@@ -178,6 +178,8 @@ def main() -> int:
                              cx=b.centre[0], cy=b.centre[1]) for b in boxes]
         groups.append((name, boxes))
 
+    if "utensil_tip_px" in pose:
+        result["utensil_tip"] = pose["utensil_tip_px"]     # measured; the box centre is not the tip
     Path(a.out + ".json").write_text(json.dumps(result, indent=2))
     draw(img, groups, a.out + ".jpg")
     print("  wrote %s.json, %s.jpg" % (a.out, a.out))

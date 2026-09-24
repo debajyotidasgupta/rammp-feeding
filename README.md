@@ -15,10 +15,54 @@ make state       where is the arm right now
 make start       back to feeding_start       (retraces the outbound path)
 make detect      feeding_start -> food_detect_start
 make perceive    at food_detect_start: capture, detect, depth, target
+make acquire     over -> approach -> punch -> scoop
+                 (stop partway: make acquire STOP_AFTER=over|hover30|hover10|punch)
 ```
 
-Stage 1 — finding the food — is **frozen** at these three: `start`, `detect`,
-`perceive`. Everything below documents what they do and why.
+Frozen 2026-09-23 after running end to end with a fork on a strawberry.
+
+## Acquisition (`make acquire` -> `feeding/acquire.sh` -> `kinova/scripts/acquire.py`)
+
+| step | what | measured |
+|---|---|---|
+| OVER | translate at the overlook height until the tip's vertical line meets the food | berry within 1.2 mm of the line |
+| approach | down to 30 mm above the food top, **re-measure from there**, down to **10 mm** above | 10 mm, centred — user-confirmed |
+| PUNCH | re-measure floor and top, down to **bowl floor + 5 mm** | first run: floor + h/3, 35.0 mm down as planned |
+| SCOOP | food rises straight up while the utensil turns vertical -> horizontal toward the user (+Y) | rose 156 mm, 0.2 mm off vertical — geometry "perfectly correct" |
+
+The first full run **dropped the berry**: the scoop took 25 s and the food slid off as the
+utensil tilted. The frozen version, on the user's instruction: scoops at **20 °/s** (the
+controller validates the trajectory first and it slows only if refused), punches deeper to
+**floor + 5 mm**, and aims **5 mm further along Y** (`aim_offset_base_m`; sign not yet
+confirmed). **None of these changes has run on the arm yet.**
+
+Why each piece is the way it is:
+- **Re-measure at every stage, from where the arm is.** At a 30 mm hover the food was
+  4.7–6.7 mm closer than the overlook reading predicted, every time.
+- **The scoop is a joint-space path, not a Cartesian move.** As one straight Cartesian
+  rotation it is unreachable past ~57°: J6 hits its limit. The end pose is reachable in
+  hundreds of other arm shapes, so the arm reshapes (J1 ~80°, J2 ~75°) while the food
+  holds its vertical line. It is planned live from the actual punch pose, IK-checked,
+  validated by the controller, and run as one smooth trajectory.
+- **The scoop pivots on the utensil tip in the arm's tool frame,** computed from
+  calibration only: Kinova's camera position on the wrist + camera-to-tip + the tip's
+  pixel. For the fork, (0, 9, 142) mm.
+
+## Per-utensil calibration — measure every time the utensil changes
+
+`calibration/food_detect_pose.json` holds, for the current utensil:
+
+| field | fork (current) | how to measure |
+|---|---|---|
+| `camera_to_tip_m` | **0.265** | at food_detect_start: ruler from the tip to **bare table** (state the unit!) + the sensor's bare-table depth; cross-check with camera-case-to-tip |
+| `utensil_tip_px` | (658, 470) | where the utensil meets the food, **not** its image box centre (a fork's head is wide) — a 10 mm hover and your eye settle it |
+| `utensil_px` | fork's image region | so detection never calls the utensil food |
+
+Both breakages on 2026-09-23 came from one wrong number: camera-to-tip taken as
+105/115 mm (inches read as centimetres) when it is ~260 mm.
+
+**The e-stop does not hold the arm.** Three times today the arm moved 100–160 mm after an
+e-stop. Near the bowl, an e-stop can itself push things around.
 
 ## The motions (`kinova/scripts/sequence.py`)
 

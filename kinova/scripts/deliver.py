@@ -15,7 +15,8 @@ swing     from the scoop end: lift 175 mm (so the swing clears the bowl -- at +6
           along its own axis (in parallel, never one then the other), as far as the arm allows (120 mm). The
           utensil stays level, food side up: a 90 deg camera roll was tried and rejected -- it turns the food
           sideways for the bite. The image is rolled 90 deg instead, and rotated upright in software.
-approach  straight line, utensil orientation held, to the utensil tip 80 mm short of the mouth (80, not 50:
+approach  (detected from 50 mm to the user's right -- the swing ends there) straight line, utensil orientation held,
+          to the utensil tip 80 mm short of the mouth (80, not 50:
           safe for any cube-sized food piece) and 10 mm lower than the detection (it felt nearer the nose).
           Computed ONLY from a detection made at this pose, newer than its capture, under 2 min old. A
           stale second file once let an approach run to an old reading. Mouth: the mouth box when it is
@@ -53,6 +54,8 @@ STATE = Path("/tmp/deliver_state.json")
 LIFT_M = 0.175                 # above the scoop end, before the swing
 RETRACT_TRIES = (0.150, 0.120, 0.100, 0.080, 0.060, 0.040, 0.0)
 SWING_DPS = 10.0
+DETECT_SIDESTEP_M = 0.050      # after the swing, to the user's right (-Y): the food otherwise sits between
+                               # the camera and the mouth (user, 2026-09-24)
 STOP_M = 0.080                 # utensil tip short of the mouth
 AIM_DZ = -0.010                # below the detected mouth
 APPROACH_MPS = 0.020
@@ -200,7 +203,15 @@ def swing(conn, a):
              from_here=not a.validate_only)
     if a.validate_only:
         return
-    pe = tool_pose(conn)
+    # look from the user's right, so the food is not between the camera and the mouth
+    pe = tool_pose(conn); qe = joints(conn)
+    if DETECT_SIDESTEP_M and all(_ik(conn, (pe[0], pe[1] - DETECT_SIDESTEP_M * k / 5, pe[2]), tuple(pe[3:]), qe)
+                                 for k in range(1, 6)):
+        goto_cartesian(conn, (pe[0], pe[1] - DETECT_SIDESTEP_M, pe[2]), tuple(pe[3:]), speed=0.02,
+                       label="to the user's right %.0f mm" % (1000 * DETECT_SIDESTEP_M), max_tilt=95.0)
+    else:
+        print("    (the %.0f mm step to the user's right is not reachable -- detecting from here)" % (1000 * DETECT_SIDESTEP_M))
+    pe = tool_pose(conn)          # the retract's back-off returns here
     STATE.write_text(json.dumps(dict(start_tool=list(up), start_rpy=list(p[3:]), retract_m=rmax,
                                      end_tool=list(pe[:3]), q80=q80, scoop_end_z=z0)))
 

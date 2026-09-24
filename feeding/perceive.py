@@ -151,7 +151,9 @@ def main() -> int:
         # Food outside the bowl is not food we will pick: a 47x108 px object
         # at the image edge came back as 'food pieces' with three real berries.
         n0 = len(food)
-        food = [b for b in food if inside_frac(b, bb) > 0.8]
+        # ...and no single piece of food is a large fraction of its bowl: a
+        # 599x484 px 'food pieces' box once covered most of a 585x432 bowl.
+        food = [b for b in food if inside_frac(b, bb) > 0.8 and b.area < 0.15 * bb.area]
         n_outside = n0 - len(food)
     else:
         n_outside = 0
@@ -161,7 +163,7 @@ def main() -> int:
                                    ("utensil", ute, t_ute, 0)):
         note = ""
         if name == "food" and extra:
-            note = "   (%d dropped: %d inside the utensil, %d outside the bowl, %d implausible shape)" % (
+            note = "   (%d dropped: %d inside the utensil, %d outside or too big for the bowl, %d implausible shape)" % (
                 extra, n_utensil, n_outside, extra - n_utensil - n_outside)
         if name == "bowl" and bowl_fixed:
             note = "   (box squared: it had merged with the utensil below)"

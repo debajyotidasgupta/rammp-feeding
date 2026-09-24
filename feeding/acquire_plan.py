@@ -31,7 +31,7 @@ DIRECTIONS, from measurements rather than assumption:
     approach (0,0,-1) -> (0,+1,0). The gripper swings to -Y, AWAY from the user.
 
 GEOMETRY THAT IS NOT MEASURED YET, so it is swept rather than assumed:
-  --z-tip      camera -> utensil tip along the axis. 0.115 m, measured by the user along the spoon from the camera case (2026-09-23).
+  --z-tip      camera -> utensil tip along the axis. 0.260 m for the KNIFE: closed by ruler against the depth sensor (board 374.6 mm - tip gap 114.3 mm), within 6.4 mm of a direct camera-case measurement (266.7 mm). Per-utensil.
   --tip-len    configured tool point -> utensil tip along the axis. Unknown;
                the configured tool point is 120 mm past the flange.
   --lateral    utensil tip offset from the tool axis. Unknown; this is what
@@ -231,7 +231,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--target", required=True, help="target.json from make perceive")
     ap.add_argument("--pose", default="calibration/food_detect_pose.json")
-    ap.add_argument("--z-tip", type=float, default=0.115, help="camera -> tip along the utensil axis, m (user-measured 115 mm)")
+    ap.add_argument("--z-tip", type=float, default=0.260, help="camera (depth-sensor frame) -> utensil tip, m. KNIFE: 0.260")
     ap.add_argument("--tip-len", type=float, default=0.09, help="tool point -> tip, m (GUESS)")
     ap.add_argument("--lateral", type=float, nargs=2, default=(0.0, 0.0), help="tip offset, tool x y, m")
     ap.add_argument("--margin", type=float, default=None,

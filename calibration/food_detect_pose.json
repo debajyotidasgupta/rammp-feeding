@@ -57,15 +57,18 @@
   },
   "note": "tool_pose is the CONFIGURED TOOL frame, not the flange: the arm carries a 120 mm z-offset for the 2F-85. The utensil adds more. Measured camera-to-tine-tip is ~105 mm, so the reported point lands within a few cm of the real tip -- good enough to report and to stand off by, NOT good enough for the 4 mm flesh/bowl window, which is terminated on torque instead.",
   "utensil_px": [
-    646,
-    464,
-    756,
+    638,
+    465,
+    680,
     719
   ],
   "utensil_tip_px": [
-    703,
-    464
+    657,
+    470
   ],
   "utensil_note": "The utensil is fixed to the arm and so is the camera, so at this pose it occupies the SAME pixels in every frame: (646-652, 464)-(756, 718-719) across four runs. Stored here instead of detected: a 'spoon' query once returned the whole BOWL box (the spoon sits in the bowl in the image), which then suppressed every berry as 'inside the utensil'. Re-measure if the utensil is changed or re-gripped. tip = top-centre of the box.",
-  "pose_note": "Chosen 2026-09-23 with J2 ~+8 deg (arm leaning toward the table) instead of -9.7: same camera orientation (J4 compensates, J2+J4 unchanged), but the camera sits ~120 mm nearer the base, so no berry is hidden behind the utensil and J2 holding torque roughly halves. Then +17 mm X to bring the top of the rim into frame and -20 mm Z for J6 margin: 5.4 deg from its -120.3 limit, was 1.1. Full rim AND a clear view past the utensil is not possible at this bowl size -- the bowl is ~560 px tall, the clear area above the utensil tip ~460 px; this frames the rim top at the image edge."
+  "pose_note": "Chosen 2026-09-23 with J2 ~+8 deg (arm leaning toward the table) instead of -9.7: same camera orientation (J4 compensates, J2+J4 unchanged), but the camera sits ~120 mm nearer the base, so no berry is hidden behind the utensil and J2 holding torque roughly halves. Then +17 mm X to bring the top of the rim into frame and -20 mm Z for J6 margin: 5.4 deg from its -120.3 limit, was 1.1. Full rim AND a clear view past the utensil is not possible at this bowl size -- the bowl is ~560 px tall, the clear area above the utensil tip ~460 px; this frames the rim top at the image edge.",
+  "utensil": "knife",
+  "camera_to_tip_m": 0.26,
+  "camera_to_tip_note": "KNIFE, 2026-09-23. Closed by ruler: tip-to-board 114.3 mm (4.5 in) against a sensor board depth of 374.6 mm where the tip's vertical line meets it -> 260.3 mm, measured in the DEPTH SENSOR's frame, whose zero is near the camera case front. A direct case-to-tip measurement gave 266.7 mm (10.5 in), 6.4 mm off. Every earlier plan used 105/115 mm -- inch readings taken as cm -- which is ~150 mm too short and is what drove the spoon into the berry/bowl and through the ArUco board. Re-measure for every utensil."
 }

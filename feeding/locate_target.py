@@ -34,7 +34,7 @@ sensor frame, and Depth Anything 3 metric depth on the colour frame.
    f/Z, so
        dX = (p*_v - berry_v) * Zb / fy        dY = (p*_u - berry_u) * Zb / fx
    No hand-eye calibration is needed; what remains is Z_tip, the camera-to-tip
-   distance along the utensil: 115 mm, measured by the user for the spoon.
+   distance along the utensil in the depth sensor's frame: 260 mm for the knife.
 """
 
 from __future__ import annotations
@@ -80,8 +80,8 @@ def main() -> int:
     ap.add_argument("--intrinsics", default=str(Path(__file__).resolve().parent.parent
                                                 / "calibration" / "colour_intrinsics.json"))
     ap.add_argument("--tool", type=float, nargs=3, required=True, help="current tool xyz, m")
-    ap.add_argument("--z-tip", type=float, default=0.115,
-                    help="camera -> utensil tip along the axis, m. USER-MEASURED 115 mm "
+    ap.add_argument("--z-tip", type=float, default=0.260,
+                    help="camera -> utensil tip along the axis, m. KNIFE 260 mm, ruler-closed "
                          "the fork; NOT yet measured for the spoon")
     ap.add_argument("--out", default="target")
     a = ap.parse_args()

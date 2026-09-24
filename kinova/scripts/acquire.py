@@ -51,7 +51,7 @@ from kinova.scripts.safe_move import (MoveError, TorqueGuard, _events, fold, got
 
 CAL = Path(__file__).resolve().parent.parent.parent / "calibration"
 MAX_OVER_M = 0.08          # OVER is a small correction, never a transit
-PUNCH_FLOOR_M = 0.007      # user, 2026-09-24: bowl floor + 5-7 mm, start with 7 (h/3 was conservative)
+PUNCH_FLOOR_M = 0.002      # 2026-09-24: 7 mm left the fork shallow; +5 mm deeper picked the berry up
 LIMITS = {1: 128.9, 3: 147.8, 5: 120.3}
 # Kinova's model (gen3_7dof.urdf): the colour camera sits at (0, 56.39, -3.05) mm
 # in the end-effector (flange) frame; the configured tool point is 120 mm out
@@ -305,7 +305,9 @@ def main() -> int:
     ap.add_argument("--floor-m", type=float, default=PUNCH_FLOOR_M, help="punch: stop this far above the bowl floor")
     ap.add_argument("--speed", type=float, default=20.0,
                     help="scoop: deg/s. Fast on purpose -- at 6 deg/s (25 s) the berry slid off")
-    ap.add_argument("--rot-exp", type=float, default=1.6, help="scoop: turn late, stay steep in the bowl")
+    ap.add_argument("--rot-exp", type=float, default=0.8,
+                    help="scoop: turn angle = 90 * progress**rot_exp. <1 starts turning the moment the food lifts "
+                         "(user, 2026-09-24: at 1.6 it rose steep first and gravity works on the food)")
     ap.add_argument("--n", type=int, default=40, help="scoop waypoints")
     ap.add_argument("--ramp", type=float, default=0.25, help="scoop: fraction of the time spent easing in, and out")
     ap.add_argument("--validate-only", action="store_true", help="scoop: plan and let the controller validate; do not move")

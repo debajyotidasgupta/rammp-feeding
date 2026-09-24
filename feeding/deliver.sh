@@ -5,7 +5,7 @@
 #   STOP_AFTER=present feeding/deliver.sh      # stop at a stage: swing | present | bite
 #   START_AT=retract feeding/deliver.sh        # resume: present | bite | retract
 #   VALIDATE=1 feeding/deliver.sh              # plan and validate the swing / approach; nothing moves
-#   WAIT_OPEN=1 feeding/deliver.sh             # present: approach only once the user opens their mouth (60 s)
+#   WAIT_OPEN= feeding/deliver.sh              # present: by default it approaches only once the user opens their mouth (60 s); empty = do not wait
 #
 # present = capture -> detect nose + mouth -> approach to 80 mm short of the mouth. If the food hides the
 # mouth: sidestep 50 mm away from the user (-Y) and look again, twice at most; then the nose estimate.
@@ -14,7 +14,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 PY="$HOME/venvs/la/bin/python"          # LocateAnything (fallback)
 MPY="$HOME/venvs/mp/bin/python"         # MediaPipe face landmarks (first choice, ~25 ms)
-STOP_AFTER="${STOP_AFTER:-}"; START_AT="${START_AT:-swing}"; VALIDATE="${VALIDATE:-}"; WAIT_OPEN="${WAIT_OPEN:-}"
+STOP_AFTER="${STOP_AFTER:-}"; START_AT="${START_AT:-swing}"; VALIDATE="${VALIDATE:-}"; WAIT_OPEN="${WAIT_OPEN-1}"   # on by default (user, 2026-09-24); WAIT_OPEN= to skip
 ARM="docker exec -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/work -w /work tcp_rec python3 -u -m kinova.scripts.deliver"
 VO=""; [ -n "$VALIDATE" ] && VO="--validate-only"
 STAGES="swing present bite retract"

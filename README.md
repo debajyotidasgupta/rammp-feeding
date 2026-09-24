@@ -88,8 +88,8 @@ as scratch scripts before being moved here. **Not yet run from these files.**
   so food covering the mouth or nose no longer blinds it.
 - **Detected from 50 mm to the user's right** (the swing ends there) so the food is not in the line of sight.
   If the mouth is still unusable: sidestep further (twice), then the nose estimate.
-- **`WAIT_OPEN=1`**: approach only once the user opens their mouth (lip gap / mouth width > 0.20 for 0.3 s;
-  closed reads ≤ 0.02), up to 60 s — a "ready" signal. Off by default.
+- **Waits for an open mouth by default** (`WAIT_OPEN=` to skip): approach only once the user opens their mouth (lip gap / mouth width > 0.20 for 0.3 s;
+  closed reads ≤ 0.02), up to 60 s — a "ready" signal.
 - **Only a fresh detection moves the arm.** A stale second file once let an approach run to an old reading
   (it happened to stop further away, because the user had moved back). The approach now reads only the
   detection made at its pose, newer than its capture, under 2 min old.

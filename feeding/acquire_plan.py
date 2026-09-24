@@ -231,13 +231,15 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--target", required=True, help="target.json from make perceive")
     ap.add_argument("--pose", default="calibration/food_detect_pose.json")
-    ap.add_argument("--z-tip", type=float, default=0.260, help="camera (depth-sensor frame) -> utensil tip, m. KNIFE: 0.260")
+    ap.add_argument("--z-tip", type=float, default=0.265, help="camera (depth-sensor frame) -> utensil tip, m. KNIFE: 0.260")
     ap.add_argument("--tip-len", type=float, default=0.09, help="tool point -> tip, m (GUESS)")
     ap.add_argument("--lateral", type=float, nargs=2, default=(0.0, 0.0), help="tip offset, tool x y, m")
     ap.add_argument("--margin", type=float, default=None,
                     help="override: stop this far above the floor, m. Default floor + height/3")
     ap.add_argument("--food-up", type=float, default=0.012, help="pivot above the tip, m")
     ap.add_argument("--slow-before", type=float, default=0.020, help="go slow this far above the food, m")
+    ap.add_argument("--approach-stop", type=float, default=0.010,
+                    help="hover/touch approaches stop this far above the surface, m (user rule: 10 mm)")
     ap.add_argument("--n", type=int, default=12, help="scoop waypoints")
     ap.add_argument("--rot-exp", type=float, default=1.6,
                     help="theta = 90*s^exp; >1 stays steep while still inside the bowl")

@@ -80,7 +80,7 @@ def main() -> int:
     ap.add_argument("--intrinsics", default=str(Path(__file__).resolve().parent.parent
                                                 / "calibration" / "colour_intrinsics.json"))
     ap.add_argument("--tool", type=float, nargs=3, required=True, help="current tool xyz, m")
-    ap.add_argument("--z-tip", type=float, default=0.260,
+    ap.add_argument("--z-tip", type=float, default=0.265,
                     help="camera -> utensil tip along the axis, m. KNIFE 260 mm, ruler-closed "
                          "the fork; NOT yet measured for the spoon")
     ap.add_argument("--out", default="target")

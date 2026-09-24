@@ -10,7 +10,7 @@
 # 4.7-6.7 mm closer than the overlook reading predicted, every time today.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-RUN="${RUN:-$(ls -d "$HOME"/rammp_runs/*/ | tail -1)}"
+RUN="${RUN:-$(dirname "$(ls -t "$HOME"/rammp_runs/*/target.json | head -1)")/}"   # newest perceive run (face/deliver runs have no target)
 PY="$HOME/venvs/la/bin/python"
 STOP_AFTER="${STOP_AFTER:-}"
 START_AT="${START_AT:-over}"

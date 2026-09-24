@@ -41,23 +41,23 @@
   },
   "note": "tool_pose is the CONFIGURED TOOL frame, not the flange: the arm carries a 120 mm z-offset for the 2F-85. The utensil adds more. Measured camera-to-tine-tip is ~105 mm, so the reported point lands within a few cm of the real tip -- good enough to report and to stand off by, NOT good enough for the 4 mm flesh/bowl window, which is terminated on torque instead.",
   "utensil_px": [
-    652,
-    470,
-    762,
+    640,
+    405,
+    750,
     719
   ],
   "utensil_tip_px": [
-    658,
-    470
+    644,
+    405
   ],
   "utensil_note": "The utensil is fixed to the arm and so is the camera, so at this pose it occupies the SAME pixels in every frame: (646-652, 464)-(756, 718-719) across four runs. Stored here instead of detected: a 'spoon' query once returned the whole BOWL box (the spoon sits in the bowl in the image), which then suppressed every berry as 'inside the utensil'. Re-measure if the utensil is changed or re-gripped. tip = top-centre of the box.",
   "pose_note": "2026-09-24, user: the bowl is ALWAYS in front of the user, not to their right, so food_detect_start sits over it. Reached from the old pose by straight slides with the camera orientation held (-5, +261, -30 mm, then 0, -40, +20 mm), so every orientation-only calibration (vertical_vp, principal point, utensil_px, tip pixel, camera-to-tip, aim offset) still holds. 30 mm lower than the old pose less 20: J6 is the constraint at this orientation (-113.5 here, 6.8 deg from its limit); +45 mm has 1.2 deg, +60 mm is unreachable. The whole rim does not fit above the utensil at any reachable height (~110 mm more would be needed); the rim's top touches the image edge, as before.",
   "utensil": "fork",
   "camera_to_tip_m": 0.265,
-  "camera_to_tip_note": "FORK, 2026-09-23. Two independent closures agree: ruler tine-tips-to-bare-table 7 in (177.8 mm) against a sensor bare-table depth of 438.8 mm -> 261.0 mm; camera case to tip 10.5 in (266.7 mm) minus the 6.7 mm case-to-depth-frame offset found with the knife -> 260.0 mm. Stored as 265: the knife, closed the same way, proved ~5 mm short in a hover test, and erring long keeps every stop higher. Caution learned here: at food_detect_start the point straight below the tip is the bowl's outer wall (407 mm), not table -- close against bare table, not 'under the tip'.",
+  "camera_to_tip_note": "FORK, 2026-09-23. Two independent closures agree: ruler tine-tips-to-bare-table 7 in (177.8 mm) against a sensor bare-table depth of 438.8 mm -> 261.0 mm; camera case to tip 10.5 in (266.7 mm) minus the 6.7 mm case-to-depth-frame offset found with the knife -> 260.0 mm. Stored as 265: the knife, closed the same way, proved ~5 mm short in a hover test, and erring long keeps every stop higher. Caution learned here: at food_detect_start the point straight below the tip is the bowl's outer wall (407 mm), not table -- close against bare table, not 'under the tip'. 2026-09-24 after the re-seat: unchanged -- the fork's far end reads the same in depth before and after (and 254 mm raw max + 4.7 mm depth-to-colour = 259 mm, matching the ruler's 260-261).",
   "approach_stop_m": 0.01,
   "approach_stop_note": "Real-world rule (user, 2026-09-23): stop 10 mm above any surface being approached. 5 mm was seen in practice and judged too close. The PUNCH into food uses floor + food height / 3 instead.",
-  "utensil_tip_note": "FORK tip pixel set to u=658 (was 707, the top-centre of the fork's image box). At a 10 mm hover the user saw the fork ~10 mm too far left (image-left = the user's left = +Y); at that depth 10 mm is ~49 px of tip pixel, which lands on u=658 -- the column of the knife tip (657-659) and of the fork's handle in the gripper, i.e. the tool axis. The fork head is wide and curled to image-right, so its box centre is NOT where it meets the food.",
+  "utensil_tip_note": "FORK, re-seated by the 2026-09-24 robot restart (the Robotiq re-initialised): it PIVOTED in the gripper. Measured from depth: the fork's far end projects to colour (670, 432) now vs (684, 497)/(683, 495) before, i.e. (-14, -65) px, at the SAME camera distance (246 mm robust far end, both). The old tip pixel (658, 470) -- set by eye at a 10 mm hover: the tool-axis column, the top of the fork's box -- is shifted by the same (-14, -65) to (644, 405). Confirm at a 10 mm hover. Method: depth px 0.12-0.32 m in the lower half = the fork; its far end (within 6 mm of the 99th pct) projected into colour.",
   "aim_offset_base_m": [
     0.005,
     -0.006
@@ -84,5 +84,18 @@
       "theta_z_deg": 89.6938
     },
     "note": "food_detect_start until 2026-09-24: bowl to the user's right"
+  },
+  "previous_fork_seating": {
+    "utensil_px": [
+      652,
+      470,
+      762,
+      719
+    ],
+    "utensil_tip_px": [
+      658,
+      470
+    ],
+    "until": "2026-09-24 robot restart"
   }
 }

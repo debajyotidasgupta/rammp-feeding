@@ -53,6 +53,8 @@ import statistics
 import time
 from collections import deque
 
+import numpy as np
+
 from kortex_api.autogen.messages import Base_pb2
 
 MAX_TILT_DEG = 25.0          # how far off straight-down the utensil may ever get
@@ -186,17 +188,55 @@ def _abort_reason(ev):
     return aborts[-1] if aborts else None
 
 
+class ContactGuard:
+    """Stops on CONTACT during a descent, from the arm's own force estimate (fz).
+
+    Triggers on STIFFNESS -- dF/dz, newtons per millimetre of descent -- not on
+    force level and not on force rate. Measured on this arm:
+      * a LEVEL threshold is unusable: fz drifts +1.0 .. -2.4 N over a 170 mm
+        descent as the arm changes shape; 2 N tripped after 5 mm of free air;
+      * a RATE threshold (N/s) is speed-dependent: the drift comes from changing
+        SHAPE, so it scales with distance, not time. 0.8 N/s fired falsely at
+        20 mm/s on drift of 1.2 N/s;
+      * per millimetre the drift is ~0.014 N/mm typical, 0.06 N/mm worst over a
+        short window, while strawberry flesh is 0.15-0.27 N/mm and a rigid
+        surface far more. 0.10 N/mm sits between.
+    Every move also starts with a ~4 N/s kick lasting ~0.4 s (acceleration), so
+    the first `settle_s` is ignored and the baseline is taken after it.
+    Upward push on the utensil tip reads as +fz (finger-press test).
+    """
+
+    def __init__(self, k_npmm=0.10, window_mm=3.0, settle_s=0.8, cap_n=3.0, confirm=3):
+        self.k, self.win, self.settle, self.cap, self.confirm = k_npmm, window_mm, settle_s, cap_n, confirm
+        self.d, self.f, self.base, self.z0, self.hits = [], [], None, None, 0
+
+    def update(self, t, fz, z):
+        """t s since the move began, fz N, z tool height m. Reason string on contact."""
+        if t < self.settle:
+            return None
+        if self.base is None:
+            self.base, self.z0 = fz, z
+        d = 1000.0 * (self.z0 - z)                   # mm descended since settling
+        if fz - self.base > self.cap:
+            return "fz %.2f N above its settled value (cap %.1f)" % (fz - self.base, self.cap)
+        self.d.append(d); self.f.append(fz)
+        while self.d and self.d[-1] - self.d[0] > self.win:
+            self.d.pop(0); self.f.pop(0)
+        if len(self.d) >= 4 and self.d[-1] - self.d[0] > 0.5 * self.win:
+            k = float(np.polyfit(self.d, self.f, 1)[0])
+            self.hits = self.hits + 1 if k > self.k else 0
+            if self.hits >= self.confirm:
+                return "stiffness %.3f N/mm (limit %.2f) for %d samples" % (k, self.k, self.hits)
+        return None
+
+
 def _watch(conn, label, arrived, start_q, max_tilt, torque_limit, timeout, ev,
-           force_limit=None, log=None):
+           contact=None, log=None):
     """Shared monitor for both move types. Raises on every failure.
 
-    force_limit: stop if the arm's own external-force estimate along base z
-    rises this much above its value at the start of the move. An upward push on
-    the utensil tip reads as +fz (finger-press test: rest noise +-0.3 N, light
-    press +0.7 N, firm +3 N). log: a list to append per-sample records to.
+    contact: a ContactGuard, or None. log: a list to append per-sample records to.
     """
     guard = TorqueGuard(limit=torque_limit)
-    fz0 = conn.base_cyclic.RefreshFeedback().base.tool_external_wrench_force_z
     t0 = time.time()
     worst = 0.0
     moved = False
@@ -206,16 +246,18 @@ def _watch(conn, label, arrived, start_q, max_tilt, torque_limit, timeout, ev,
         t = tilt_of(fb.base)
         worst = max(worst, t)
         fz = fb.base.tool_external_wrench_force_z
+        now = time.time() - t0
         if log is not None:
-            log.append(dict(t=time.time() - t0, z=fb.base.tool_pose_z, fz=fz,
+            log.append(dict(t=now, z=fb.base.tool_pose_z, fz=fz,
                             fx=fb.base.tool_external_wrench_force_x,
                             fy=fb.base.tool_external_wrench_force_y,
                             tau=[a.torque for a in fb.actuators], label=label))
-        if force_limit is not None and fz - fz0 > force_limit:
-            conn.base.Stop()
-            raise MoveError("%s STOPPED ON FORCE: fz rose %.2f N (limit %.1f) at z %.4f -- "
-                            "something is pushing up on the utensil"
-                            % (label, fz - fz0, force_limit, fb.base.tool_pose_z))
+        if contact is not None:
+            why = contact.update(now, fz, fb.base.tool_pose_z)
+            if why:
+                conn.base.Stop()
+                raise MoveError("%s STOPPED ON CONTACT: %s, at z %.4f"
+                                % (label, why, fb.base.tool_pose_z))
         if t > max_tilt:
             conn.base.Stop()
             raise MoveError("%s ABORTED: utensil %.1f deg off vertical (limit %.0f)"
@@ -302,7 +344,7 @@ def goto(conn, target, speed: float = 10.0, tol: float = 0.08, label: str = "",
 def goto_cartesian(conn, xyz, rpy, speed: float = 0.05, tol_m: float = 0.002,
                    label: str = "", max_tilt: float = MAX_TILT_DEG,
                    torque_limit: float = TORQUE_STEP_NM, verbose: bool = True,
-                   force_limit=None, log=None):
+                   contact=None, log=None):
     """One smooth straight-line tool move to (xyz, rpy) -- not a staircase."""
     ev = _preflight(conn, label)
     p0 = tool_pose(conn)
@@ -326,7 +368,7 @@ def goto_cartesian(conn, xyz, rpy, speed: float = 0.05, tol_m: float = 0.002,
         return math.dist((b.tool_pose_x, b.tool_pose_y, b.tool_pose_z), xyz) < tol_m
 
     worst, dt = _watch(conn, label, arrived, joints(conn), max_tilt, torque_limit,
-                       max(20.0, 4.0 * dist / speed), ev, force_limit=force_limit, log=log)
+                       max(20.0, 4.0 * dist / speed), ev, contact=contact, log=log)
     if verbose:
         print("    %-24s ok  %5.0f mm in %4.1f s, worst tilt %.1f deg"
               % (label, 1000 * dist, dt, worst))

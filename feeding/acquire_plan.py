@@ -31,7 +31,7 @@ DIRECTIONS, from measurements rather than assumption:
     approach (0,0,-1) -> (0,+1,0). The gripper swings to -Y, AWAY from the user.
 
 GEOMETRY THAT IS NOT MEASURED YET, so it is swept rather than assumed:
-  --z-tip      camera -> utensil tip along the axis. 0.105 m is the FORK's.
+  --z-tip      camera -> utensil tip along the axis. 0.115 m, measured by the user along the spoon from the camera case (2026-09-23).
   --tip-len    configured tool point -> utensil tip along the axis. Unknown;
                the configured tool point is 120 mm past the flange.
   --lateral    utensil tip offset from the tool axis. Unknown; this is what
@@ -231,7 +231,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--target", required=True, help="target.json from make perceive")
     ap.add_argument("--pose", default="calibration/food_detect_pose.json")
-    ap.add_argument("--z-tip", type=float, default=0.105, help="camera -> tip, m (FORK value)")
+    ap.add_argument("--z-tip", type=float, default=0.115, help="camera -> tip along the utensil axis, m (user-measured 115 mm)")
     ap.add_argument("--tip-len", type=float, default=0.09, help="tool point -> tip, m (GUESS)")
     ap.add_argument("--lateral", type=float, nargs=2, default=(0.0, 0.0), help="tip offset, tool x y, m")
     ap.add_argument("--margin", type=float, default=None,
@@ -272,7 +272,7 @@ def main() -> int:
             r["ok"] for r in res if r["step"] != "SCOOP") else dict(path=None)
 
     print("BRANCH          %s" % ("wrist FLIPPED (J6 positive side)" if a.wrist_flip else "as recorded (J6 negative side)"))
-    print("GEOMETRY USED   z_tip %.0f mm (fork's)  tip_len %.0f mm (guess)  lateral %s mm"
+    print("GEOMETRY USED   z_tip %.0f mm (user-measured)  tip_len %.0f mm (guess)  lateral %s mm"
           % (1000 * a.z_tip, 1000 * a.tip_len, [round(1000 * v) for v in a.lateral]))
     print("  food surface %.0f mm below the camera, floor beside it %.0f mm"
           % (1000 * top, 1000 * floor))

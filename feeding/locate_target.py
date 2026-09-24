@@ -33,9 +33,8 @@ sensor frame, and Depth Anything 3 metric depth on the colour frame.
    orientation, +X_base shifts the scene +v and +Y_base shifts it +u, both at
    f/Z, so
        dX = (p*_v - berry_v) * Zb / fy        dY = (p*_u - berry_u) * Zb / fx
-   No hand-eye calibration is needed; the unknown that remains is Z_tip, the
-   camera-to-tip distance, which was ~105 mm for the fork and has NOT been
-   measured for the spoon.
+   No hand-eye calibration is needed; what remains is Z_tip, the camera-to-tip
+   distance along the utensil: 115 mm, measured by the user for the spoon.
 """
 
 from __future__ import annotations
@@ -81,8 +80,8 @@ def main() -> int:
     ap.add_argument("--intrinsics", default=str(Path(__file__).resolve().parent.parent
                                                 / "calibration" / "colour_intrinsics.json"))
     ap.add_argument("--tool", type=float, nargs=3, required=True, help="current tool xyz, m")
-    ap.add_argument("--z-tip", type=float, default=0.105,
-                    help="camera -> utensil tip along the axis, m. MEASURED 105 mm for "
+    ap.add_argument("--z-tip", type=float, default=0.115,
+                    help="camera -> utensil tip along the axis, m. USER-MEASURED 115 mm "
                          "the fork; NOT yet measured for the spoon")
     ap.add_argument("--out", default="target")
     a = ap.parse_args()

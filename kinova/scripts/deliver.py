@@ -167,6 +167,12 @@ def swing(conn, a):
     p = tool_pose(conn); q0 = joints(conn); R0 = R_from_kortex(*p[3:])
     if axis(R0)[1] < 0.99:
         raise MoveError("utensil is not pointing at the user (+Y) -- run from the end of the scoop")
+    # The swing turns about the BASE axis: it was built and validated for scoops ending on the base's
+    # -Y side (y -0.04 .. -0.10). From a bowl in front of the user (+Y) the same turn would sweep the
+    # utensil through where the user's face is. Refuse anything outside the validated region.
+    if not -0.15 < p[1] < 0.0:
+        raise MoveError("scoop ended at y %+.3f, outside the region the swing was validated for (-0.15..0.0): "
+                        "from here the swing could sweep into the user -- not moving" % p[1])
     z0 = p[2]; up = (p[0], p[1], z0 + LIFT_M); T0 = np.array(p[:3])
     # a steered joint path, not a plain Cartesian move: from a scoop that ends nearer the base, the
     # controller's own straight lift runs J-limits out at +70 mm; steering the redundancy reaches 175

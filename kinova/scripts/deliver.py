@@ -209,8 +209,10 @@ def _mouth(f, allow_nose=False):
     """Mouth in camera coordinates: the plausible mouth box, else (allowed) the nose estimate."""
     c = cal()[1]
     n = f.get("nose")
-    if not n or not n.get("depth_m"):
+    if not n:
         raise MoveError("no nose detected")
+    # the nose's box is what the checks below need; its depth can be missing (the food hides it from the depth
+    # sensor, which sits 27 mm beside the colour camera) -- then only the nose-based fallback is unavailable
     x1, y1, x2, y2 = n["box_upright"]; ncx, ncy, nw, nh = (x1 + x2) / 2, (y1 + y2) / 2, x2 - x1, y2 - y1
     if nw * nh > 0.03 * UP_W * UP_H:
         raise MoveError("nose box is %.0f%% of the frame -- junk" % (100 * nw * nh / (UP_W * UP_H)))
@@ -225,12 +227,14 @@ def _mouth(f, allow_nose=False):
             why = "mouth box %.2f nose heights below the nose" % ((mcy - ncy) / nh)
         elif abs(mcx - ncx) > nw:
             why = "mouth box %.2f nose widths sideways" % (abs(mcx - ncx) / nw)
-        elif abs(m["depth_m"] - n["depth_m"]) > 0.030:
+        elif n.get("depth_m") and abs(m["depth_m"] - n["depth_m"]) > 0.030:
             why = "mouth depth %.0f mm off the nose's" % (1000 * abs(m["depth_m"] - n["depth_m"]))
     if why is None:
         return m["cam_xyz"], "mouth box (%s)" % m.get("prompt", "")
     if not allow_nose:
         return None, why
+    if not n.get("depth_m"):
+        raise MoveError("mouth not usable (%s) and the nose has no depth -- cannot estimate it" % why)
     u, v = ncy + NOSE_TO_MOUTH * nh, UP_W - 1 - ncx          # upright -> original colour pixel
     z = n["depth_m"] + MOUTH_BEHIND_NOSE
     return [(u - c["cx"]) * z / c["fx"], (v - c["cy"]) * z / c["fy"], z], "nose estimate (%s)" % why

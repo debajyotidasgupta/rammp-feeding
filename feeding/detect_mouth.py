@@ -57,6 +57,16 @@ def main() -> int:
         if b is None:
             return None
         u, v = to_orig((b.x1 + b.x2) / 2, (b.y1 + b.y2) / 2); z = depth_at(u, v)
+        if z is None:
+            # the depth sensor sits 27 mm beside the colour camera: food on the utensil can hide the nose from
+            # it alone. Try points across the box, upper part first (the nose bridge, the upper lip).
+            for ry in (0.25, 0.4, 0.6, 0.75):
+                for rx in (0.5, 0.3, 0.7):
+                    uu, vv = to_orig(b.x1 + rx * (b.x2 - b.x1), b.y1 + ry * (b.y2 - b.y1)); zz = depth_at(uu, vv)
+                    if zz is not None:
+                        z = zz; break
+                if z is not None:
+                    break
         return dict(box_upright=[b.x1, b.y1, b.x2, b.y2], px=[u, v], depth_m=z, prompt=prompt,
                     cam_xyz=None if z is None else [(u - cx) * z / fx, (v - cy) * z / fy, z])
 

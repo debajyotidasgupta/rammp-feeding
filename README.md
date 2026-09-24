@@ -33,8 +33,7 @@ Frozen 2026-09-23 after running end to end with a fork on a strawberry.
 The first full run **dropped the berry**: the scoop took 25 s and the food slid off as the
 utensil tilted. The frozen version, on the user's instruction: scoops at **20 °/s** (the
 controller validates the trajectory first and it slows only if refused), punches deeper to
-**floor + 5 mm**, and aims **5 mm further along Y** (`aim_offset_base_m`; sign not yet
-confirmed). **None of these changes has run on the arm yet.**
+**floor + 5 mm**, and aims **5 mm further along Y, away from the user** (`aim_offset_base_m` = −5 mm). **None of these changes has run on the arm yet.**
 
 Why each piece is the way it is:
 - **Re-measure at every stage, from where the arm is.** At a 30 mm hover the food was

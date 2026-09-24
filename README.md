@@ -31,7 +31,7 @@ Frozen 2026-09-24 (tag `acquire-v1`): two consecutive full runs, fork on strawbe
 |---|---|---|
 | OVER | translate at the overlook height until the tip's vertical line meets the food | 82 mm, aim user-confirmed at the hover |
 | PLUNGE | **one smooth move** from the overlook to the **measured bowl floor** (nominal; really ~5–10 mm above it): 20 mm/s, easing to 5 mm/s from 20 mm above the food top | 2026-09-24: 173 mm in 20.2 s, same end depth as the stepped punch |
-| SCOOP | food rises straight up while the utensil turns vertical -> horizontal toward the user (+Y); the turn **starts the moment the food lifts** (90°·s^0.8) | 6.3 s at 20 °/s; rose 164.5 mm, 1.0 mm off vertical; berry held |
+| SCOOP | food rises while the utensil turns vertical -> horizontal (+Y); the turn **starts the moment the food lifts** (90°·s^0.8). With the bowl in front of the user it also **backs off to the old scoop end** (`scoop_end`, 206 mm), mostly after the first 20% |  6.3 s at 20 °/s; rose 164.5 mm, 1.0 mm off vertical; berry held |
 
 **Why one plunge, not steps.** The stepped route stopped at 30 and 10 mm to re-measure, because the overlook
 reads the food TOP 4–7 mm high. But the punch aims at the FLOOR, and the overlook's floor reading matched the

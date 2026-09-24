@@ -97,5 +97,22 @@
       470
     ],
     "until": "2026-09-24 robot restart"
+  },
+  "scoop_end": {
+    "tool_m": [
+      0.2997,
+      -0.0968,
+      0.4038
+    ],
+    "joints_deg": [
+      -102.4,
+      -42.0,
+      -37.2,
+      -97.5,
+      -41.1,
+      -111.2,
+      131.8
+    ],
+    "note": "2026-09-24, user: with the bowl in front of the user, scoop WHILE backing off to where the scoops ended when the bowl was on the right, so the swing / present / bite / retract built there apply unchanged. The utensil's end orientation is the same (0.1 deg); the joints end within ~1 deg of these. The turn to face the user is not reachable from over the bowl in front (the wrist would have to sit beyond the utensil)."
   }
 }

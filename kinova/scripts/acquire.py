@@ -51,6 +51,7 @@ from kinova.scripts.safe_move import (MoveError, TorqueGuard, _events, fold, got
 
 CAL = Path(__file__).resolve().parent.parent.parent / "calibration"
 MAX_OVER_M = 0.10          # OVER stays inside the bowl, never a transit (central berries sit ~70-80 mm out + the aim offset)
+BACKOFF_FROM = 0.2         # fraction of the scoop before the back-off starts
 PUNCH_FLOOR_M = 0.0        # nominal; the real gap is ~5-10 mm (camera_to_tip stored long, floor read beside the food)
 LIMITS = {1: 128.9, 3: 147.8, 5: 120.3}
 # Kinova's model (gen3_7dof.urdf): the colour camera sits at (0, 56.39, -3.05) mm
@@ -290,11 +291,24 @@ def scoop(conn, a):
     end_z = pose["tool_pose"]["z_m"] + (R0 @ tip)[2]          # tip height at the overlook
     rise = end_z - piv0[2]
     m = lambda q: min(LIMITS[i] - abs(q[i]) for i in LIMITS)
+    # With a calibrated scoop_end, the food also backs off to where that pose holds it: the rotation still
+    # starts at once, the back-off mostly once the utensil is past steep (from BACKOFF_FROM of the scoop).
+    se = pose.get("scoop_end")
+    back = np.zeros(3)
+    if se:
+        pivE = np.array(se["tool_m"]) + rot_x(90.0) @ R0 @ o_piv
+        back = pivE - piv0; rise = back[2]; back[2] = 0.0
+        if np.linalg.norm(back) > 0.300:
+            raise MoveError("backing off %.0f mm is too far -- not the bowl this was built for" % (1000 * np.linalg.norm(back)))
+
+    def piv_at(s):
+        x = min(1.0, max(0.0, (s - BACKOFF_FROM) / (1 - BACKOFF_FROM)))
+        return piv0 + np.array([0, 0, rise * s]) + x * x * (3 - 2 * x) * back
 
     def at(s):
         th = 90.0 * s ** a.rot_exp
         R = rot_x(th) @ R0
-        return piv0 + [0, 0, rise * s] - R @ o_piv, kortex_from_R(R)
+        return piv_at(s) - R @ o_piv, kortex_from_R(R)
 
     # 1. reachable end shapes, nearest the current one first
     T, r = at(1.0); ends = []
@@ -308,6 +322,8 @@ def scoop(conn, a):
         if q and m(q) > 8:
             ends.append(q)
     ends.sort(key=lambda q: max(abs(fold(x - y)) for x, y in zip(q, q0)))
+    if se:
+        ends.insert(0, se["joints_deg"])                     # the shape the downstream stages were built from
     # 2. a continuous joint path, IK guess blended from start to end shape
     path = None
     for qe in ends[:10]:
@@ -323,8 +339,8 @@ def scoop(conn, a):
             path = cand; break
     if path is None:
         raise MoveError("no continuous scoop path from here (%d end shapes tried)" % min(10, len(ends)))
-    print("    plan: food rises %.0f mm while turning 90 deg; %d waypoints, min joint margin %.1f deg"
-          % (1000 * rise, a.n, min(m(q) for q in path)))
+    print("    plan: food rises %.0f mm%s while turning 90 deg; %d waypoints, min joint margin %.1f deg"
+          % (1000 * rise, ", backing off %.0f mm" % (1000 * np.linalg.norm(back)) if se else "", a.n, min(m(q) for q in path)))
     # 3. one smooth trajectory, validated by the controller; slow down until it passes.
     #    Timed with a smooth speed profile (ease in, cruise, ease out): giving every
     #    waypoint the cruise speed asks for full speed within the first ~0.1 s, and
@@ -335,7 +351,8 @@ def scoop(conn, a):
     if a.validate_only:
         print("    validate-only: controller accepted it, nothing moved")
         return
-    # 4. watch: the food must stay on its vertical line and must not drop
+    # 4. watch: the food must stay on its planned path (its vertical line, if not backing off) and not drop
+    plan_piv = np.array([piv_at(k / 400) for k in range(401)])
     ev = _events(conn); ev.clear(); guard = TorqueGuard(); log = []; why = None; worst = 0.0
     conn.base.ExecuteWaypointTrajectory(wl)
     t0 = time.time()
@@ -344,12 +361,13 @@ def scoop(conn, a):
         fb = conn.base_cyclic.RefreshFeedback(); b = fb.base
         pv = np.array([b.tool_pose_x, b.tool_pose_y, b.tool_pose_z]) + \
             R_from_kortex(b.tool_pose_theta_x, b.tool_pose_theta_y, b.tool_pose_theta_z) @ o_piv
-        off = math.hypot(*(pv[:2] - piv0[:2])); worst = max(worst, off)
+        near = plan_piv[np.argmin(np.linalg.norm(plan_piv - pv, axis=1))]
+        off = math.hypot(*(pv[:2] - near[:2])); worst = max(worst, off)
         log.append(dict(t=time.time() - t0, piv=pv.tolist(), off=off))
         if off > 0.015:
-            why = "food point %.1f mm off its vertical line" % (1000 * off)
-        elif pv[2] < piv0[2] - 0.005:
-            why = "food point dropped %.1f mm" % (1000 * (piv0[2] - pv[2]))
+            why = "food point %.1f mm off its planned path" % (1000 * off)
+        elif pv[2] < near[2] - 0.010:
+            why = "food point %.1f mm below its planned path" % (1000 * (near[2] - pv[2]))
         hit = guard.update([x.torque for x in fb.actuators])
         if hit and not why:
             why = "joint %d torque step" % (hit[0] + 1)
@@ -365,7 +383,7 @@ def scoop(conn, a):
     ax = R_from_kortex(*p[3:]) @ np.array([0, 0, 1.0])
     if why:
         raise MoveError("scoop stopped: " + why)
-    print("    food rose %.1f mm, worst %.1f mm off vertical, utensil axis (%.2f %.2f %.2f), %.1f s"
+    print("    food rose %.1f mm, worst %.1f mm off its path, utensil axis (%.2f %.2f %.2f), %.1f s"
           % (1000 * (pv[2] - piv0[2]), 1000 * worst, *ax, time.time() - t0))
 
 

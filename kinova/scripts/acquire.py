@@ -51,7 +51,7 @@ from kinova.scripts.safe_move import (MoveError, TorqueGuard, _events, fold, got
 
 CAL = Path(__file__).resolve().parent.parent.parent / "calibration"
 MAX_OVER_M = 0.10          # OVER stays inside the bowl, never a transit (central berries sit ~70-80 mm out + the aim offset)
-PUNCH_FLOOR_M = 0.002      # 2026-09-24: 7 mm left the fork shallow; +5 mm deeper picked the berry up
+PUNCH_FLOOR_M = 0.0        # nominal; the real gap is ~5-10 mm (camera_to_tip stored long, floor read beside the food)
 LIMITS = {1: 128.9, 3: 147.8, 5: 120.3}
 # Kinova's model (gen3_7dof.urdf): the colour camera sits at (0, 56.39, -3.05) mm
 # in the end-effector (flange) frame; the configured tool point is 120 mm out

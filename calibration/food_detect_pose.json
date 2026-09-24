@@ -79,6 +79,6 @@
     -0.006
   ],
   "aim_offset_note": "Base-frame (x, y) aim correction applied in OVER, user-confirmed by eye at a 10 mm hover on 2026-09-24 ('this looks perfect'). X +5 mm: the fork's tines extend forward, so aim into the bulk of the flesh. Y -6 mm (away from the user): the detected centre is right, but the fork head curves, so the tines meet the food ~5-7 mm off the tool axis. Fork-specific: re-check when the utensil changes. Image at food_detect_start: +X = up, +Y = left (user's side).",
-  "punch_floor_margin_m": 0.002,
-  "punch_note": "2026-09-24: floor + 7 mm felt shallow to the user; 5 mm deeper (floor + 2 mm nominal) picked the berry up. The REAL gap is larger than nominal: camera_to_tip is stored ~4-5 mm long on purpose and the floor is read in a ring BESIDE the food, where the concave bowl is higher than under it -- estimate 6-9 mm real. Do not go below nominal 0 without re-measuring."
+  "punch_floor_margin_m": 0.0,
+  "punch_note": "NOMINAL margin above the measured bowl floor. 2026-09-24: floor + 7 mm shallow; floor + 2 mm picked a berry up; user then asked for 7 mm deeper than floor + 7 -> 0 nominal. The REAL gap is ~5-10 mm: camera_to_tip is stored long (265 vs 260-261 measured) and the user sees the nominal 10 mm hover as 15-20 mm by eye; the floor is also read in a ring BESIDE the food, where the concave bowl is higher. Do not go below 0 nominal without re-measuring camera_to_tip."
 }

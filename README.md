@@ -32,8 +32,7 @@ Frozen 2026-09-23 after running end to end with a fork on a strawberry.
 | SCOOP | food rises straight up while the utensil turns vertical -> horizontal toward the user (+Y) | rose 156 mm, 0.2 mm off vertical — geometry "perfectly correct" |
 
 The first full run **dropped the berry**: the scoop took 25 s and the food slid off as the
-utensil tilted. The frozen version, on the user's instruction: scoops at **20 °/s** (the
-controller validates the trajectory first and it slows only if refused), punches deeper to
+utensil tilted. The frozen version, on the user's instruction: scoops at **20 °/s** with a smooth speed profile (eases in and out over 25% of the time each; giving every waypoint full speed was refused at any speed as INVALID_JOINT_ACCELERATION). 2026-09-24: 6.3 s, food rose 165 mm, worst 0.9 mm off vertical, punches deeper to
 **floor + 7 mm**, aims **+5 mm X (into the bulk of the flesh past the tines) and −6 mm Y (the fork head's curve)** (`aim_offset_base_m` = (+5, −6) mm, fork-specific, confirmed at a 10 mm hover 2026-09-24). **None of these changes has run on the arm yet.**
 
 Why each piece is the way it is:

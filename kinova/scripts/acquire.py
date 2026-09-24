@@ -166,6 +166,26 @@ def _ik(conn, T, rpy, g):
         return None
 
 
+def _timing(path, peak, ramp):
+    """Waypoint durations for a smooth speed profile along the joint path.
+
+    Progress is measured by the leading joint's travel. Speed eases in over the
+    first `ramp` of the time (sin^2, so acceleration is continuous), cruises at
+    `peak` deg/s, and eases out over the last `ramp`.
+    """
+    steps = [max(abs(fold(x - y)) for x, y in zip(q, p)) for p, q in zip(path, path[1:])]
+    L = sum(steps)
+    tau = np.linspace(0.0, 1.0, 4001)
+    v = np.ones_like(tau)
+    up, dn = tau < ramp, tau > 1 - ramp
+    v[up] = np.sin(0.5 * math.pi * tau[up] / ramp) ** 2
+    v[dn] = np.sin(0.5 * math.pi * (1 - tau[dn]) / ramp) ** 2
+    prog = np.concatenate([[0.0], np.cumsum(0.5 * (v[1:] + v[:-1]) * np.diff(tau))])
+    T = L / (peak * prog[-1])                 # cruise speed = peak
+    t = np.interp(np.cumsum([0.0] + steps) / L, prog / prog[-1], tau) * T
+    return [max(0.02, d) for d in np.diff(t)]
+
+
 def scoop(conn, a):
     pose, _ = cal()
     done = json.loads(Path("/tmp/punch_done.json").read_text()) if Path("/tmp/punch_done.json").exists() else {}
@@ -215,26 +235,33 @@ def scoop(conn, a):
         raise MoveError("no continuous scoop path from here (%d end shapes tried)" % min(10, len(ends)))
     print("    plan: food rises %.0f mm while turning 90 deg; %d waypoints, min joint margin %.1f deg"
           % (1000 * rise, a.n, min(m(q) for q in path)))
-    # 3. one smooth trajectory, validated by the controller; slow down until it passes
+    # 3. one smooth trajectory, validated by the controller; slow down until it passes.
+    #    Timed with a smooth speed profile (ease in, cruise, ease out): giving every
+    #    waypoint the cruise speed asks for full speed within the first ~0.1 s, and
+    #    the controller refuses that at any speed (INVALID_JOINT_ACCELERATION).
     raw = [x.position for x in conn.base_cyclic.RefreshFeedback().actuators]
     for speed in (a.speed, a.speed * 0.75, a.speed * 0.5, a.speed * 0.35):
+        durs = _timing(path, speed, a.ramp)
         wl = Base_pb2.WaypointList(); wl.duration = 0.0; wl.use_optimal_blending = False
         cur, prev = list(raw), path[0]
-        for k, q in enumerate(path[1:], 1):
+        for k, (q, dt) in enumerate(zip(path[1:], durs), 1):
             cur = [c + fold(x - y) for c, x, y in zip(cur, q, prev)]
             w = wl.waypoints.add(); w.name = "s%02d" % k
             w.angular_waypoint.angles.extend(cur)
-            w.angular_waypoint.duration = max(0.08, max(abs(fold(x - y)) for x, y in zip(q, prev)) / speed)
+            w.angular_waypoint.duration = dt
             prev = q
         errs = list(conn.base.ValidateWaypointList(wl).trajectory_error_report.trajectory_error_elements)
         if not errs:
             break
-        print("    %.0f deg/s refused by the controller (%s), slowing" % (
-            speed, Base_pb2.TrajectoryErrorType.Name(errs[0].error_type).replace("TRAJECTORY_ERROR_TYPE_", "")))
+        e = errs[0]
+        print("    %.0f deg/s refused by the controller: %s" % (speed, " ".join(str(e).split())))
     else:
         raise MoveError("controller refused the scoop even at %.0f deg/s -- nothing moved" % (a.speed * 0.35))
     total = sum(w.angular_waypoint.duration for w in wl.waypoints)
-    print("    running at %.0f deg/s: %.1f s" % (speed, total))
+    print("    cruising at %.0f deg/s (ramps %.0f%% each end): %.1f s" % (speed, 100 * a.ramp, total))
+    if a.validate_only:
+        print("    validate-only: controller accepted it, nothing moved")
+        return
     # 4. watch: the food must stay on its vertical line and must not drop
     ev = _events(conn); ev.clear(); guard = TorqueGuard(); log = []; why = None; worst = 0.0
     conn.base.ExecuteWaypointTrajectory(wl)
@@ -280,6 +307,8 @@ def main() -> int:
                     help="scoop: deg/s. Fast on purpose -- at 6 deg/s (25 s) the berry slid off")
     ap.add_argument("--rot-exp", type=float, default=1.6, help="scoop: turn late, stay steep in the bowl")
     ap.add_argument("--n", type=int, default=40, help="scoop waypoints")
+    ap.add_argument("--ramp", type=float, default=0.25, help="scoop: fraction of the time spent easing in, and out")
+    ap.add_argument("--validate-only", action="store_true", help="scoop: plan and let the controller validate; do not move")
     a = ap.parse_args()
     with kinova_connection() as conn:
         try:

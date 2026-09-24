@@ -186,9 +186,17 @@ def _abort_reason(ev):
     return aborts[-1] if aborts else None
 
 
-def _watch(conn, label, arrived, start_q, max_tilt, torque_limit, timeout, ev):
-    """Shared monitor for both move types. Raises on every failure."""
+def _watch(conn, label, arrived, start_q, max_tilt, torque_limit, timeout, ev,
+           force_limit=None, log=None):
+    """Shared monitor for both move types. Raises on every failure.
+
+    force_limit: stop if the arm's own external-force estimate along base z
+    rises this much above its value at the start of the move. An upward push on
+    the utensil tip reads as +fz (finger-press test: rest noise +-0.3 N, light
+    press +0.7 N, firm +3 N). log: a list to append per-sample records to.
+    """
     guard = TorqueGuard(limit=torque_limit)
+    fz0 = conn.base_cyclic.RefreshFeedback().base.tool_external_wrench_force_z
     t0 = time.time()
     worst = 0.0
     moved = False
@@ -197,6 +205,17 @@ def _watch(conn, label, arrived, start_q, max_tilt, torque_limit, timeout, ev):
         fb = conn.base_cyclic.RefreshFeedback()
         t = tilt_of(fb.base)
         worst = max(worst, t)
+        fz = fb.base.tool_external_wrench_force_z
+        if log is not None:
+            log.append(dict(t=time.time() - t0, z=fb.base.tool_pose_z, fz=fz,
+                            fx=fb.base.tool_external_wrench_force_x,
+                            fy=fb.base.tool_external_wrench_force_y,
+                            tau=[a.torque for a in fb.actuators], label=label))
+        if force_limit is not None and fz - fz0 > force_limit:
+            conn.base.Stop()
+            raise MoveError("%s STOPPED ON FORCE: fz rose %.2f N (limit %.1f) at z %.4f -- "
+                            "something is pushing up on the utensil"
+                            % (label, fz - fz0, force_limit, fb.base.tool_pose_z))
         if t > max_tilt:
             conn.base.Stop()
             raise MoveError("%s ABORTED: utensil %.1f deg off vertical (limit %.0f)"
@@ -282,7 +301,8 @@ def goto(conn, target, speed: float = 10.0, tol: float = 0.08, label: str = "",
 
 def goto_cartesian(conn, xyz, rpy, speed: float = 0.05, tol_m: float = 0.002,
                    label: str = "", max_tilt: float = MAX_TILT_DEG,
-                   torque_limit: float = TORQUE_STEP_NM, verbose: bool = True):
+                   torque_limit: float = TORQUE_STEP_NM, verbose: bool = True,
+                   force_limit=None, log=None):
     """One smooth straight-line tool move to (xyz, rpy) -- not a staircase."""
     ev = _preflight(conn, label)
     p0 = tool_pose(conn)
@@ -306,7 +326,7 @@ def goto_cartesian(conn, xyz, rpy, speed: float = 0.05, tol_m: float = 0.002,
         return math.dist((b.tool_pose_x, b.tool_pose_y, b.tool_pose_z), xyz) < tol_m
 
     worst, dt = _watch(conn, label, arrived, joints(conn), max_tilt, torque_limit,
-                       max(20.0, 4.0 * dist / speed), ev)
+                       max(20.0, 4.0 * dist / speed), ev, force_limit=force_limit, log=log)
     if verbose:
         print("    %-24s ok  %5.0f mm in %4.1f s, worst tilt %.1f deg"
               % (label, 1000 * dist, dt, worst))

@@ -193,7 +193,9 @@ def main() -> int:
     visible = [r for r in rows if not r[1].get("_occluded")]
     pick = min(visible or rows, key=lambda r: r[6])   # most central visible: most rim clearance
     i, f, zb, _, _, _, _ = pick
-    pp = np.array([cx, cy])
+    # The tip's vertical line projects through the image of TRUE VERTICAL, not
+    # through the optical centre -- measured, see colour_intrinsics.json.
+    pp = np.array(cal.get("vertical_vp", [cx, cy]))
     p_star = pp + (p_tip - pp) * (a.z_tip / zb)
     du, dv = p_star[0] - f["cx"], p_star[1] - f["cy"]
     dX, dY = dv * zb / FYC, du * zb / FXC

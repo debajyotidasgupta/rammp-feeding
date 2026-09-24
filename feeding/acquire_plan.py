@@ -99,7 +99,12 @@ def plan_steps(tool0, rpy0, goal_xy, top_depth, floor_depth, a):
     # 2 PUNCH -- descent distances depend on the camera->tip distance only:
     # the camera and tip move together, depths are measured from the camera.
     d_top = top_depth - a.z_tip                       # tip reaches the food surface
-    d_end = floor_depth - a.margin - a.z_tip          # tip MARGIN above the floor
+    # Stop height = floor + (food height / 3): the user's rule. Not a fixed
+    # margin -- it scales with the food, keeping the tip in the lower third of
+    # the piece for purchase while staying well clear of the bowl.
+    food_h = floor_depth - top_depth
+    stop_above_floor = food_h / 3.0 if a.margin is None else a.margin
+    d_end = floor_depth - stop_above_floor - a.z_tip
     d_slow = max(0.0, d_top - a.slow_before)
     n_fast = max(1, int(math.ceil(d_slow / 0.03)))
     for k in range(1, n_fast + 1):
@@ -107,7 +112,7 @@ def plan_steps(tool0, rpy0, goal_xy, top_depth, floor_depth, a):
         lbl = "fast, down %3.0f mm" % (1000 * d) if k < n_fast else "fast ends %.0f mm above food" % (1000 * a.slow_before)
         wps.append(("PUNCH", lbl, over - np.array([0, 0, d]), rpy0, dict(descent_m=d)))
     for lbl, d in (("slow: food surface", d_top),
-                   ("slow: stop %.0f mm above floor" % (1000 * a.margin), d_end)):
+                   ("slow: stop %.0f mm above floor" % (1000 * stop_above_floor), d_end)):
         wps.append(("PUNCH", lbl, over - np.array([0, 0, d]), rpy0, dict(descent_m=d)))
 
     # 3 SCOOP -- rotate about the PIVOT (food centre, up the utensil from its
@@ -126,7 +131,7 @@ def plan_steps(tool0, rpy0, goal_xy, top_depth, floor_depth, a):
         T = piv - R @ o_piv
         wps.append(("SCOOP", "theta %5.1f deg" % th, T, kortex_from_R(R),
                     dict(theta=th, pivot=piv.tolist(), axis=(R @ np.array([0, 0, 1.0])).tolist())))
-    return wps, dict(d_top=d_top, d_end=d_end, pivot0=pivot0.tolist(), rise=float(rise),
+    return wps, dict(d_top=d_top, d_end=d_end, stop_above_floor=stop_above_floor, pivot0=pivot0.tolist(), rise=float(rise),
                      o_piv=o_piv.tolist())
 
 
@@ -229,7 +234,8 @@ def main() -> int:
     ap.add_argument("--z-tip", type=float, default=0.105, help="camera -> tip, m (FORK value)")
     ap.add_argument("--tip-len", type=float, default=0.09, help="tool point -> tip, m (GUESS)")
     ap.add_argument("--lateral", type=float, nargs=2, default=(0.0, 0.0), help="tip offset, tool x y, m")
-    ap.add_argument("--margin", type=float, default=0.005, help="stop this far above the floor, m")
+    ap.add_argument("--margin", type=float, default=None,
+                    help="override: stop this far above the floor, m. Default floor + height/3")
     ap.add_argument("--food-up", type=float, default=0.012, help="pivot above the tip, m")
     ap.add_argument("--slow-before", type=float, default=0.020, help="go slow this far above the food, m")
     ap.add_argument("--n", type=int, default=12, help="scoop waypoints")
@@ -270,8 +276,8 @@ def main() -> int:
           % (1000 * a.z_tip, 1000 * a.tip_len, [round(1000 * v) for v in a.lateral]))
     print("  food surface %.0f mm below the camera, floor beside it %.0f mm"
           % (1000 * top, 1000 * floor))
-    print("  punch: %.0f mm down to the food, %.0f mm to the stop (%.0f mm above the floor)"
-          % (1000 * geo["d_top"], 1000 * geo["d_end"], 1000 * a.margin))
+    print("  punch: %.0f mm down to the food, %.0f mm to the stop (%.0f mm above the floor = height/3)"
+          % (1000 * geo["d_top"], 1000 * geo["d_end"], 1000 * geo["stop_above_floor"]))
     print("  scoop: pivot rises %.0f mm while rotating 0 -> 90 deg about world +X" % (1000 * geo["rise"]))
     print()
     print("  %-6s %-30s %-24s %s" % ("step", "", "tool xyz (m)", "IK"))

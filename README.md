@@ -20,20 +20,29 @@ make acquire     over -> approach -> punch -> scoop
                   resume: make acquire START_AT=hover30|hover10|punch|scoop)
 ```
 
-Frozen 2026-09-23 after running end to end with a fork on a strawberry.
+Frozen 2026-09-24 after a run the user called "the most perfect": fork, strawberry, picked up and held.
 
 ## Acquisition (`make acquire` -> `feeding/acquire.sh` -> `kinova/scripts/acquire.py`)
 
 | step | what | measured |
 |---|---|---|
-| OVER | translate at the overlook height until the tip's vertical line meets the food | berry within 1.2 mm of the line |
-| approach | down to 30 mm above the food top, **re-measure from there**, down to **10 mm** above | 10 mm, centred — user-confirmed |
-| PUNCH | re-measure floor and top, down to the **measured bowl floor** nominal (really ~5–10 mm above it: camera-to-tip stored long, floor read beside the food) | first run: floor + h/3, 35.0 mm down as planned |
-| SCOOP | food rises straight up while the utensil turns vertical -> horizontal toward the user (+Y); the turn **starts the moment the food lifts** (90°·s^0.8) | rose 156 mm, 0.2 mm off vertical — geometry "perfectly correct" |
+| OVER | translate at the overlook height until the tip's vertical line meets the food | 82 mm, aim user-confirmed at the hover |
+| approach | down to 30 mm above the food top, **re-measure from there**, down to **10 mm** above | nominal 10 mm reads 15–20 mm by eye (camera-to-tip stored long) |
+| PUNCH | re-measure floor and top, down to the **measured bowl floor** nominal (really ~5–10 mm above it: camera-to-tip stored long, floor read beside the food) | 45.3 mm down; berry pierced cleanly |
+| SCOOP | food rises straight up while the utensil turns vertical -> horizontal toward the user (+Y); the turn **starts the moment the food lifts** (90°·s^0.8) | 6.3 s at 20 °/s; rose 164.5 mm, 1.0 mm off vertical; berry held |
 
-The first full run **dropped the berry**: the scoop took 25 s and the food slid off as the
-utensil tilted. The frozen version, on the user's instruction: scoops at **20 °/s** with a smooth speed profile (eases in and out over 25% of the time each; giving every waypoint full speed was refused at any speed as INVALID_JOINT_ACCELERATION). 2026-09-24: 6.3 s, food rose 165 mm, worst 0.9 mm off vertical, punches deeper to
-**the measured floor, nominal**, aims **+5 mm X (into the bulk of the flesh past the tines) and −6 mm Y (the fork head's curve)** (`aim_offset_base_m` = (+5, −6) mm, fork-specific, confirmed at a 10 mm hover 2026-09-24). **None of these changes has run on the arm yet.**
+How it got here (2026-09-23/24), each change the user's call:
+- the first full run **dropped the berry**: a 25 s scoop, and the food slid off while the fork was steep ->
+  **20 °/s with a smooth speed profile** (sin² ease in/out over 25% each end; giving every waypoint full
+  speed was refused at any speed as INVALID_JOINT_ACCELERATION);
+- the fork rose near-vertical before turning -> the turn **starts the moment the food lifts** (exponent 1.6 -> 0.8);
+- the punch was shallow -> floor + h/3, then + 7, + 2, and now **the measured floor, nominal**;
+- the aim -> **+5 mm X** (into the bulk of the flesh past the tines) and **−6 mm Y** (the fork head's curve),
+  `aim_offset_base_m`, fork-specific.
+
+**After the scoop** (until the feed-the-user stages exist): take the food off, then lift **80 mm** with the
+utensil horizontal and joint-move to food_detect_start. A straight joint move from the scoop end dips the
+tip 94 mm over the bowl, and turning the utensil back down about its tip is unreachable (IK fails 40–60% in).
 
 Why each piece is the way it is:
 - **Re-measure at every stage, from where the arm is.** At a 30 mm hover the food was

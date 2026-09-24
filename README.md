@@ -18,6 +18,9 @@ make perceive    at food_detect_start: capture, detect, depth, target
 make acquire     over -> approach -> punch -> scoop
                  (stop partway: make acquire STOP_AFTER=over|hover30|hover10|punch;
                   resume: make acquire START_AT=hover30|hover10|punch|scoop)
+make deliver     swing -> present -> bite -> retract   (from the end of the scoop)
+                 (STOP_AFTER=swing|present|bite, START_AT=present|bite|retract, VALIDATE=1)
+make retract     back from the user to food_detect_start
 ```
 
 Frozen 2026-09-24 (tag `acquire-v1`): two consecutive full runs, fork on strawberries, both picked up and held ("the most perfect scoop"). Run to run: OVER 82/81 mm, punch 45.3/44.3 mm down, scoop 6.3/6.2 s, rise 164.5/163.8 mm, 1.0/1.0 mm off vertical.
@@ -58,6 +61,33 @@ Why each piece is the way it is:
 - **The scoop pivots on the utensil tip in the arm's tool frame,** computed from
   calibration only: Kinova's camera position on the wrist + camera-to-tip + the tip's
   pixel. For the fork, (0, 9, 142) mm.
+
+## Delivery (`make deliver` -> `feeding/deliver.sh` -> `kinova/scripts/deliver.py`, `feeding/detect_mouth.py`)
+
+Built 2026-09-24, leg by leg, with the user at the arm; ran end to end once (swing, present, one bite, retract)
+as scratch scripts before being moved here. **Not yet run from these files.**
+
+| step | what | why |
+|---|---|---|
+| SWING | lift **175 mm**, then J1 −90° toward the user **while** retracting the utensil along its axis (120 mm, as far as the joints allow) | +60 mm touched the bowl; retraction in parallel, not after, keeps the tip from leading into the user |
+| PRESENT | capture → face/nose/mouth → straight approach to the tip **80 mm short** of the mouth, **10 mm below** it, 20 mm/s | 80 mm suits any cube-sized piece; the stop felt nearer the nose |
+| BITE | read-only: tool-force estimate > **1 N** for 0.1 s, against a baseline at rest | one bite peaked 5.7 N; J4/J5/J6 carry it, J7 barely (0.11 N·m) |
+| RETRACT | back off along the utensil → reverse swing → down to scoop end + 80 mm → joint move to food_detect_start; **fast** (60 mm/s, 25/20/15 °/s) | no food, moving away |
+
+- **No camera roll.** Rolling the utensil to put the camera on top turns the food sideways for the bite. The
+  image is rolled 90° instead and rotated upright in software.
+- **The mouth is hard to see.** The camera looks along the utensil, so the food on it covers the mouth as the
+  aim improves, and the "mouth" query has returned a full-frame box with the mouth in plain view. Order: the
+  mouth box if anatomically plausible → retry as "lips" → sidestep 50 mm away from the user (−Y) and look
+  again (twice) → estimate from the nose (0.84 nose heights below it).
+- **Only a fresh detection moves the arm.** A stale second file once let an approach run to an old reading
+  (it happened to stop further away, because the user had moved back). The approach now reads only the
+  detection made at its pose, newer than its capture, under 2 min old.
+- **Retract does not stop on torque while backing off** — stopping could leave the food in the mouth — and
+  steers the arm back into the scoop's own shape before the joint move home: without that, the joint move
+  dipped the utensil tip to the bowl floor (222 mm); with it, never below ~340 mm.
+- The 1 N bite threshold sits at the level of non-bite bumps (1.0–1.1 N: leaning in, lips on the food); the
+  0.1 s hold rejects spikes, not a sustained touch. One recorded bite so far.
 
 ## Per-utensil calibration — measure every time the utensil changes
 
@@ -201,6 +231,8 @@ kinova/
   connection.py              session, routers, teardown
   scripts/
     sequence.py              the frozen motions: detect / home
+    acquire.py               over / descend / punch / scoop
+    deliver.py               swing / approach / sidestep / bite / retract
     safe_move.py             every move goes through here
     feeding_start.py         `feeding start` == sequence home
     arm_state.py             where is the arm (--watch)
@@ -212,6 +244,8 @@ feeding/
   locate_anything.py         LocateAnything-3B wrapper, label-aware parsing
   depth_probe.py             median depth frame (runs in the vision container)
   locate_target.py           depth per detection, registration check, target
+  deliver.sh                 make deliver
+  detect_mouth.py            face / nose / mouth at the delivery pose
   run_depth_anything3.py     optional DA3 cross-check
 calibration/                 measured poses and intrinsics (above)
 docker/                      driver and vision images

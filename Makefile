@@ -70,7 +70,7 @@ acquire:
 # Food delivery, from the end of the scoop: lift and swing to the user (retracting the utensil as it
 # turns), present 80 mm short of the mouth, wait for the bite (1 N), retract to food_detect_start.
 deliver:
-	@STOP_AFTER=$(STOP_AFTER) START_AT=$(or $(START_AT),swing) VALIDATE=$(VALIDATE) feeding/deliver.sh
+	@STOP_AFTER=$(STOP_AFTER) START_AT=$(or $(START_AT),swing) VALIDATE=$(VALIDATE) WAIT_OPEN=$(WAIT_OPEN) feeding/deliver.sh
 
 retract:
 	@START_AT=retract feeding/deliver.sh

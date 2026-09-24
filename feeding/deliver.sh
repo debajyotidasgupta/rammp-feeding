@@ -5,14 +5,16 @@
 #   STOP_AFTER=present feeding/deliver.sh      # stop at a stage: swing | present | bite
 #   START_AT=retract feeding/deliver.sh        # resume: present | bite | retract
 #   VALIDATE=1 feeding/deliver.sh              # plan and validate the swing / approach; nothing moves
+#   WAIT_OPEN=1 feeding/deliver.sh             # present: approach only once the user opens their mouth (60 s)
 #
 # present = capture -> detect nose + mouth -> approach to 80 mm short of the mouth. If the food hides the
 # mouth: sidestep 50 mm away from the user (-Y) and look again, twice at most; then the nose estimate.
 # Every approach uses only the detection made at that pose, just before it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-PY="$HOME/venvs/la/bin/python"
-STOP_AFTER="${STOP_AFTER:-}"; START_AT="${START_AT:-swing}"; VALIDATE="${VALIDATE:-}"
+PY="$HOME/venvs/la/bin/python"          # LocateAnything (fallback)
+MPY="$HOME/venvs/mp/bin/python"         # MediaPipe face landmarks (first choice, ~25 ms)
+STOP_AFTER="${STOP_AFTER:-}"; START_AT="${START_AT:-swing}"; VALIDATE="${VALIDATE:-}"; WAIT_OPEN="${WAIT_OPEN:-}"
 ARM="docker exec -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/work -w /work tcp_rec python3 -u -m kinova.scripts.deliver"
 VO=""; [ -n "$VALIDATE" ] && VO="--validate-only"
 STAGES="swing present bite retract"
@@ -22,16 +24,26 @@ run() { [ "$1" = "$START_AT" ] && started=1; [ "$started" = 1 ]; }
 stop_here() { [ "$STOP_AFTER" = "$1" ] && { echo; echo "stopped after $1 (STOP_AFTER)"; exit 0; } || true; }
 arm() { $ARM "$@" 2>&1 | { grep -v Deprecation || true; }; return "${PIPESTATUS[0]}"; }
 
-capture() {   # $1 = run dir: colour frame (RTSP) + 20-frame median depth
+capture_colour() {   # $1 = run dir: one colour frame (RTSP)
   rm -f /tmp/dl_*.jpg
   timeout 22 gst-launch-1.0 rtspsrc location=rtsp://192.168.2.67/color protocols=tcp latency=200 \
     ! rtph264depay ! h264parse ! openh264dec ! videoconvert ! jpegenc \
     ! multifilesink location=/tmp/dl_%03d.jpg >/dev/null 2>&1 || true
   cp "$(ls /tmp/dl_*.jpg | tail -1)" "$1/colour.jpg"; rm -f /tmp/dl_*.jpg
+}
+capture_depth() {    # $1 = run dir: 20-frame median depth
   docker cp feeding/depth_probe.py kinova_vision:/tmp/depth_probe.py >/dev/null
   docker exec kinova_vision bash -lc "source /opt/ros/humble/setup.bash; source /ros2_ws/install/setup.bash; \
     cd /tmp && python3 depth_probe.py --out /tmp/dl_depth --frames 20" >/dev/null 2>&1
   docker cp kinova_vision:/tmp/dl_depth.npy "$1/depth.npy" >/dev/null
+}
+detect_face() {      # $1 = run dir: MediaPipe, else LocateAnything
+  set +e; PYTHONPATH=. "$MPY" -m feeding.detect_mouth_mp "$1" 2>/dev/null | grep -E "^(nose|mouth|mediapipe)" | sed 's/^/    /'
+  rc=${PIPESTATUS[0]}; set -e
+  if [ "$rc" != 0 ]; then
+    echo "    MediaPipe found no face -- LocateAnything"
+    PYTHONPATH=. "$PY" -m feeding.detect_mouth "$1" 2>/dev/null | grep -E "^(nose|mouth)" | sed 's/^/    /'
+  fi
 }
 
 if run swing; then
@@ -43,8 +55,14 @@ if run present; then
   echo "[2/4] PRESENT"
   for SHIFT in 0 50 100; do
     D="$HOME/rammp_runs/deliver_$(date +%Y%m%d_%H%M%S)"; mkdir -p "$D"
-    capture "$D"
-    PYTHONPATH=. "$PY" -m feeding.detect_mouth "$D" 2>/dev/null | grep -E "^(nose|mouth)" | sed 's/^/    /'
+    if [ -n "$WAIT_OPEN" ] && [ "$SHIFT" = 0 ]; then
+      set +e; PYTHONPATH=. "$MPY" -m feeding.detect_mouth_mp "$D" --wait-open 60 2>/dev/null | grep -v -E "^(W0000|I0000|INFO)"; rc=${PIPESTATUS[0]}; set -e
+      [ "$rc" != 0 ] && { echo "    no open mouth -- not approaching"; exit 1; }
+    else
+      capture_colour "$D"
+    fi
+    capture_depth "$D"
+    detect_face "$D"
     C="/tmp/dl_$(date +%s)"; docker exec tcp_rec mkdir -p "$C"
     docker cp "$D/face.json" tcp_rec:"$C/face.json" >/dev/null; docker cp "$D/colour.jpg" tcp_rec:"$C/colour.jpg" >/dev/null
     NOSE=""; [ "$SHIFT" = 100 ] && NOSE="--allow-nose"

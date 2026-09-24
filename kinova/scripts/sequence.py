@@ -59,7 +59,7 @@ DETECT = CAL / "food_detect_pose.json"
 LIFT_Z = 0.545           # m, tool z at the top of the lift (stall is ~0.565)
 NEAR_DEG = 1.0           # within this of a pose's joints = "at" that pose
 LIFT_SPEED = 0.06        # m/s
-SWING_SPEED = 10.0       # deg/s
+SWING_SPEED = 20.0       # deg/s (was 10; user: faster)
 
 
 def load(p: Path) -> dict:

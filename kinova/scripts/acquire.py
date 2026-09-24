@@ -118,7 +118,7 @@ def over(conn, a):
     if abs(goal[2] - p[2]) > 0.002 or d > MAX_OVER_M:
         raise MoveError("target is not a small level move (%.0f mm across) -- re-run make perceive"
                         % (1000 * d))
-    goto_cartesian(conn, goal, tuple(p[3:]), speed=0.02, label="OVER")
+    goto_cartesian(conn, goal, tuple(p[3:]), speed=0.05, label="OVER")
 
 
 def descend(conn, a):
@@ -156,8 +156,8 @@ def punch(conn, a):
     Path("/tmp/punch_done.json").write_text(json.dumps(dict(height=u["height"], floor_m=a.floor_m)))
 
 
-PLUNGE_FAST = 0.020        # m/s down to SLOW_ABOVE the food top
-PLUNGE_SLOW = 0.005        # m/s through the food, to the floor
+PLUNGE_FAST = 0.050        # m/s down to SLOW_ABOVE the food top (was 20; user: faster)
+PLUNGE_SLOW = 0.008        # m/s through the food, to the floor (was 5)
 SLOW_ABOVE = 0.020         # the overlook reads the food top 4-7 mm high; this covers it
 
 
@@ -394,7 +394,7 @@ def main() -> int:
     ap.add_argument("--under", default="/tmp/under.json", help="measure_under.py output")
     ap.add_argument("--to-above", type=float, default=0.010, help="descend: stop this far above the food top")
     ap.add_argument("--floor-m", type=float, default=PUNCH_FLOOR_M, help="punch: stop this far above the bowl floor")
-    ap.add_argument("--speed", type=float, default=20.0,
+    ap.add_argument("--speed", type=float, default=25.0,
                     help="scoop: deg/s. Fast on purpose -- at 6 deg/s (25 s) the berry slid off")
     ap.add_argument("--rot-exp", type=float, default=0.8,
                     help="scoop: turn angle = 90 * progress**rot_exp. <1 starts turning the moment the food lifts "

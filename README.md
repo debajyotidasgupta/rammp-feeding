@@ -21,6 +21,8 @@ make acquire     over -> plunge -> scoop
 make deliver     swing -> present -> bite -> retract   (from the end of the scoop)
                  (STOP_AFTER=swing|present|bite, START_AT=present|bite|retract, VALIDATE=1)
 make retract     back from the user to food_detect_start
+make feed        the whole loop from feeding_start: bite after bite until the bowl is empty or the
+                 user does not open their mouth, then back to feeding_start (BITES=1: one bite)
 ```
 
 Frozen 2026-09-24 (tag `acquire-v1`): two consecutive full runs, fork on strawberries, both picked up and held ("the most perfect scoop"). Run to run: OVER 82/81 mm, punch 45.3/44.3 mm down, scoop 6.3/6.2 s, rise 164.5/163.8 mm, 1.0/1.0 mm off vertical.
@@ -74,7 +76,7 @@ as scratch scripts before being moved here. **Not yet run from these files.**
 
 | step | what | why |
 |---|---|---|
-| SWING | lift **175 mm**, then J1 −90° toward the user **while** retracting the utensil along its axis (120 mm, as far as the joints allow) | +60 mm touched the bowl; retraction in parallel, not after, keeps the tip from leading into the user |
+| SWING | **one trajectory**: lift **175 mm**, J1 −90° toward the user **while** retracting the utensil along its axis (120 mm, as far as the joints allow) | +60 mm touched the bowl; retraction in parallel, not after, keeps the tip from leading into the user |
 | PRESENT | capture → face/nose/mouth → straight approach to the tip **80 mm short** of the mouth, **10 mm below** it, 20 mm/s | 80 mm suits any cube-sized piece; the stop felt nearer the nose |
 | BITE | read-only: tool-force estimate > **1 N** for 0.1 s, against a baseline at rest | one bite peaked 5.7 N; J4/J5/J6 carry it, J7 barely (0.11 N·m) |
 | RETRACT | back off along the utensil → reverse swing → down to scoop end + 80 mm → joint move to food_detect_start; **fast** (60 mm/s, 25/20/15 °/s) | no food, moving away |

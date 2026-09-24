@@ -10,6 +10,7 @@
 # present = capture -> detect nose + mouth -> approach to 80 mm short of the mouth. If the food hides the
 # mouth: sidestep 50 mm away from the user (-Y) and look again, twice at most; then the nose estimate.
 # Every approach uses only the detection made at that pose, just before it.
+# Exit 7 = the user did not open their mouth within 60 s: the arm retracted with the food still on it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 PY="$HOME/venvs/la/bin/python"          # LocateAnything (fallback)
@@ -57,7 +58,10 @@ if run present; then
     D="$HOME/rammp_runs/deliver_$(date +%Y%m%d_%H%M%S)"; mkdir -p "$D"
     if [ -n "$WAIT_OPEN" ] && [ "$SHIFT" = 0 ]; then
       set +e; PYTHONPATH=. "$MPY" -m feeding.detect_mouth_mp "$D" --wait-open 60 2>/dev/null | grep -v -E "^(W0000|I0000|INFO)"; rc=${PIPESTATUS[0]}; set -e
-      [ "$rc" != 0 ] && { echo "    no open mouth -- not approaching"; exit 1; }
+      if [ "$rc" != 0 ]; then       # no open mouth = the user does not want this bite: take it back
+        echo "    no open mouth -- not approaching; retracting"
+        arm retract; exit 7
+      fi
     else
       capture_colour "$D"
     fi

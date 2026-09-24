@@ -53,12 +53,12 @@ from kinova.scripts.safe_move import MoveError, TorqueGuard, _events, fold, goto
 STATE = Path("/tmp/deliver_state.json")
 LIFT_M = 0.175                 # above the scoop end, before the swing
 RETRACT_TRIES = (0.150, 0.120, 0.100, 0.080, 0.060, 0.040, 0.0)
-SWING_DPS = 10.0
+SWING_DPS = 20.0               # was 10 (user: faster); the food sits level on the utensil throughout
 DETECT_SIDESTEP_M = 0.050      # after the swing, to the user's right (-Y): the food otherwise sits between
                                # the camera and the mouth (user, 2026-09-24)
 STOP_M = 0.080                 # utensil tip short of the mouth
 AIM_DZ = -0.010                # below the detected mouth
-APPROACH_MPS = 0.020
+APPROACH_MPS = 0.035           # was 20 mm/s; still eases in and out, and stops 80 mm short
 MAX_APPROACH_M = 0.300
 MAX_SHIFT_S = 120.0            # detection must be this fresh
 NOSE_TO_MOUTH = 0.84           # nose heights, upright image (3 clean detections: 0.81-0.87)
@@ -69,7 +69,7 @@ BITE_HOLD_S = 0.10
 RETRACT_MPS = 0.060            # back off along the utensil
 RETRACT_SWING_DPS = 25.0
 RETRACT_DOWN_DPS = 20.0
-RETRACT_HOME_DPS = 15.0
+RETRACT_HOME_DPS = 20.0
 MIN_TIP_Z = 0.300              # the return's joint move must keep the utensil tip above this
 UP_W, UP_H = 720, 1280         # upright (rotated) image
 
@@ -167,6 +167,8 @@ def swing_tip(tipS, axS, rmax, u):
 # ------------------------------------------------------------------ steps
 
 def swing(conn, a):
+    """Lift, swing (retracting), and step to the user's right -- ONE continuous validated trajectory, no
+    stops between them (user, 2026-09-24: 'painfully slow ... these need not be waited for')."""
     p = tool_pose(conn); q0 = joints(conn); R0 = R_from_kortex(*p[3:])
     if axis(R0)[1] < 0.99:
         raise MoveError("utensil is not pointing at the user (+Y) -- run from the end of the scoop")
@@ -177,40 +179,38 @@ def swing(conn, a):
         raise MoveError("scoop ended at y %+.3f, outside the region the swing was validated for (-0.15..0.0): "
                         "from here the swing could sweep into the user -- not moving" % p[1])
     z0 = p[2]; up = (p[0], p[1], z0 + LIFT_M); T0 = np.array(p[:3])
-    # a steered joint path, not a plain Cartesian move: from a scoop that ends nearer the base, the
-    # controller's own straight lift runs J-limits out at +70 mm; steering the redundancy reaches 175
+    # 1. lift: a steered joint path -- from a scoop that ends nearer the base, the controller's own straight
+    #    lift runs a joint out at +70 mm; steering the redundancy reaches 175
     n_lift = 35
     lift, err = homotopy(conn, q0, lambda s: (T0 + np.array([0, 0, LIFT_M * s]), R0), n_lift)
     if lift is None:
         raise MoveError("the %.0f mm lift is not reachable (%s) -- nothing moved" % (1000 * LIFT_M, err))
     q80 = lift[round(n_lift * 0.080 / LIFT_M)]                  # the return's arm shape, for retract
-    run_path(conn, lift, dps_for(lift, LIFT_M, 0.020), "up %.0f mm" % (1000 * LIFT_M), not a.validate_only)
-    qs = joints(conn) if not a.validate_only else lift[-1]       # plan from where the lift left the arm
+    # 2. swing toward the user while retracting along the utensil, as far as the joints allow
     tip0 = np.array(up) + R0 @ tip_in_tool(); ax0 = axis(R0)
     best = None
     for rmax in RETRACT_TRIES:
         at = lambda s, r=rmax: (swing_tip(tip0, ax0, r, s) - Rz(90.0 * s) @ R0 @ tip_in_tool(), Rz(90.0 * s) @ R0)
-        path, err = homotopy(conn, qs, at, 60)
-        if path and min(margin(q) for q in path) < min(3.0, margin(qs) - 0.5):
+        path, err = homotopy(conn, lift[-1], at, 60)
+        if path and min(margin(q) for q in path) < min(3.0, margin(lift[-1]) - 0.5):
             err = "joint-limit margin only %.1f deg" % min(margin(q) for q in path); path = None
-        print("    retract %3.0f mm while swinging: %s" % (1000 * rmax, err or "ok, joint margin >= %.1f deg" % min(margin(q) for q in path)))
         if path:
             best = (rmax, path); break
     if best is None:
-        raise MoveError("no swing toward the user from here%s" % ("" if a.validate_only else " -- lifted, not swung"))
-    rmax, path = best
-    run_path(conn, path, SWING_DPS, "swing, retracting %.0f mm" % (1000 * rmax), not a.validate_only,
-             from_here=not a.validate_only)
+        raise MoveError("no swing toward the user from here -- nothing moved")
+    rmax, swing_path = best
+    # 3. to the user's right, so the food is not between the camera and the mouth
+    Ts, Rs = (swing_tip(tip0, ax0, rmax, 1.0) - Rz(90.0) @ R0 @ tip_in_tool(), Rz(90.0) @ R0)
+    side, err = homotopy(conn, swing_path[-1], lambda s: (Ts - np.array([0, DETECT_SIDESTEP_M * s, 0]), Rs), 8)
+    if side is None:
+        print("    (the %.0f mm step to the user's right is not reachable -- detecting from the swing's end)" % (1000 * DETECT_SIDESTEP_M))
+        side = [swing_path[-1]]
+    path = lift + swing_path[1:] + side[1:]
+    print("    lift %.0f mm + swing retracting %.0f mm + %.0f mm to the user's right: one trajectory, joint margin >= %.1f deg"
+          % (1000 * LIFT_M, 1000 * rmax, 1000 * DETECT_SIDESTEP_M if len(side) > 1 else 0, min(margin(q) for q in path)))
+    run_path(conn, path, SWING_DPS, "lift + swing + step right", not a.validate_only)
     if a.validate_only:
         return
-    # look from the user's right, so the food is not between the camera and the mouth
-    pe = tool_pose(conn); qe = joints(conn)
-    if DETECT_SIDESTEP_M and all(_ik(conn, (pe[0], pe[1] - DETECT_SIDESTEP_M * k / 5, pe[2]), tuple(pe[3:]), qe)
-                                 for k in range(1, 6)):
-        goto_cartesian(conn, (pe[0], pe[1] - DETECT_SIDESTEP_M, pe[2]), tuple(pe[3:]), speed=0.02,
-                       label="to the user's right %.0f mm" % (1000 * DETECT_SIDESTEP_M), max_tilt=95.0)
-    else:
-        print("    (the %.0f mm step to the user's right is not reachable -- detecting from here)" % (1000 * DETECT_SIDESTEP_M))
     pe = tool_pose(conn)          # the retract's back-off returns here
     STATE.write_text(json.dumps(dict(start_tool=list(up), start_rpy=list(p[3:]), retract_m=rmax,
                                      end_tool=list(pe[:3]), q80=q80, scoop_end_z=z0)))
@@ -296,7 +296,7 @@ def bite(conn, a):
     def F():
         b = conn.base_cyclic.RefreshFeedback().base
         return np.array([b.tool_external_wrench_force_x, b.tool_external_wrench_force_y, b.tool_external_wrench_force_z])
-    base = np.median([F() for _ in range(80)], 0)
+    base = np.median([F() for _ in range(40)], 0)                    # ~1 s at rest
     print("    waiting up to %.0f s for the bite (> %.1f N for %.2f s)" % (a.timeout, BITE_N, BITE_HOLD_S))
     t0 = time.time(); above = None; peak = 0.0
     while time.time() - t0 < a.timeout:

@@ -11,6 +11,7 @@
 #   make acquire   over -> approach -> punch -> scoop (STOP_AFTER=over|hover30|hover10|punch, START_AT=...)
 #   make deliver   swing -> present -> bite -> retract (STOP_AFTER=swing|present|bite, START_AT=..., VALIDATE=1)
 #   make retract   back from the user to food_detect_start
+#   make feed      the loop: bite after bite until the bowl is empty or the user declines (BITES=1: one)
 #
 #   make capture   re-measure feeding_start from the parked arm (rarely: see README)
 #   make sdk / images / depth   build and run the containers
@@ -34,7 +35,7 @@ SDK        := $(HOME)/kortex_api_2.8.0_$(ARCHTAG)
 # sync.sh --delete and needs sudo to clear.
 INARM      := docker exec -e PYTHONDONTWRITEBYTECODE=1 tcp_rec python3 -u -m
 
-.PHONY: sdk kortex vision images depth clean-depth status state start detect perceive over acquire deliver retract capture
+.PHONY: sdk kortex vision images depth clean-depth status state start detect perceive over acquire deliver retract feed capture
 
 # --- the arm ----------------------------------------------------------------
 # Every motion goes through kinova/scripts/safe_move.py: utensil kept pointing
@@ -74,6 +75,11 @@ deliver:
 
 retract:
 	@START_AT=retract feeding/deliver.sh
+
+# The whole loop from feeding_start, bite after bite, until the bowl is empty or the user does not open
+# their mouth; then back to feeding_start. BITES=1 for a single test run.
+feed:
+	@BITES=$(or $(BITES),99) feeding/feed.sh
 
 capture:
 	@$(INARM) kinova.scripts.capture_home --out /work/calibration/home_pose.json

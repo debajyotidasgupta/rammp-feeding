@@ -191,6 +191,11 @@ def main() -> int:
               "cam (%+.0f,%+.0f) mm   %.0f px from bowl centre"
               % (i + 1, f["cx"], f["cy"], 1000 * zb_s, 1000 * zb_f, 1000 * Xc, 1000 * Yc, d_rim))
 
+    if not rows:
+        # an empty bowl must be SAID, not crash: acquire refuses unless the newest perceive run has a target
+        Path(a.out + ".json").with_name("no_food").write_text("no food detected\n")
+        print("\nNO FOOD in the bowl")
+        return 3
     visible = [r for r in rows if not r[1].get("_occluded")]
     pick = min(visible or rows, key=lambda r: r[6])   # most central visible: most rim clearance
     i, f, zb, _, _, _, _ = pick

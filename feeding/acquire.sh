@@ -11,7 +11,10 @@
 # 4.7-6.7 mm closer than the overlook reading predicted, every time today.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-RUN="${RUN:-$(dirname "$(ls -t "$HOME"/rammp_runs/*/target.json | head -1)")/}"   # newest perceive run (face/deliver runs have no target)
+# the NEWEST perceive run (named by date; face/deliver runs are not), and it must have a target: an empty-bowl
+# run leaves none, and falling back to an older run would aim at food that is gone
+RUN="${RUN:-$(ls -d "$HOME"/rammp_runs/2*/ | tail -1)}"
+[ -f "$RUN/target.json" ] || { echo "the latest perceive run ($RUN) has no target -- $( [ -f "$RUN/no_food" ] && echo 'the bowl is empty' || echo 'run make perceive')"; exit 3; }
 PY="$HOME/venvs/la/bin/python"
 STOP_AFTER="${STOP_AFTER:-}"
 START_AT="${START_AT:-over}"

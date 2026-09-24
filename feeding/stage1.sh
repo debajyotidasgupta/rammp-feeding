@@ -56,7 +56,10 @@ if [ "${STAGE1_DA3:-0}" = 1 ]; then
 fi
 
 echo "[4/4] locate"
+set +e
 PYTHONPATH=. "$PY" -m feeding.locate_target --det "$OUT/detection.json" --depth "$OUT/depth.npy" \
   "${DA3_ARG[@]}" --image "$OUT/colour.jpg" --tool $TOOL --out "$OUT/target" 2>/dev/null
+rc=$?; set -e
 echo
 echo "results: $OUT"
+exit $rc                         # 3 = no food in the bowl

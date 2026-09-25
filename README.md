@@ -26,6 +26,10 @@ make feed        the whole loop from feeding_start: bite after bite until the bo
 
 make review      the latest session: timeline, key numbers, contact sheet per bite (RUN=<session|bite>)
 make locate-bowl where the bowl and the table are, from the latest perceive (to set `workspace:`)
+
+make models      every model loaded and warm (detector + DA3, face + colour stream, depth); make feed runs it
+make depth       the vision node: two depth sessions, 31 s apart (the arm ends each every ~62 s)
+make limits      the arm's own speed limits (APPLY=1: set them from config deployment.arm.soft_limits)
 ```
 
 Frozen 2026-09-24 (tag `acquire-v1`): two consecutive full runs, fork on strawberries, both picked up and held ("the most perfect scoop"). Run to run: OVER 82/81 mm, punch 45.3/44.3 mm down, scoop 6.3/6.2 s, rise 164.5/163.8 mm, 1.0/1.0 mm off vertical.
@@ -189,6 +193,22 @@ the loop saw the bowl empty and went home. Per bite: perceive ~12 s (resident de
 flowing together, one-trajectory swing, open-mouth wait, approach to 80 mm, bite at 1.0–1.7 s (2.5–3.2 N),
 fast retract.
 
+## The demo (2026-09-25, recorded): 6 of 6
+
+Packed fruit cubes (melon, apple, pineapple) in a clear container, fork: `make feed BITES=6` --
+**6 of 6 eaten, no stops, 73-85 s a bite** (perceive 6-9 s, acquire 21-25 s, deliver 46-57 s), then one more
+in an unlimited run. What changed since 2026-09-24, each in its section below:
+
+- **Aim**: the fork's tip pixel re-measured (the power-cycle re-seats it: check at a 10 mm hover after one),
+  the fork's tine offset in the tip model, the aim on the piece's **top surface** (depth), not the box centre.
+- **Food**: food profiles (`config/food/`), the generic prompt `piece of food`, fallback prompts, grapes and
+  the background never targeted; packed food plunges 25 mm below its top; "empty" confirmed by depth.
+- **Speed**: the arm's soft limits 70 (J1-J4) / 63 (J5-J7) deg/s, every move planned under them and under the
+  controller's own acceleration measure -- a bite 126-130 s -> ~78 s.
+- **Robustness**: depth from two staggered RTSP sessions (no dropouts), a resident colour stream, a stale
+  depth server killed with -9, braking on arrival not taken for contact, a mouth depth that is not a face
+  never approached.
+
 ## Delivery (`make deliver` -> `feeding/deliver.sh` -> `kinova/scripts/deliver.py`, `feeding/detect_mouth.py`)
 
 Built 2026-09-24, leg by leg, with the user at the arm; ran end to end once (swing, present, one bite, retract)
@@ -220,6 +240,15 @@ as scratch scripts before being moved here. **Not yet run from these files.**
   dipped the utensil tip to the bowl floor (222 mm); with it, never below ~340 mm.
 - The 1 N bite threshold sits at the level of non-bite bumps (1.0–1.1 N: leaning in, lips on the food); the
   0.1 s hold rejects spikes, not a sustained touch. One recorded bite so far.
+
+### The open-mouth wait and the face (2026-09-25)
+
+The wait reads the resident colour stream (frames arrive with ~0 s age; the camera itself lags reality by
+**0.4 s**, `feeding/camera_latency.py`), writes a live readout to `runs_dir/open_wait_live.txt` every 0.25 s,
+and keeps a snapshot every 0.5 s (`look_N/wait_frames/`). A detection is registered within ~0.3 s of the mouth
+opening. The mouth's depth must be a face at the fork -- 0.25-0.75 m and within 80 mm of the face box's depth
+(`delivery.mouth_check`) -- else the approach exits 5 without moving and one fresh look is taken: after a
+depth stall the stream once delivered a stale frame (mouth "921 mm"; the face was 0.52 m).
 
 ## Per-utensil calibration — measure every time the utensil changes
 
@@ -271,6 +300,21 @@ Measured: both directions run cleanly, utensil never more than 1.2° off
 vertical; two consecutive round trips land the camera view within **1 px**
 (≈0.3 mm at berry depth) of each other.
 
+### Speed and the arm's limits (2026-09-25)
+
+The arm's own **soft limits** (Kinova ControlConfig, `make limits`) were 40 deg/s; raised at the user's request to
+**70 deg/s J1-J4, 63 deg/s J5-J7** (hard limits 80 / 70; `deployment.arm.soft_limits`, the old values saved to
+the run record). Every speed is kept under them at runtime (`motion.capped`): asking more is refused, not
+clamped, and the retries went slower than asked. Transit moves run at 61 deg/s, the lift at 0.22 m/s, the
+descent into feeding_start 0.13 (at 0.22 its braking read as contact); the plunge is unchanged.
+
+Trajectories are planned for the **controller's acceleration measure** (it sees ~1.6x the time scaling's):
+`controller_accel_factor`, and a plan still refused on acceleration is rescaled by the controller's own
+measured/limit ratio and validated again at the same speed (`accel_retries`) -- never above a limit, never
+halved. A joint move the controller refuses as too short is re-sent at its stated minimum. A torque-step stop
+with the arm already at its target is its own **braking**, not contact (J2 steps 2.7-3.2 N.m at 61 deg/s);
+the swings and the retract's move home use 6 N.m guards.
+
 ### Every move goes through `safe_move.py`
 
 Each check exists because its absence cost something on this arm:
@@ -315,6 +359,24 @@ image→motion mapping was measured in exactly that orientation.
    `p* = pp + (p_tip − pp)·Z_tip/Z_berry`, and the tool translates until the
    berry sits there. No hand–eye calibration needed.
 
+### Food detection and the aim (2026-09-25)
+
+- **Prompt per food profile** (`config/food/<name>.yaml`): cubes ask for `piece of food` -- on packed cubes one box
+  per piece, as good as `fruit cube` and generic for steak / chicken; `food pieces`, `food cube`, `bite-sized
+  piece` merged pieces or boxed the whole container.
+- **Fallback prompts** (`fallback_prompts`, cubes: `fruit cube`), asked only when no box is usable.
+- **Never targeted** (`exclude_grapes`): a box whose centre is red with little green (a grape -- it rolls off
+  the fork) or blue (the mat, the bowl's wall).
+- **The aim** is the centre of the uppermost piece's top inside the chosen box (depth pixels within 6 mm of its
+  nearest point, the largest patch; `perception.aim_top_surface`) -- a merged box or a seam still aims at one
+  piece. The box centre once sent the fork into the gap between a piece and a grape.
+- **Packed food** (`acquisition.plunge.no_floor`): when the "floor" beside the piece reads food (under 10 mm
+  "tall", no reading, or more than 25 mm above the table) the plunge goes 25 mm below the piece's top, never
+  closer than 10 mm to the table.
+- **"Empty" is confirmed by depth**: with no usable box, a quadratic fitted to the bowl's own surface (flat
+  container or round bowl) -- under 5% of its inner area standing 15 mm clear of it is empty (exit 3), else
+  "food left, none pickable" (exit 5): `make feed` stops saying so instead of finishing.
+
 ### Speed of perception (2026-09-25, offline on saved frames; the robot was off)
 
 | step | before | now | how |
@@ -353,6 +415,14 @@ warm-up inference before it answers -- all up and warm in ~21 s.
 | MediaPipe face landmarker | 3.7 MB | CPU | ~25 ms |
 
 ### Which depth source
+
+**The depth stream itself** (2026-09-25): the arm ends each RTSP depth session every ~62 s, whatever the client
+sends (an explicit keep-alive and a longer tcp-timeout changed nothing), and recovery took 10-20 s -- 20-26 s
+lost per capture that landed in a gap. `make depth` runs two depth nodes 31 s apart (`/camera` and `/camera2`)
+and the depth server merges both (`camera.streams.depth_topics`): 30 of 30 requests answered over 150 s while
+the sessions paused 6 and 8 times. Captures take frames since the arm stopped (5 s buffered), so a brief gap
+costs nothing. Stop the depth server with `pkill -9` (`make models` does): rclpy swallows SIGTERM and leaves a
+stale server holding the port.
 
 Scored against checks independent of all of them (a flat table; a strawberry is
 ~25–35 mm tall):
@@ -394,10 +464,16 @@ measured: commanding −90.000000 lands at −89.998138 every time. If you ever
 
 ## Known open
 
-- **The spoon's camera-to-tip distance is unmeasured.** 105 mm was the fork's.
-  It dominates the target's ±4.7 mm; calipers would bring that to ~±1 mm. So
-  does its lateral offset from the tool axis — the quantity that swept the fork
-  into joint 6.
+- **Mixed plates.** Packed cubes detect one box per piece; a pile of grapes, slices and small pieces often comes
+  back as one box on the wrist camera (the loop then stops "food left, none pickable", exit 5). It is the
+  image: the same container photographed sharper gives one box per piece with the same model and prompt
+  (`captures/camera_quality_vs_detection.jpg`, sharpness 254 vs 828). Stock YOLO11 / YOLO-World were worse
+  and a Real-ESRGAN upscale changed nothing (`captures/yolo_vs_locateanything.jpg`). The options: even light
+  over the bowl; the camera's 1080p mode (needs a colour recalibration); splitting a pile box by depth.
+- **A new food: test its prompt first** on a saved frame (`config/food/<name>.yaml`); only fruit was tested.
+- **The bite reads 0.0-0.3 s** on most bites: the force is often already over 1 N when the wait starts (the
+  user leaning in); harmless (the retract follows the bite) but it is not a measured bite time.
+- **A spoon** needs its own utensil profile (camera-to-tip, tip pixel, tine offset) before use.
 - **No self-collision model.** Torque is the only contact detector.
 - **Disk is at 93%** on the jetson (3.8 GB free, 2026-09-24, after removing the Depth Anything V2 weights and
   the pip/apt caches). The rest is the OS/JetPack (~9 GB), LocateAnything-3B (7.2 GB), `~/venvs/la` (5.7 GB)
@@ -424,6 +500,7 @@ kinova/
     safe_move.py             every move goes through here
     feeding_start.py         `feeding start` == sequence home
     arm_state.py             where is the arm (--watch)
+    arm_limits.py            the arm's kinematic limits: show, or apply config (make limits)
     capture_home.py          re-measure a pose
     check_connection.py      identity, firmware, live joints
 feeding/
@@ -432,6 +509,10 @@ feeding/
   viz.py                     debug images (depth PNGs with marks)
   review.py                  make review: a run record read back
   locate_bowl.py             make locate-bowl
+  colour_stream.py           the resident colour stream (in the face server): live frames, dropout log
+  camera_latency.py          how far the colour picture lags the arm (a J7 +-5 deg test; 0.4 s measured)
+  depth_server.py            the resident depth median (vision container), both depth sessions merged
+  detect_mouth_mp.py         face / mouth (MediaPipe): the open-mouth wait, live readout, snapshots
   stage1.sh                  make perceive
   perceive.py                detection
   locate_anything.py         LocateAnything-3B wrapper, label-aware parsing

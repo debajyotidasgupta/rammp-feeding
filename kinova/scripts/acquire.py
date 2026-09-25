@@ -208,6 +208,11 @@ def plunge(conn, a):
         raise MoveError("controller refused the plunge -- nothing moved")
     print("    food %.1f mm tall: %.0f mm down to the floor + %.0f mm, slow from %.0f mm; %.1f s"
           % (1000 * u["height"], 1000 * down, 1000 * a.floor_m, 1000 * slow_at, total))
+    scoop_plan = None
+    if a.then_scoop:                                          # plan the scoop NOW, from where the plunge will end
+        Te = np.array([T0[0], T0[1], T0[2] - down])
+        scoop_plan = plan_scoop(conn, a, path[-1], Te, R_from_kortex(*p[3:]),
+                                dict(height=u["height"], floor_m=a.floor_m))
     if a.validate_only:
         print("    validate-only: controller accepted it, nothing moved")
         return
@@ -223,6 +228,8 @@ def plunge(conn, a):
             break
     print("    plunge done in %.1f s" % (time.time() - t0))
     Path("/tmp/punch_done.json").write_text(json.dumps(dict(height=u["height"], floor_m=a.floor_m)))
+    if scoop_plan is not None:
+        run_scoop(conn, a, scoop_plan)                        # no pause at the bottom: already planned
 
 
 def _ik(conn, T, rpy, g):
@@ -256,18 +263,46 @@ def _timing(path, peak, ramp):
     return [max(0.02, d) for d in np.diff(t)]
 
 
+A_MAX = 50.0                   # deg/s^2 per joint (the controller refuses above 80)
+
+
+def _time_scale(path, vmax, amax=A_MAX):
+    """Segment durations so that EVERY joint's speed stays under vmax and changes by at most amax -- from
+    rest and back to rest. The earlier leading-joint profile let a joint that barely moved in one segment
+    lead the next: J1 went from ~0 (the lift) to full speed (the swing) in one segment, 628 deg/s^2, and
+    the controller refused the lift+swing trajectory at every speed down to 7 deg/s."""
+    D = np.array([[fold(x - y) for x, y in zip(q, p)] for p, q in zip(path, path[1:])])
+    n = len(D)
+    vcap = np.full(n, vmax) if np.isscalar(vmax) else np.asarray(vmax, float)
+    dt = np.maximum(np.abs(D).max(1) / vcap, 0.02)
+    for _ in range(4000):
+        V = D / dt[:, None]
+        Vp = np.vstack([np.zeros(7), V, np.zeros(7)])          # at rest before and after
+        mid = np.concatenate([[dt[0] / 2], (dt[1:] + dt[:-1]) / 2, [dt[-1] / 2]])
+        acc = np.abs(np.diff(Vp, axis=0)).max(1) / mid          # n + 1 junctions
+        bad = acc > amax
+        if not bad.any():
+            break
+        grow = np.zeros(n, bool)
+        idx = np.nonzero(bad)[0]
+        grow[np.clip(idx - 1, 0, n - 1)] = True; grow[np.clip(idx, 0, n - 1)] = True
+        dt[grow] *= 1.03
+    return list(dt)
+
+
 def _waypoints(conn, path, top_speed, ramp, what):
-    """The joint path as one WaypointList the controller has validated; slower if refused."""
+    """The joint path as one WaypointList the controller has validated; slower if refused.
+    (`ramp` is kept for the callers; the time scaling now bounds acceleration itself.)"""
     raw = [x.position for x in conn.base_cyclic.RefreshFeedback().actuators]
     for speed in (top_speed, top_speed * 0.75, top_speed * 0.5, top_speed * 0.35):
-        durs = _timing(path, speed, ramp)
+        durs = _time_scale(path, speed, A_MAX * (speed / top_speed))
         wl = Base_pb2.WaypointList(); wl.duration = 0.0; wl.use_optimal_blending = False
         cur, prev = list(raw), path[0]
         for k, (q, dt) in enumerate(zip(path[1:], durs), 1):
             cur = [c + fold(x - y) for c, x, y in zip(cur, q, prev)]
             w = wl.waypoints.add(); w.name = "w%02d" % k
             w.angular_waypoint.angles.extend(cur)
-            w.angular_waypoint.duration = dt
+            w.angular_waypoint.duration = float(dt)
             prev = q
         errs = list(conn.base.ValidateWaypointList(wl).trajectory_error_report.trajectory_error_elements)
         if not errs:
@@ -276,17 +311,15 @@ def _waypoints(conn, path, top_speed, ramp, what):
     raise MoveError("controller refused the %s even at %.0f deg/s -- nothing moved" % (what, top_speed * 0.35))
 
 
-
-def scoop(conn, a):
+def plan_scoop(conn, a, q0, T0, R0, done):
+    """Plan the scoop from a given arm state (the current one, or where the plunge WILL end -- so the
+    plunge can flow straight into it with no planning pause at the bottom)."""
     pose, _ = cal()
-    done = json.loads(Path("/tmp/punch_done.json").read_text()) if Path("/tmp/punch_done.json").exists() else {}
     h = done.get("height", 0.030)
     tip = tip_in_tool()
     # the punch leaves the tip floor_m above the floor; the food's centre is at h/2
     food_up = max(0.0, h / 2.0 - done.get("floor_m", PUNCH_FLOOR_M))
     o_piv = tip - np.array([0, 0, food_up])
-    p = tool_pose(conn); q0 = joints(conn)
-    R0 = R_from_kortex(*p[3:]); T0 = np.array(p[:3])
     piv0 = T0 + R0 @ o_piv
     end_z = pose["tool_pose"]["z_m"] + (R0 @ tip)[2]          # tip height at the overlook
     rise = end_z - piv0[2]
@@ -310,44 +343,56 @@ def scoop(conn, a):
         R = rot_x(th) @ R0
         return piv_at(s) - R @ o_piv, kortex_from_R(R)
 
-    # 1. reachable end shapes, nearest the current one first
-    T, r = at(1.0); ends = []
-    for j1, j2, j3, j4, j6, fl in itertools.product((q0[0], 150, 120, 100), (-30, 0, 30, 60),
-                                                    (q0[2], 30, 60, 85), (-135, -110),
-                                                    (-85, -50, 50, 85), (0, 1)):
-        g = [j1, j2, j3, j4, q0[4], j6, q0[6]]
-        if fl:
-            g[4], g[6] = fold(g[4] + 180), fold(g[6] + 180)
-        q = _ik(conn, T, r, g)
-        if q and m(q) > 8:
-            ends.append(q)
-    ends.sort(key=lambda q: max(abs(fold(x - y)) for x, y in zip(q, q0)))
-    if se:
-        ends.insert(0, se["joints_deg"])                     # the shape the downstream stages were built from
-    # 2. a continuous joint path, IK guess blended from start to end shape
-    path = None
-    for qe in ends[:10]:
+    def along(qe):
+        """A continuous joint path, the IK guess blended from the start toward the end shape qe."""
         prev, cand = q0, [q0]
         for k in range(1, a.n + 1):
             s = k / a.n
             T, r = at(s)
             q = _ik(conn, T, r, [fold(x + fold(y - x) * s) for x, y in zip(q0, qe)])
             if q is None or max(abs(fold(x - y)) for x, y in zip(q, prev)) > 12:
-                break
+                return None
             prev = q; cand.append(q)
-        else:
-            path = cand; break
+        return cand
+
+    # the calibrated end shape first (the one delivery was built from) -- the search only if it fails
+    path = along(se["joints_deg"]) if se else None
     if path is None:
-        raise MoveError("no continuous scoop path from here (%d end shapes tried)" % min(10, len(ends)))
-    print("    plan: food rises %.0f mm%s while turning 90 deg; %d waypoints, min joint margin %.1f deg"
+        T, r = at(1.0); ends = []
+        for j1, j2, j3, j4, j6, fl in itertools.product((q0[0], 150, 120, 100), (-30, 0, 30, 60),
+                                                        (q0[2], 30, 60, 85), (-135, -110),
+                                                        (-85, -50, 50, 85), (0, 1)):
+            g = [j1, j2, j3, j4, q0[4], j6, q0[6]]
+            if fl:
+                g[4], g[6] = fold(g[4] + 180), fold(g[6] + 180)
+            q = _ik(conn, T, r, g)
+            if q and m(q) > 8:
+                ends.append(q)
+        ends.sort(key=lambda q: max(abs(fold(x - y)) for x, y in zip(q, q0)))
+        for qe in ends[:10]:
+            path = along(qe)
+            if path:
+                break
+    if path is None:
+        raise MoveError("no continuous scoop path from here -- nothing moved")
+    print("    scoop planned: food rises %.0f mm%s while turning 90 deg; %d waypoints, min joint margin %.1f deg"
           % (1000 * rise, ", backing off %.0f mm" % (1000 * np.linalg.norm(back)) if se else "", a.n, min(m(q) for q in path)))
-    # 3. one smooth trajectory, validated by the controller; slow down until it passes.
-    #    Timed with a smooth speed profile (ease in, cruise, ease out): giving every
-    #    waypoint the cruise speed asks for full speed within the first ~0.1 s, and
-    #    the controller refuses that at any speed (INVALID_JOINT_ACCELERATION).
+    return dict(path=path, o_piv=o_piv, piv_at=piv_at, piv0=piv0)
+
+
+def scoop(conn, a):
+    done = json.loads(Path("/tmp/punch_done.json").read_text()) if Path("/tmp/punch_done.json").exists() else {}
+    p = tool_pose(conn)
+    run_scoop(conn, a, plan_scoop(conn, a, joints(conn), np.array(p[:3]), R_from_kortex(*p[3:]), done))
+
+
+def run_scoop(conn, a, plan):
+    path, o_piv, piv_at, piv0 = plan["path"], plan["o_piv"], plan["piv_at"], plan["piv0"]
+    path = [joints(conn)] + path[1:]                         # start from where the arm actually is
+    # one smooth trajectory, validated by the controller; slower only if refused
     wl, speed = _waypoints(conn, path, a.speed, a.ramp, "scoop")
     total = sum(w.angular_waypoint.duration for w in wl.waypoints)
-    print("    cruising at %.0f deg/s (ramps %.0f%% each end): %.1f s" % (speed, 100 * a.ramp, total))
+    print("    scoop at %.0f deg/s: %.1f s" % (speed, total))
     if a.validate_only:
         print("    validate-only: controller accepted it, nothing moved")
         return
@@ -402,6 +447,7 @@ def main() -> int:
     ap.add_argument("--n", type=int, default=40, help="scoop waypoints")
     ap.add_argument("--ramp", type=float, default=0.25, help="scoop: fraction of the time spent easing in, and out")
     ap.add_argument("--validate-only", action="store_true", help="scoop: plan and let the controller validate; do not move")
+    ap.add_argument("--then-scoop", action="store_true", help="plunge: plan the scoop first and run it straight after")
     a = ap.parse_args()
     with kinova_connection() as conn:
         try:

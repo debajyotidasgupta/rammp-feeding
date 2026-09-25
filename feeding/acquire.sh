@@ -46,8 +46,13 @@ if [ -n "$STEPPED" ]; then
   if run hover10; then echo "  down to 10 mm";   measure hover30 0.29; $ARM descend --to-above 0.010 2>&1 | grep -v Deprecation; stop_here hover10; fi
   if run punch;   then echo "  PUNCH";           measure hover10 0.275; $ARM punch 2>&1 | grep -v Deprecation; stop_here punch; fi
 elif run plunge; then
-  echo "[2/3] PLUNGE";  measure over 0.41; $ARM plunge 2>&1 | grep -v Deprecation; stop_here plunge
+  if [ "$STOP_AFTER" = plunge ]; then
+    echo "[2/3] PLUNGE";  measure over 0.41; $ARM plunge 2>&1 | grep -v Deprecation; stop_here plunge
+  else                    # plunge and scoop as one planned sequence: no pause at the bottom
+    echo "[2/3] PLUNGE + SCOOP"; measure over 0.41; $ARM plunge --then-scoop 2>&1 | grep -v Deprecation
+    SCOOPED=1
+  fi
 fi
-if run scoop;   then echo "[3/3] SCOOP";         $ARM scoop 2>&1 | grep -v Deprecation; fi
+if [ -z "${SCOOPED:-}" ] && run scoop; then echo "[3/3] SCOOP"; $ARM scoop 2>&1 | grep -v Deprecation; fi
 docker cp tcp_rec:/tmp/scoop_log.json "$RUN/scoop_log.json" >/dev/null 2>&1 || true
 echo; echo "logs: $RUN"

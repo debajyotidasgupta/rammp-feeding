@@ -51,8 +51,22 @@ from kinova.scripts.acquire import (CAM_IN_TOOL, LIMITS, R_from_kortex, _ik, _ti
 from kinova.scripts.safe_move import MoveError, TorqueGuard, _events, fold, goto, goto_cartesian, joints, tool_pose
 
 STATE = Path("/tmp/deliver_state.json")
+# The scoop always ends on the calibrated scoop_end pose, so the swing -- and the retract's reverse swing and
+# descent -- are the same joint paths every time: planned once, then reused (planning cost ~10 s of stillness)
+SWING_CACHE = Path("/tmp/deliver_swing_plan.json")
+RETRACT_CACHE = Path("/tmp/deliver_retract_plan.json")
+
+
+def _cached(cache, q_start, tol=1.0):
+    try:
+        c = json.loads(cache.read_text())
+    except (OSError, ValueError):
+        return None
+    if max(abs(fold(x - y)) for x, y in zip(c["q_start"], q_start)) > tol:
+        return None
+    return c
 LIFT_M = 0.175                 # above the scoop end, before the swing
-RETRACT_TRIES = (0.150, 0.120, 0.100, 0.080, 0.060, 0.040, 0.0)
+RETRACT_TRIES = (0.120, 0.100, 0.080, 0.060, 0.040, 0.0)   # 150 never fit
 SWING_DPS = 20.0               # was 10 (user: faster); the food sits level on the utensil throughout
 DETECT_SIDESTEP_M = 0.050      # after the swing, to the user's right (-Y): the food otherwise sits between
                                # the camera and the mouth (user, 2026-09-24)
@@ -179,6 +193,11 @@ def swing(conn, a):
         raise MoveError("scoop ended at y %+.3f, outside the region the swing was validated for (-0.15..0.0): "
                         "from here the swing could sweep into the user -- not moving" % p[1])
     z0 = p[2]; up = (p[0], p[1], z0 + LIFT_M); T0 = np.array(p[:3])
+    c = _cached(SWING_CACHE, q0)
+    if c:
+        path, rmax, q80 = [q0] + c["path"][1:], c["retract_m"], c["q80"]
+        print("    lift + swing + step right: planned before, reused (joint margin >= %.1f deg)" % min(margin(q) for q in path))
+        return _swing_go(conn, a, path, rmax, q80, up, p, z0)
     # 1. lift: a steered joint path -- from a scoop that ends nearer the base, the controller's own straight
     #    lift runs a joint out at +70 mm; steering the redundancy reaches 175
     n_lift = 35
@@ -208,6 +227,11 @@ def swing(conn, a):
     path = lift + swing_path[1:] + side[1:]
     print("    lift %.0f mm + swing retracting %.0f mm + %.0f mm to the user's right: one trajectory, joint margin >= %.1f deg"
           % (1000 * LIFT_M, 1000 * rmax, 1000 * DETECT_SIDESTEP_M if len(side) > 1 else 0, min(margin(q) for q in path)))
+    SWING_CACHE.write_text(json.dumps(dict(q_start=q0, path=path, retract_m=rmax, q80=q80)))
+    return _swing_go(conn, a, path, rmax, q80, up, p, z0)
+
+
+def _swing_go(conn, a, path, rmax, q80, up, p, z0):
     run_path(conn, path, SWING_DPS, "lift + swing + step right", not a.validate_only)
     if a.validate_only:
         return
@@ -359,8 +383,14 @@ def retract(conn, a):
     def at2(s):
         u = u0 * (1 - s); R = Rz(90.0 * u) @ RS
         return swing_tip(tipS, axS, st["retract_m"], u) + (1 - s) * e - R @ tipv_t, R
+    rc = _cached(RETRACT_CACHE, q1, tol=1.5)
     if resumed:
         q2 = q0
+    elif rc:
+        path2 = [q1] + rc["path2"][1:]
+        print("    reverse swing + descent: planned before, reused")
+        run_path(conn, path2, RETRACT_SWING_DPS, "reverse swing", go, from_here=go or L <= 0.003)
+        q2 = joints(conn) if go else path2[-1]
     else:
         path2, err = homotopy(conn, q1, at2, 60)
         if path2 is None:
@@ -369,11 +399,16 @@ def retract(conn, a):
         q2 = joints(conn) if go else path2[-1]
     # 3. down to the scoop end + 80 mm in the scoop's own arm shape, then the proven joint move
     Ta = TS; Td = np.array([TS[0], TS[1], st["scoop_end_z"] + 0.080])
-    path3, err = homotopy(conn, q2, lambda s: (Ta + (Td - Ta) * s, RS), 40, toward=st["q80"])
-    if path3 is None:
-        raise MoveError("descent " + err)
     qd = cal()[0]["joints_deg"]
-    lo = min(fk_tip(conn, [fold(x + fold(y - x) * k / 20) for x, y in zip(path3[-1], qd)])[2] for k in range(21))
+    if rc and not resumed:
+        path3, lo = [q2] + rc["path3"][1:], rc["lo"]
+    else:
+        path3, err = homotopy(conn, q2, lambda s: (Ta + (Td - Ta) * s, RS), 40, toward=st["q80"])
+        if path3 is None:
+            raise MoveError("descent " + err)
+        lo = min(fk_tip(conn, [fold(x + fold(y - x) * k / 20) for x, y in zip(path3[-1], qd)])[2] for k in range(21))
+        if not resumed and go:
+            RETRACT_CACHE.write_text(json.dumps(dict(q_start=q1, path2=path2, path3=path3, lo=lo)))
     print("    return: utensil tip never below %.0f mm" % (1000 * lo))
     if lo < MIN_TIP_Z:
         raise MoveError("the return would dip the utensil tip to %.0f mm -- stopped" % (1000 * lo))

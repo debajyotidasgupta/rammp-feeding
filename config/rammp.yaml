@@ -98,6 +98,8 @@ guards:                         # contact guard: a joint-torque step this big ag
     scoop: 6.0                  # open air; 2.5 tripped on the arm's own acceleration
     swing: 6.0
     retract: 6.0                # empty utensil, moving away
+    sequence_swing: 6.0         # feeding_start <-> food_detect_start swings: at 65 deg/s the braking on arrival
+                                # stepped J2 -6.6 -> -3.4 N.m (2026-09-25, nothing touched)
   scoop_food_off_path_m: 0.015  # the food drifting this far from its planned path stops the scoop
   scoop_food_drop_m: 0.010      # ... or this far below it
 

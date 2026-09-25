@@ -70,6 +70,7 @@ NEAR_DEG = float(cfg.motion.near_pose_deg)        # within this of a pose's join
 LIFT_SPEED = float(cfg.motion.sequence.lift_mps)
 DESCEND_SPEED = float(cfg.motion.sequence.descend_mps)   # into the parking pose: slower, it brakes near the table
 SWING_SPEED = float(cfg.motion.sequence.swing_dps)
+SWING_TORQUE_NM = float(cfg.guards.torque_step_nm.sequence_swing)
 SETTLE_DPS = float(cfg.motion.settle_dps)         # the final settle / snap onto a measured pose
 KNOWN_DEG = float(cfg.motion.known_pose_deg)      # within this of a pose = one `home` knows how to retrace from
 
@@ -139,8 +140,8 @@ def detect(conn: KinovaConnection, rerecord: bool) -> None:
         log.info("    recorded %s", LIFT.name)
     lift = load(LIFT)["joints_deg"]
     mid = midpoint(lift, qd)
-    goto(conn, mid, speed=SWING_SPEED, label="swing, first half")
-    goto(conn, qd, speed=SWING_SPEED, label="swing, second half")
+    goto(conn, mid, speed=SWING_SPEED, torque_limit=SWING_TORQUE_NM, label="swing, first half")
+    goto(conn, qd, speed=SWING_SPEED, torque_limit=SWING_TORQUE_NM, label="swing, second half")
     report(conn, "at food_detect")
 
 
@@ -163,8 +164,8 @@ def home_(conn: KinovaConnection) -> None:
     if d_det < d_lift:
         goto(conn, qd, speed=SETTLE_DPS, label="settle on food_detect")
         mid = midpoint(qd, lift["joints_deg"])
-        goto(conn, mid, speed=SWING_SPEED, label="swing back, first half")
-    goto(conn, lift["joints_deg"], speed=SWING_SPEED, label="swing back, second half")
+        goto(conn, mid, speed=SWING_SPEED, torque_limit=SWING_TORQUE_NM, label="swing back, first half")
+    goto(conn, lift["joints_deg"], speed=SWING_SPEED, torque_limit=SWING_TORQUE_NM, label="swing back, second half")
     h = home["tool_pose"]
     goto_cartesian(conn, (h["x_m"], h["y_m"], h["z_m"]),
                    (h["theta_x_deg"], h["theta_y_deg"], h["theta_z_deg"]),

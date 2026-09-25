@@ -332,6 +332,16 @@ def _watch_loop(conn, label, arrived, start_q, max_tilt, torque_limit, timeout, 
     raise MoveError("%s TIMED OUT after %.0f s" % (label, timeout))
 
 
+def _braked_on_arrival(e: MoveError, arrived: bool, label: str) -> bool:
+    """A torque-step stop with the arm already at its target: the move was complete, the step was the arm's own
+    braking (seen at 65 deg/s and 0.22 m/s, nothing touched). Anything else is a real stop."""
+    if arrived and "torque stepped" in str(e):
+        log.info("    %-24s arrived; the torque step was the braking (%s)", label, str(e).split(": ", 1)[-1][:60])
+        runlog.event("braked_on_arrival", label=label, stop=str(e))
+        return True
+    return False
+
+
 def goto(conn: KinovaConnection, target: Sequence[float], speed: float = 10.0, tol: float = 0.08,
          label: str = "", max_tilt: float = MAX_TILT_DEG, torque_limit: float = TORQUE_STEP_NM,
          verbose: bool = True) -> None:
@@ -389,6 +399,9 @@ def goto(conn: KinovaConnection, target: Sequence[float], speed: float = 10.0, t
                                q0, max_tilt, torque_limit, max(20.0, 6.0 * travel / speed), ev)
             break
         except MoveError as e:
+            if _braked_on_arrival(e, all(abs(fold(a - b)) < tol for a, b in zip(target, joints(conn))), label):
+                worst, dt = float("nan"), float("nan")
+                break
             # Faster than the arm's configured joint limits allow: the controller refuses the duration BEFORE any
             # motion and says its minimum -- which is not stable (a 75 deg swing half: 1.69, then 1.93 s for the
             # re-sent one). Follow it, a few times, each at the minimum just reported + 5%
@@ -400,7 +413,7 @@ def goto(conn: KinovaConnection, target: Sequence[float], speed: float = 10.0, t
                 log.info("    %-24s (the arm's minimum for this move: %.2f s)", label, float(m.group(1)))
             ev.clear()
     runlog.event("goto", label=label, target=target, travel_deg=travel, seconds=dt, worst_tilt_deg=worst)
-    if verbose:
+    if verbose and dt == dt:                      # (nan: arrived on a braking step, already said)
         log.info("    %-24s ok  %6.1f deg in %4.1f s, worst tilt %.1f deg", label, travel, dt, worst)
 
 
@@ -430,9 +443,15 @@ def goto_cartesian(conn: KinovaConnection, xyz: Sequence[float], rpy: Sequence[f
         b = fb.base
         return math.dist((b.tool_pose_x, b.tool_pose_y, b.tool_pose_z), xyz) < tol_m
 
-    worst, dt = _watch(conn, label, arrived, joints(conn), max_tilt, torque_limit,
-                       max(20.0, 4.0 * dist / speed), ev, contact=contact)
+    try:
+        worst, dt = _watch(conn, label, arrived, joints(conn), max_tilt, torque_limit,
+                           max(20.0, 4.0 * dist / speed), ev, contact=contact)
+    except MoveError as e:
+        b = conn.base_cyclic.RefreshFeedback().base
+        if not _braked_on_arrival(e, math.dist((b.tool_pose_x, b.tool_pose_y, b.tool_pose_z), xyz) < tol_m, label):
+            raise
+        worst, dt = float("nan"), float("nan")
     runlog.event("goto_cartesian", label=label, target=list(xyz) + list(rpy), distance_m=dist, seconds=dt,
                  worst_tilt_deg=worst)
-    if verbose:
+    if verbose and dt == dt:
         log.info("    %-24s ok  %5.0f mm in %4.1f s, worst tilt %.1f deg", label, 1000 * dist, dt, worst)

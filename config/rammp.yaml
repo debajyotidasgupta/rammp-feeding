@@ -18,6 +18,9 @@ deployment:
     password: admin
     tcp_port: 10000
     udp_port: 10001
+    soft_limits:                # ON the arm (Kinova ControlConfig); `make limits` applies these, saving the old ones
+      joint_speed_dps: 70.0     # user, 2026-09-25 (was 40; hard limits 80 J1-J4, 70 J5-J7)
+      modes: [ANGULAR_TRAJECTORY, CARTESIAN_TRAJECTORY, CARTESIAN_WAYPOINT_TRAJECTORY]
   containers: {driver: tcp_rec, vision: kinova_vision}
   venvs: {detector: ~/venvs/la, face: ~/venvs/mp}
   runs_dir: ~/rammp_runs

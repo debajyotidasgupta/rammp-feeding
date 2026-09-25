@@ -15,6 +15,7 @@
 #
 #   make review    the latest session's timeline, numbers and contact sheets (RUN=<session or bite dir>)
 #   make locate-bowl   where the bowl and table are, from the latest perceive (to set config workspace:)
+#   make limits    the arm's own speed limits (APPLY=1: set them from config deployment.arm.soft_limits)
 #
 #   make capture   re-measure feeding_start from the parked arm (rarely: see README)
 #   make sdk / images / depth   build and run the containers
@@ -50,7 +51,7 @@ SDK        := $(HOME)/kortex_api_2.8.0_$(ARCHTAG)
 # sync.sh --delete and needs sudo to clear.
 INARM      := docker exec -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/work -w /work $(DRIVER) python3 -u -m
 
-.PHONY: sdk kortex vision images depth clean-depth status state start detect perceive over acquire deliver retract feed detector models models-stop capture review locate-bowl
+.PHONY: sdk kortex vision images depth clean-depth status state start detect perceive over acquire deliver retract feed detector models models-stop capture review locate-bowl limits
 
 # --- the arm ----------------------------------------------------------------
 # Every motion goes through kinova/scripts/safe_move.py: utensil kept pointing
@@ -121,6 +122,10 @@ feed:
 	@BITES=$(or $(BITES),99) feeding/feed.sh
 
 # The run record (feeding/lib.sh): every session in $(RUNS)/<date>_<what>/, the current bite at $(RUNS)/latest.
+# The arm's kinematic soft limits (on the arm): show, or apply config deployment.arm.soft_limits
+limits:
+	@$(INARM) kinova.scripts.arm_limits $(if $(APPLY),--apply,)
+
 review:
 	@PYTHONPATH=. $(FACE_PY) -m feeding.review "$(or $(RUN),$$(dirname $$(readlink -f $(RUNS)/latest)))" --write
 

@@ -213,6 +213,29 @@ def waypoint_list(raw: Sequence[float], path: Sequence[Sequence[float]], duratio
     return wl
 
 
+def arm_caps(conn: KinovaConnection) -> tuple[float, float]:
+    """The arm's own ANGULAR_TRAJECTORY soft limits (slowest joint): (joint speed deg/s, acceleration deg/s^2),
+    read once per connection; (inf, inf) if they cannot be read (the fake controller in the tests)."""
+    if not hasattr(conn, "_arm_caps"):
+        caps = (math.inf, math.inf)
+        try:
+            from kortex_api.autogen.client_stubs.ControlConfigClientRpc import ControlConfigClient
+            from kortex_api.autogen.messages import ControlConfig_pb2 as CC
+            for m in ControlConfigClient(conn._tcp_router).GetAllKinematicSoftLimits().kinematic_limits_list:
+                if m.control_mode == CC.ANGULAR_TRAJECTORY and list(m.joint_speed_limits):
+                    caps = (min(m.joint_speed_limits), min(m.joint_acceleration_limits or [math.inf]))
+        except Exception:  # noqa: BLE001 -- no ControlConfig (the fake), or a read error: no cap
+            pass
+        conn._arm_caps = caps
+    return conn._arm_caps
+
+
+def capped(conn: KinovaConnection, speed: float, accel: float = A_MAX) -> tuple[float, float]:
+    """speed and acceleration held just under the arm's soft limits: asking for more is refused, not clamped."""
+    v, a = arm_caps(conn)
+    return min(speed, 0.98 * v), min(accel, 0.98 * a)
+
+
 def validate(conn: KinovaConnection, wl: Base_pb2.WaypointList) -> list:
     """The controller's objections to a waypoint list (empty = it would run it)."""
     return list(conn.base.ValidateWaypointList(wl).trajectory_error_report.trajectory_error_elements)
@@ -230,8 +253,12 @@ def _waypoints(conn: KinovaConnection, path: Sequence[Sequence[float]], top_spee
     """The joint path as one WaypointList the controller has validated, and the speed it took; slower if
     refused. (`ramp` is kept for the callers; the time scaling now bounds acceleration itself.)"""
     raw = [x.position for x in conn.base_cyclic.RefreshFeedback().actuators]
+    asked = top_speed
+    top_speed, amax = capped(conn, top_speed)
+    if top_speed < asked:
+        log.info("    %-26s %.0f deg/s asked, the arm's limit allows %.0f", what, asked, top_speed)
     for speed in [top_speed * f for f in SPEED_FALLBACKS]:
-        wl = waypoint_list(raw, path, _time_scale(path, speed, A_MAX * (speed / top_speed)))
+        wl = waypoint_list(raw, path, _time_scale(path, speed, amax * (speed / top_speed)))
         errs = validate(conn, wl)
         if not errs:
             record_plan(what, wl, speed_dps=speed, top_speed_dps=top_speed)

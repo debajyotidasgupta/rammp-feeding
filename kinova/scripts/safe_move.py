@@ -376,7 +376,10 @@ def goto(conn: KinovaConnection, target: Sequence[float], speed: float = 10.0, t
     # J2+J4+J6 linearly between its endpoints. Under a per-joint speed limit a
     # short-travel joint finishes early and the sum wanders.
     rj.constraint.type = Base_pb2.JOINT_CONSTRAINT_DURATION
-    rj.constraint.value = max(float(cfg.motion.goto_min_s), travel / speed + float(cfg.motion.goto_pad_s))
+    from kinova.motion import capped              # (motion imports this module)
+    v, acc = capped(conn, speed, math.inf)        # under the arm's own limits: faster is refused, not clamped
+    ramp = v / acc if math.isfinite(acc) else 0.0  # the time the arm's acceleration limit needs to reach v
+    rj.constraint.value = max(float(cfg.motion.goto_min_s), travel / v + max(float(cfg.motion.goto_pad_s), ramp))
     tries = int(cfg.motion.goto_duration_retries) + 1
     for attempt in range(1, tries + 1):
         conn.base.ExecuteAction(a)

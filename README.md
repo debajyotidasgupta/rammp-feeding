@@ -108,6 +108,15 @@ its reason, and writes a contact sheet: every image of the bite plus a torque pl
 against its threshold. Recording never raises and never slows a move; without RAMMP_RECORD (a module run by
 hand, the tests) everything still logs to the console and nothing is written.
 
+## The colour stream (`feeding/colour_stream.py`, in the face server)
+
+The face server (`make models`) keeps the wrist camera's colour stream open: the open-mouth wait reads frames as
+they arrive (no ~1.6 s stream set-up per look, no stale frames) and `grab_frame` gets a fresh JPEG from it in
+~0.05 s (`GET :8766/frame`; `GET :8766/stream` = its status). Every dropout -- a gap over 0.5 s, a lost stream, a
+reconnect -- goes to `~/rammp_runs/colour_stream.jsonl` (on 2026-09-25 the camera stopped delivering colour for
+over a minute with its RTSP server still answering). Each wait also records its frames' ages and a snapshot
+every 0.5 s (`look_N/wait_frames/`).
+
 ## Tests (no arm needed)
 
 ```

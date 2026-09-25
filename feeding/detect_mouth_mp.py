@@ -61,26 +61,42 @@ def opening(L) -> float:
     return float(np.linalg.norm(L[13] - L[14]) / max(1e-6, np.linalg.norm(L[61] - L[291])))
 
 
-def wait_open(D: Path, timeout: float, det=None) -> int:
-    """Watch the colour stream; save the first frame after the mouth has been open OPEN_HOLD_S."""
-    import cv2
+def wait_open(D: Path, timeout: float, det=None, stream=None) -> int:
+    """Watch the colour stream; save the first frame after the mouth has been open OPEN_HOLD_S.
+    stream: the resident ColourStream (the face server's) -- only frames arriving after the wait starts are used;
+    without one, the stream is opened here (~1.6 s)."""
     own = det is None
-    t_call = time.time()
-    det = det or landmarker(); cap = cv2.VideoCapture(RTSP)
+    det = det or landmarker()
     try:
-        return _wait(det, cap, D, timeout, open_s=time.time() - t_call)
+        if stream is not None:
+            last = [stream.n]
+
+            def read():
+                got = stream.frame_after(last[0], 1.0)
+                if got is None:
+                    return False, None, None
+                last[0] = got[0]
+                return True, got[2], round(time.time() - got[1], 3)      # the frame's age when read
+            return _wait(det, read, D, timeout, open_s=0.0, source="resident stream")
+        import cv2
+        t_call = time.time()
+        cap = cv2.VideoCapture(RTSP)
+        try:
+            return _wait(det, lambda: (*cap.read(), round(float(cap.get(cv2.CAP_PROP_POS_MSEC)), 1)), D, timeout,
+                         open_s=time.time() - t_call, source="rtsp opened for the wait")
+        finally:
+            cap.release()
     finally:
-        cap.release()
         if own:
             det.close()
 
 
-def _wait(det, cap, D, timeout, open_s=0.0):
+def _wait(det, read, D, timeout, open_s=0.0, source=""):
     """The open-mouth wait. Records, to tell "declined" from "face not seen" from "the stream is late":
     open_wait.json -- per frame: the time read (s from the wait's start), the stream's own timestamp (ms), the
-    opening, whether a face was found; and how long the stream took to open. wait_frames/ -- a small upright
+    opening, whether a face was found; and how long the stream took to open. read() -> (ok, BGR, stamp): the
+    stamp is the frame's age when read (resident stream) or the stream's own timestamp. wait_frames/ -- a small upright
     snapshot every 0.5 s, its opening in the name. open_wait_last.jpg -- the last frame, if never opened."""
-    import cv2
     t0 = time.time(); since = None; last = -1.0; trace = []; rgb = None; snap_t = -1.0
     frames_dir = D / "wait_frames"
     frames_dir.mkdir(exist_ok=True)
@@ -88,25 +104,25 @@ def _wait(det, cap, D, timeout, open_s=0.0):
     def record(result):
         try:
             (D / "open_wait.json").write_text(json.dumps(dict(result=result, threshold=OPEN_RATIO, hold_s=OPEN_HOLD_S,
-                                                              stream_open_s=round(open_s, 3),
+                                                              stream_open_s=round(open_s, 3), source=source,
                                                               t=[r[0] for r in trace], opening=[r[1] for r in trace],
                                                               face=[r[2] for r in trace],
-                                                              stream_ms=[r[3] for r in trace])))
+                                                              frame_stamp=[r[3] for r in trace])))
             if result != "open" and rgb is not None:
                 Image.fromarray(rgb).save(D / "open_wait_last.jpg")
         except Exception:  # noqa: BLE001 -- a debug record
             pass
-    print("    waiting up to %.0f s for an open mouth (opening > %.2f for %.1f s; stream opened in %.1f s)"
-          % (timeout, OPEN_RATIO, OPEN_HOLD_S, open_s))
+    print("    waiting up to %.0f s for an open mouth (opening > %.2f for %.1f s; %s%s)"
+          % (timeout, OPEN_RATIO, OPEN_HOLD_S, source, ", opened in %.1f s" % open_s if open_s else ""))
     while time.time() - t0 < timeout:
-        ok, bgr = cap.read()
+        ok, bgr, stamp = read()
         if not ok:
             time.sleep(0.05); continue
         rgb = bgr[:, :, ::-1]
         L, _ = landmarks(det, np.rot90(rgb, -1))            # == PIL ROTATE_270 (90 deg clockwise)
         o = opening(L) if L is not None else 0.0
         now = time.time() - t0
-        trace.append((round(now, 3), round(o, 4), L is not None, round(float(cap.get(cv2.CAP_PROP_POS_MSEC)), 1)))
+        trace.append((round(now, 3), round(o, 4), L is not None, stamp))
         if now - snap_t >= 0.5:
             snap_t = now
             try:
@@ -244,9 +260,12 @@ def _via_server(D: Path, wait: float):
 
 
 def serve() -> int:
-    """Keep the face landmarker loaded (make models): /detect and /wait_open, as the CLI does."""
+    """Keep the face landmarker loaded and the colour stream open (make models): POST /detect and /wait_open, as
+    the CLI does; GET /frame -> a fresh JPEG (feeding/grab_frame.py); GET /stream -> the stream's status."""
     import contextlib, io
     from http.server import BaseHTTPRequestHandler, HTTPServer
+    from feeding.colour_stream import ColourStream
+    stream = ColourStream()
     det = landmarker()
     shots = sorted(Path.home().glob("rammp_runs/deliver_*/colour.jpg"))
     if shots:                                  # warm-up
@@ -259,6 +278,19 @@ def serve() -> int:
             pass
 
         def do_GET(self):
+            if self.path.startswith("/frame"):
+                import cv2
+                got = stream.fresh(3.0)
+                if got is None:
+                    self.send_response(503); self.end_headers(); self.wfile.write(b"no fresh colour frame in 3 s")
+                    return
+                ok, jpg = cv2.imencode(".jpg", got[2], [cv2.IMWRITE_JPEG_QUALITY, 95])
+                self.send_response(200); self.send_header("X-Frame-Age", "%.3f" % (time.time() - got[1]))
+                self.end_headers(); self.wfile.write(jpg.tobytes())
+                return
+            if self.path.startswith("/stream"):
+                self.send_response(200); self.end_headers(); self.wfile.write(json.dumps(stream.status()).encode())
+                return
             self.send_response(200); self.end_headers(); self.wfile.write(b"ok")
 
         def do_POST(self):
@@ -266,7 +298,7 @@ def serve() -> int:
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
                 try:
-                    rc = wait_open(Path(q["run_dir"]), q["timeout"], det) if self.path == "/wait_open" \
+                    rc = wait_open(Path(q["run_dir"]), q["timeout"], det, stream) if self.path == "/wait_open" \
                         else detect(Path(q["run_dir"]), det)
                 except Exception as e:  # noqa: BLE001
                     print("face server error: %s" % e); rc = 1

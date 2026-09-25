@@ -160,6 +160,9 @@ perception:
   bowl_crop_margin_px: 20
   depth_frames: 15              # per-pixel median over this many fresh frames
   depth_fresh_wait_s: 3.0       # the depth server waits this long for fresh frames per try ...
+  colour_stream:                # the resident colour reader (feeding/colour_stream.py, in the face server)
+    gap_s: 0.5                  # no frame for this long = a gap, logged to runs_dir/colour_stream.jsonl
+    reconnect_after_s: 3.0      # no frame for this long = reopen the stream
   depth_tries: 3                # ... this many times, before the caller falls back (the stream drops and recovers
                                 # in < 1 s; a single 10 s wait cost bite 2 of 2026-09-25 16 s)
   food_half_width_m: 0.017      # the floor ring beside the food (half a strawberry)

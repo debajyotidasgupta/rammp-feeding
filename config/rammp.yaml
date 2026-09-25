@@ -67,6 +67,8 @@ motion:
   settle_dps: 10.0              # the final settle / snap onto a measured pose (x2, was 5)
   goto_pad_s: 0.3               # a joint move's duration = travel / speed + this (the ramp at each end), at least
   goto_min_s: 0.8               # this. Was 1.0 / 1.5 s: at 65 deg/s the pad was a third of every swing
+  goto_duration_retries: 3      # refused as faster than the arm's joint limits: re-sent at the controller's
+                                # stated minimum (+5%), up to this many times
   max_joint_step_deg: 8         # a continuous IK path: a bigger step on any joint is a jump, not a path
   steer_within_deg: 25          # paths steer J2 / J4 / J6 away from a limit once within this of it ...
   steer_step_deg: 3.0           # ... by this much of IK guess per step

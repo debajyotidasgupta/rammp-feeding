@@ -377,7 +377,8 @@ def goto(conn: KinovaConnection, target: Sequence[float], speed: float = 10.0, t
     # short-travel joint finishes early and the sum wanders.
     rj.constraint.type = Base_pb2.JOINT_CONSTRAINT_DURATION
     rj.constraint.value = max(float(cfg.motion.goto_min_s), travel / speed + float(cfg.motion.goto_pad_s))
-    for attempt in (1, 2):
+    tries = int(cfg.motion.goto_duration_retries) + 1
+    for attempt in range(1, tries + 1):
         conn.base.ExecuteAction(a)
         try:
             worst, dt = _watch(conn, label,
@@ -386,11 +387,12 @@ def goto(conn: KinovaConnection, target: Sequence[float], speed: float = 10.0, t
             break
         except MoveError as e:
             # Faster than the arm's configured joint limits allow: the controller refuses the duration BEFORE any
-            # motion and says its minimum -- run at that (the fastest this arm permits), once
+            # motion and says its minimum -- which is not stable (a 75 deg swing half: 1.69, then 1.93 s for the
+            # re-sent one). Follow it, a few times, each at the minimum just reported + 5%
             m = re.search(r"INVALID_DURATION on index \d+ \(value [\d.]+, allowed ([\d.]+)\.\.", str(e))
-            if attempt == 2 or not m or max(abs(fold(t - c)) for t, c in zip(q0, joints(conn))) > 0.05:
+            if attempt == tries or not m or max(abs(fold(t - c)) for t, c in zip(q0, joints(conn))) > 0.05:
                 raise
-            rj.constraint.value = 1.02 * float(m.group(1))
+            rj.constraint.value = 1.05 * float(m.group(1))
             if verbose:
                 log.info("    %-24s (the arm's minimum for this move: %.2f s)", label, float(m.group(1)))
             ev.clear()

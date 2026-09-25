@@ -19,6 +19,7 @@ source feeding/lib.sh
 session_begin perceive
 [ -n "${RAMMP_BITE:-}" ] || bite_begin       # make feed starts each bite; on its own, perceive starts one
 stage_begin perceive
+STILL_SINCE=$(date +%s.%N)                   # the arm is at rest at food_detect_start from here: depth after this counts
 OUT="${1:-$STAGE_DIR}"
 ARM_IP="${ARM_IP:-$(S deployment.arm.ip)}"
 mkdir -p "$OUT"
@@ -49,7 +50,7 @@ if ! PYTHONPATH=. "$MPY" -m feeding.grab_frame "$OUT/colour.jpg" 2>/dev/null; th
   cp "$(ls /tmp/s1_*.jpg | tail -1)" "$OUT/colour.jpg"; rm -f /tmp/s1_*.jpg
 fi
 # the resident depth server (make models): fresh frames in ~0.5 s; else start a probe (~5 s)
-if ! PYTHONPATH=. "$PY" -m feeding.depth_grab "$OUT/depth.npy" --frames "$FRAMES" | sed -u 's/^/      /'; then
+if ! PYTHONPATH=. "$PY" -m feeding.depth_grab "$OUT/depth.npy" --frames "$FRAMES" --since "$STILL_SINCE" | sed -u 's/^/      /'; then
   docker cp feeding/depth_probe.py "$VISION":/tmp/depth_probe.py >/dev/null
   docker exec "$VISION" bash -lc "source /opt/ros/humble/setup.bash; \
     source /ros2_ws/install/setup.bash; cd /tmp && python3 depth_probe.py --out /tmp/s1_depth --frames $FRAMES" \

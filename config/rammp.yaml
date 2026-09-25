@@ -65,6 +65,8 @@ motion:
   controller_accel_factor: 1.6  # the controller interpolates waypoints more sharply than the time scaling's own
                                 # estimate: it measured 1.55-1.56x (115 vs 72, 84 vs 54 deg/s^2, 2026-09-25) and
                                 # refused -- then every retry halved the move. Plan with the cap / this
+  accel_retries: 4              # still refused on acceleration: rescale it by the controller's own measured /
+                                # limit ratio and validate again at the same speed, up to this many times
   joint_limits_deg: {2: 128.9, 4: 147.8, 6: 120.3}   # J2 / J4 / J6; the others are continuous
   joint_limit_margin_deg: 0.3   # a target this close to a limit is refused (Kortex silently ignores it)
   plan_min_margin_deg: 3.0      # planned paths keep at least this from every limit
@@ -166,6 +168,8 @@ perception:
   colour_stream:                # the resident colour reader (feeding/colour_stream.py, in the face server)
     gap_s: 0.5                  # no frame for this long = a gap, logged to runs_dir/colour_stream.jsonl
     reconnect_after_s: 3.0      # no frame for this long = reopen the stream
+  depth_min_frames: 5           # the stream dropped out: a median of at least this many frames buffered since the
+                                # arm stopped will do (the server keeps 5 s)
   depth_tries: 3                # ... this many times, before the caller falls back (the stream drops and recovers
                                 # in < 1 s; a single 10 s wait cost bite 2 of 2026-09-25 16 s)
   food_half_width_m: 0.017      # the floor ring beside the food (half a strawberry)

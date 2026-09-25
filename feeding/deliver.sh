@@ -36,8 +36,8 @@ capture_colour() {   # $1 = run dir: one colour frame, ~1 s
     ! multifilesink location=/tmp/dl_%03d.jpg >/dev/null 2>&1 || true
   cp "$(ls /tmp/dl_*.jpg | tail -1)" "$1/colour.jpg"; rm -f /tmp/dl_*.jpg
 }
-capture_depth() {    # $1 = run dir: 20-frame median depth
-  if ! PYTHONPATH=. "$PY" -m feeding.depth_grab "$1/depth.npy" >/dev/null 2>&1; then     # resident: ~0.5 s
+capture_depth() {    # $1 = run dir: 20-frame median depth, from frames since the arm stopped ($STILL_SINCE)
+  if ! PYTHONPATH=. "$PY" -m feeding.depth_grab "$1/depth.npy" --since "${STILL_SINCE:-$(date +%s.%N)}" >/dev/null 2>&1; then     # resident: ~0.5 s
     docker cp feeding/depth_probe.py "$VISION":/tmp/depth_probe.py >/dev/null
     docker exec "$VISION" bash -lc "source /opt/ros/humble/setup.bash; source /ros2_ws/install/setup.bash; \
       cd /tmp && python3 depth_probe.py --out /tmp/dl_depth --frames $FRAMES" >/dev/null 2>&1
@@ -59,7 +59,7 @@ detect_face() {      # $1 = run dir: MediaPipe, else LocateAnything
 }
 
 if run swing; then
-  echo "$(date +%T) [1/4] SWING to the user"; arm swing $VO
+  echo "$(date +%T) [1/4] SWING to the user"; arm swing $VO; STILL_SINCE=$(date +%s.%N)
   [ -n "$VALIDATE" ] && { echo; echo "validate-only: the swing was checked; present needs the arm there"; exit 0; }
   stop_here swing
 fi
@@ -88,6 +88,7 @@ if run present; then
     [ -n "$VALIDATE" ] && { echo "    validate-only: would sidestep -Y 50 mm and look again"; exit 0; }
     [ "$SHIFT" = 100 ] && { echo "mouth not found after sidestepping 100 mm"; exit 1; }
     arm sidestep                    # delivery.sidestep_m
+    STILL_SINCE=$(date +%s.%N)
   done
   echo "    detection: $D"
   [ -n "$VALIDATE" ] && exit 0

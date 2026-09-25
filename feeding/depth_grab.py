@@ -16,11 +16,14 @@ import numpy as np
 from settings import cfg
 
 
-def fetch(frames: int) -> np.ndarray | None:
-    """A median of fresh frames from the resident depth server: short waits, a few tries (the stream drops and
-    recovers in under a second), None if it never answers."""
+def fetch(frames: int, since: float | None = None) -> np.ndarray | None:
+    """A median of fresh frames from the resident depth server: frames that arrived after `since` (unix time:
+    when the arm stopped -- then frames buffered before a stream dropout still count; default: now), short
+    waits, a few tries, None if it never answers."""
     wait, tries = float(cfg.perception.depth_fresh_wait_s), int(cfg.perception.depth_tries)
-    url = "http://127.0.0.1:%d/median?frames=%d&wait=%.1f" % (int(cfg.deployment.servers.depth_port), frames, wait)
+    since = time.time() if since is None else since
+    url = "http://127.0.0.1:%d/median?frames=%d&wait=%.1f&since=%.3f&min=%d" % (
+        int(cfg.deployment.servers.depth_port), frames, wait, since, int(cfg.perception.depth_min_frames))
     for k in range(tries):
         try:
             with urllib.request.urlopen(url, timeout=wait + 5) as r:
@@ -33,8 +36,9 @@ def fetch(frames: int) -> np.ndarray | None:
 def main() -> int:
     ap = argparse.ArgumentParser(); ap.add_argument("out")
     ap.add_argument("--frames", type=int, default=int(cfg.perception.depth_frames))
+    ap.add_argument("--since", type=float, help="unix time the arm stopped: frames after it count (default: now)")
     a = ap.parse_args(); t0 = time.time()
-    d = fetch(a.frames)
+    d = fetch(a.frames, a.since)
     if d is None:
         return 1
     np.save(a.out, d)

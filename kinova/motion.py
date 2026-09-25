@@ -37,6 +37,7 @@ STEER_STEP = float(cfg.motion.steer_step_deg)
 SPEED_FALLBACKS = [float(f) for f in cfg.motion.speed_fallbacks]   # refused: retry at these fractions
 WATCH_EXTRA_S = float(cfg.motion.watch_extra_s)       # stop watching this long after the planned end
 ACCEL_FACTOR = float(cfg.motion.controller_accel_factor)   # the controller sees this much more acceleration
+ACCEL_RETRIES = int(cfg.motion.accel_retries)         # refused on acceleration: rescale it by the controller's ratio
 
 PoseAt = Callable[[float], "tuple[np.ndarray, np.ndarray]"]   # s in [0, 1] -> (tool xyz, R)
 
@@ -260,12 +261,22 @@ def _waypoints(conn: KinovaConnection, path: Sequence[Sequence[float]], top_spee
     if top_speed < asked:
         log.info("    %-26s %.0f deg/s asked, the arm's limit allows %.0f", what, asked, top_speed)
     for speed in [top_speed * f for f in SPEED_FALLBACKS]:
-        wl = waypoint_list(raw, path, _time_scale(path, speed, amax * (speed / top_speed)))
-        errs = validate(conn, wl)
-        if not errs:
-            record_plan(what, wl, speed_dps=speed, top_speed_dps=top_speed)
-            return wl, speed
-        log.info("    %.0f deg/s refused by the controller: %s", speed, " ".join(str(errs[0]).split()))
+        a_try = amax * (speed / top_speed)
+        for _ in range(ACCEL_RETRIES + 1):
+            wl = waypoint_list(raw, path, _time_scale(path, speed, a_try))
+            errs = validate(conn, wl)
+            if not errs:
+                record_plan(what, wl, speed_dps=speed, top_speed_dps=top_speed, accel_dps2=a_try)
+                return wl, speed
+            e = errs[0]
+            # Refused on acceleration: the controller says what it measured and its limit -- rescale only the
+            # acceleration by that and ask again at the SAME speed (a fixed factor was not enough for every path:
+            # the retract's measured 93-97 vs 80 with 1.6, 2026-09-25). Anything else: the next, slower speed.
+            if getattr(e, "error_type", None) != Base_pb2.TRAJECTORY_ERROR_TYPE_INVALID_JOINT_ACCELERATION \
+                    or not getattr(e, "error_value", 0) > 0:
+                break
+            a_try *= 0.95 * e.max_value / e.error_value
+        log.info("    %.0f deg/s refused by the controller: %s", speed, " ".join(str(e).split()))
     raise MoveError("controller refused the %s even at %.0f deg/s -- nothing moved" % (what, top_speed * SPEED_FALLBACKS[-1]))
 
 

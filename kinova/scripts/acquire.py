@@ -405,8 +405,8 @@ def pick(conn: KinovaConnection, target_path: str, under_path: str, floor_m: flo
     from feeding.depth_grab import fetch
     from feeding.measure_under import measure
     over(conn, target_path)
-    t = time.time()
-    d = fetch(int(cfg.perception.depth_frames))
+    t = time.time()                                  # the arm has stopped at OVER: frames from now on count
+    d = fetch(int(cfg.perception.depth_frames), since=t)
     if d is None:
         raise DepthUnavailable("depth server: no fresh frames after %d tries" % int(cfg.perception.depth_tries))
     runlog.save_arrays("depth_at_over", depth_mm=d)

@@ -3,7 +3,11 @@
 
 Runs INSIDE the kinova_vision container (rclpy), host network, port 8767:
 
-    GET /median?frames=15&wait=3  -> .npy bytes (uint16 mm, 0 = no return): the median of the next 15 frames
+    GET /median?frames=15&wait=3&since=T&min=5  -> .npy bytes (uint16 mm, 0 = no return): the median of the first
+                               15 frames that arrived after unix time T (default: this request) -- T = when the arm
+                               stopped, so frames buffered before a stream dropout still count; after `wait` s, the
+                               median of what there is if at least `min` frames, else 503.
+    (was: the next 15 frames
                                   that ARRIVE AFTER the request -- never frames from before the arm stopped
     GET /ping                  -> ok
 
@@ -25,7 +29,7 @@ import numpy as np
 
 PORT = 8767                            # --port / --topic: `make models` passes them from config/
 TOPIC = "/camera/depth/image_raw"
-BUF = deque(maxlen=60)                 # (arrival time, frame)
+BUF = deque(maxlen=150)                # (arrival time, frame): 5 s at 30 Hz
 LOCK = threading.Lock()
 
 
@@ -72,13 +76,14 @@ def main() -> int:
                 return
             q = parse_qs(u.query)
             n = int(q.get("frames", ["15"])[0]); wait = float(q.get("wait", ["10"])[0]); t_req = time.time()
+            since = float(q.get("since", [t_req])[0]); least = int(q.get("min", [n])[0])
             while time.time() - t_req < wait:
                 with LOCK:
-                    fresh = [f for t, f in BUF if t > t_req]
+                    fresh = [f for t, f in BUF if t > since]
                 if len(fresh) >= n:
                     break
                 time.sleep(0.02)
-            if not fresh:
+            if len(fresh) < max(1, least):
                 self.send_response(503); self.end_headers(); self.wfile.write(b"no fresh frames"); return
             b = io.BytesIO(); np.save(b, median(fresh[:n]))
             self.send_response(200); self.end_headers(); self.wfile.write(b.getvalue())

@@ -173,6 +173,8 @@ perception:
   depth_tries: 3                # ... this many times, before the caller falls back (the stream drops and recovers
                                 # in < 1 s; a single 10 s wait cost bite 2 of 2026-09-25 16 s)
   food_half_width_m: 0.017      # the floor ring beside the food (half a strawberry)
+  aim_top_surface: true         # aim at the uppermost piece's top inside the chosen box, not the box centre
+  top_band_mm: 6.0              # its top = depth pixels within this of the box's nearest point
 
 delivery:
   lift_m: 0.175                 # above the scoop end, before the swing (60 mm touched the bowl)

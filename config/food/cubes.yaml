@@ -3,7 +3,8 @@
 # A different food: copy this file, set what differs, select it in rammp.yaml (profiles.food) or RAMMP_FOOD=<name>.
 
 name: cubes
-prompt: food pieces             # what the detector is asked for
+prompt: fruit cube              # what the detector is asked for. "food pieces" drew container-sized and merged
+                                # boxes on packed cubes; "fruit cube" one per piece, same 1.1 s (2026-09-25)
 aim_offset_base_m: [0.0, 0.0]   # (x, y) base frame, added (with the utensil's tine offset) to the detected centre
                                 # in OVER. A cube is about as wide
                                 # as the fork head (~22 mm): aim at its centre (2026-09-25: the strawberry offset

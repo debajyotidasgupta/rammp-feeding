@@ -67,6 +67,31 @@ def to_colour(u, v, z_m, cx, cy):
     return FXC * X / Z + cx, FYC * Y / Z + cy, Z
 
 
+def top_surface_aim(D, f, cx, cy):
+    """The centre of the uppermost piece's top inside a food box: the depth pixels within
+    perception.top_band_mm of the box's nearest point, their largest connected patch -- a box that spans two
+    pieces, or a seam, still aims at one piece's top (2026-09-25: a merged box's centre sent the fork into the
+    gap between a piece and a grape). None if the box has too little depth."""
+    from scipy.ndimage import label
+    H, W = D.shape
+    a = colour_to_depth(f["x1"], f["y1"], 0.40, cx, cy)
+    b = colour_to_depth(f["x2"], f["y2"], 0.40, cx, cy)
+    u0, u1 = sorted((int(round(a[0])), int(round(b[0]))))
+    v0, v1 = sorted((int(round(a[1])), int(round(b[1]))))
+    u0, v0, u1, v1 = max(0, u0), max(0, v0), min(W, u1 + 1), min(H, v1 + 1)
+    win = D[v0:v1, u0:u1]
+    if (win > 0).sum() < 20:
+        return None
+    top = float(np.percentile(win[win > 0], 3))
+    lab, n = label((win > 0) & (win <= top + float(cfg.perception.top_band_mm)))
+    if n == 0:
+        return None
+    k = 1 + int(np.argmax(np.bincount(lab.ravel())[1:]))
+    ys, xs = np.nonzero(lab == k)
+    u, v, _ = to_colour(u0 + xs.mean(), v0 + ys.mean(), (top + 8.0) / 1000.0, cx, cy)
+    return float(u), float(v)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--det", required=True)
@@ -125,6 +150,8 @@ def main() -> int:
         near = (win > 0) & (win <= top + 3) & (rr <= r_out)
         pu, pv = float(xx[near].mean()), float(yy[near].mean())
         f["_depth"] = dict(top=top, floor=floor_here, u=pu, v=pv)
+        if cfg.perception.aim_top_surface:
+            f["_aim"] = top_surface_aim(D, f, cx, cy)
         tag = "  (partly hidden)" if f["_occluded"] else ""
         print("  berry at (%4.0f,%4.0f)  top %.0f mm  floor beside it %.0f mm  height %.0f mm%s"
               % (f["cx"], f["cy"], top, floor_here, floor_here - top, tag))
@@ -194,6 +221,11 @@ def main() -> int:
     visible = [r for r in rows if not r[1].get("_occluded")]
     pick = min(visible or rows, key=lambda r: r[6])   # most central visible: most rim clearance
     i, f, zb, _, _, _, _ = pick
+    au, av = f.get("_aim") or (f["cx"], f["cy"])
+    if f.get("_aim"):
+        print("  aim: the top of the piece at (%.0f, %.0f), %.0f px from the box centre (%.0f, %.0f)"
+              % (au, av, np.hypot(au - f["cx"], av - f["cy"]), f["cx"], f["cy"]))
+        f = dict(f, cx=au, cy=av)
     # The tip's vertical line projects through the image of TRUE VERTICAL, not
     # through the optical centre -- measured, see config/camera/<name>.yaml (colour.vertical_vp).
     pp = VP

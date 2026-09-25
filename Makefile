@@ -13,6 +13,9 @@
 #   make retract   back from the user to food_detect_start
 #   make feed      the loop: bite after bite until the bowl is empty or the user declines (BITES=1: one)
 #
+#   make review    the latest session's timeline, numbers and contact sheets (RUN=<session or bite dir>)
+#   make locate-bowl   where the bowl and table are, from the latest perceive (to set config workspace:)
+#
 #   make capture   re-measure feeding_start from the parked arm (rarely: see README)
 #   make sdk / images / depth   build and run the containers
 SHELL      := /bin/bash
@@ -46,7 +49,7 @@ SDK        := $(HOME)/kortex_api_2.8.0_$(ARCHTAG)
 # sync.sh --delete and needs sudo to clear.
 INARM      := docker exec -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/work -w /work $(DRIVER) python3 -u -m
 
-.PHONY: sdk kortex vision images depth clean-depth status state start detect perceive over acquire deliver retract feed detector models models-stop capture
+.PHONY: sdk kortex vision images depth clean-depth status state start detect perceive over acquire deliver retract feed detector models models-stop capture review locate-bowl
 
 # --- the arm ----------------------------------------------------------------
 # Every motion goes through kinova/scripts/safe_move.py: utensil kept pointing
@@ -63,7 +66,7 @@ detect:
 	@$(INARM) kinova.scripts.sequence detect
 
 # Runs on the jetson HOST (it drives both containers and the GPU venv). Results
-# go to ~/rammp_runs/<timestamp>/, outside the synced tree. STAGE1_DA3=1 adds
+# go to the run record (~/rammp_runs/<session>/bite_NN/perceive/), outside the synced tree. STAGE1_DA3=1 adds
 # the optional Depth Anything 3 cross-check.
 perceive:
 	@feeding/stage1.sh
@@ -91,7 +94,7 @@ models-stop:
 	@pkill -f "[d]etect_mouth_mp --serve" && echo "face server stopped" || true
 	@docker exec $(VISION) pkill -f "[d]epth_server.py" && echo "depth server stopped" || true
 
-# Acquisition, one verified step at a time. Uses the latest make perceive run.
+# Acquisition, one verified step at a time. Uses the current bite ($(RUNS)/latest: the latest make perceive).
 over:
 	@STOP_AFTER=over feeding/acquire.sh
 
@@ -114,6 +117,13 @@ retract:
 # their mouth; then back to feeding_start. BITES=1 for a single test run.
 feed:
 	@BITES=$(or $(BITES),99) feeding/feed.sh
+
+# The run record (feeding/lib.sh): every session in $(RUNS)/<date>_<what>/, the current bite at $(RUNS)/latest.
+review:
+	@PYTHONPATH=. $(FACE_PY) -m feeding.review "$(or $(RUN),$$(dirname $$(readlink -f $(RUNS)/latest)))" --write
+
+locate-bowl:
+	@PYTHONPATH=. $(DETECT_PY) -m feeding.locate_bowl "$(or $(RUN),$$(readlink -f $(RUNS)/latest)/perceive)"
 
 capture:
 	@$(INARM) kinova.scripts.capture_home --out /work/calibration/home_pose.json

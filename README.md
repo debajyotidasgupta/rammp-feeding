@@ -23,6 +23,9 @@ make deliver     swing -> present -> bite -> retract   (from the end of the scoo
 make retract     back from the user to food_detect_start
 make feed        the whole loop from feeding_start: bite after bite until the bowl is empty or the
                  user does not open their mouth, then back to feeding_start (BITES=1: one bite)
+
+make review      the latest session: timeline, key numbers, contact sheet per bite (RUN=<session|bite>)
+make locate-bowl where the bowl and the table are, from the latest perceive (to set `workspace:`)
 ```
 
 Frozen 2026-09-24 (tag `acquire-v1`): two consecutive full runs, fork on strawberries, both picked up and held ("the most perfect scoop"). Run to run: OVER 82/81 mm, punch 45.3/44.3 mm down, scoop 6.3/6.2 s, rise 164.5/163.8 mm, 1.0/1.0 mm off vertical.
@@ -36,8 +39,25 @@ config/rammp.yaml             deployment (arm IP, containers, venvs, ports, mode
                               motion limits, contact-guard thresholds, acquisition / perception / delivery tunables
 config/camera/<name>.yaml     intrinsics, depth->colour extrinsic, depth scale/offset correction, camera-in-tool, streams
 config/utensil/<name>.yaml    camera-to-tip, tip pixel, image region, aim offset, punch margin
-config/bowl/<name>.yaml       the overlook pose over it, where the scoop ends, where the swing may start
+config/bowl/<name>.yaml       the overlook pose over it, where the scoop ends, where the swing may start, and
+                              `captured_at`: where the table and bowl were when those poses were captured
 config/local.yaml             per-machine overrides (not committed; same keys as rammp.yaml)
+```
+
+**The table and the bowl can move** (`rammp.yaml: workspace`, `kinova/scene.py`). `workspace.table_height_m`
+and `workspace.bowl_centre_m` say where they are now; every bowl-dependent pose -- food_detect_start, the scoop
+end, the retract's descent -- is the captured one shifted by the difference from the bowl profile's
+`captured_at`, with the camera's orientation and height above the bowl unchanged (so every orientation-only
+calibration still holds). Unshifted, the captured joints are used exactly; shifted, food_detect_start's joints
+come from the controller's IK seeded with them, and a shift that would need a different arm shape, come near a
+joint limit, or is out of reach is refused **before anything moves** -- re-capture the pose there. Heights that
+depend on the table are table-relative: the retract's lowest utensil tip (86 mm above it) and the lift's
+clearance over it (250 mm). Measured 2026-09-24 at this overlook (`make locate-bowl`, three runs, +-2 mm): bowl
+centre (0.2692, 0.2765), floor z 0.221, table z 0.214 beside the bowl.
+
+```
+make perceive && make locate-bowl                     # where they are, and the YAML to paste if they moved
+RAMMP_SET="workspace.bowl_centre_m=[0.29, 0.27]" make feed    # or put it in config/local.yaml
 ```
 
 Later wins: `rammp.yaml` < the selected profiles < `local.yaml` < `RAMMP_SET`. Profiles are chosen in
@@ -52,10 +72,55 @@ python3 -m settings dump                              # the merged result
 ```
 
 Python reads it as `from settings import cfg` (`cfg.delivery.bite_n`, `cfg.get("motion.joint_limits_deg.2")`).
-Shared pieces: `feeding/camera.py` (intrinsics, depth correction, colour<->depth pixel mapping) and
-`kinova/motion.py` (IK, time scaling, homotopy, guarded trajectory execution) -- stages import these rather than
-re-defining them. `tests/regress.sh check` (perception on saved runs) and `tests/arm_values.py` (every arm-side
-value) confirm a refactor changes no number.
+Shared pieces: `feeding/camera.py` (intrinsics, depth correction, colour<->depth pixel mapping),
+`kinova/motion.py` (IK, time scaling, homotopy, validated and watched trajectories), `kinova/scene.py` (the
+table and bowl) and `runlog.py` (logging and the run record) -- stages import these rather than re-defining them.
+
+## The run record (`feeding/lib.sh`, `runlog.py`, `make review`)
+
+Every run leaves everything needed to debug it afterwards, without re-running anything:
+
+```
+~/rammp_runs/<date>_<what>/          a session (make feed; or a stage run on its own)
+  session.json  config.yaml          when, host, git commit + dirty files, profiles, workspace; the merged config
+  console.log                        everything printed, each line timestamped (ms)
+  events.jsonl                       stage start / end, exit codes, durations, bite results
+  moves/arm/                         detect / home: telemetry per move
+  bite_01/perceive/                  colour, depth (+ .png), the DA3 fill (+ _filled.png), detection, target
+  bite_01/acquire/                   under_*.json / .png (where the floor was read), scoop_log.json, and arm/:
+                                       plan_*.json      every validated trajectory (waypoints, durations, speed)
+                                       *_arm_*.npz      telemetry per move: t, joints, velocities, torques, tool
+                                                        pose, tool force (the watch loops' own samples: no extra
+                                                        controller calls, no delay)
+                                       *_depth_at_over.npz, *_under_over.json, *_scoop_food_path.json
+                                       events.jsonl, log.txt (every arm log line, timestamped)
+  bite_01/deliver/look_N/            each look at the face: colour, depth, face.json, face_upright.jpg,
+                                       open_wait.json (mouth opening over time), open_wait_last.jpg (declined)
+  bite_01/deliver/arm/               swing / approach / bite force trace / retract
+  bite_01/summary.json, contact_sheet.jpg     written by make feed after each bite (in the background)
+~/rammp_runs/latest -> the current bite (make acquire / deliver after make perceive attach to it)
+```
+
+`make review` (or `python -m feeding.review <session|bite> [--brief] [--write]`) prints each bite's stage
+times, detections, target, floor reading, plunge, scoop, approach, bite and retract numbers, every refusal with
+its reason, and writes a contact sheet: every image of the bite plus a torque plot per move and the bite force
+against its threshold. Recording never raises and never slows a move; without RAMMP_RECORD (a module run by
+hand, the tests) everything still logs to the console and nothing is written.
+
+## Tests (no arm needed)
+
+```
+python tests/arm_trace.py /tmp/t.json --compare tests/golden/arm_trace.json.gz   # the arm stages, on a fake controller
+bash tests/regress.sh check          # (jetson) perception / measurement / face outputs on saved runs
+python3 tests/arm_values.py          # (driver container) every arm-side constant and CLI default
+bash tests/record_smoke.sh           # (jetson) the run record end to end, into a scratch directory
+```
+
+`tests/fake_kortex.py` stands in for the controller (IK / FK / validation / execution on a simulated clock), so
+every stage -- including refusals, the controller refusing a speed, a torque stop, cache reuse, a moved bowl --
+runs deterministically in ~1 min; the trace records every request the stages send it, their output, exit codes
+and state files. A matching trace means a change altered nothing the arm or the operator would see. State files
+go to a scratch directory (`RAMMP_STATE_DIR`), never the arm's live `/tmp`.
 
 ## Acquisition (`make acquire` -> `feeding/acquire.sh` -> `kinova/scripts/acquire.py`)
 
@@ -201,7 +266,7 @@ first.**
 
 ## Perception (`make perceive` → `feeding/stage1.sh`)
 
-Runs on the jetson host; results go to `~/rammp_runs/<timestamp>/`, **outside**
+Runs on the jetson host; results go to the run record (`~/rammp_runs/<session>/bite_NN/perceive/`), **outside**
 the synced tree. Refuses unless the arm is at food_detect_start, because the
 image→motion mapping was measured in exactly that orientation.
 
@@ -320,11 +385,13 @@ measured: commanding −90.000000 lands at −89.998138 every time. If you ever
 
 ```
 settings.py                  loads config/ (python: `from settings import cfg`; shell: `python3 -m settings get`)
+runlog.py                    logging and the run record (events, plans, telemetry)
 config/                      every tunable, switch and deployment value (above)
-tests/                       regress.sh (perception outputs), arm_values.py (arm-side values)
+tests/                       fake_kortex + arm_trace (the arm stages), regress.sh, arm_values.py, record_smoke.sh
 kinova/
   connection.py              session, routers, teardown
   motion.py                  shared: IK, time scaling, homotopy, guarded trajectories
+  scene.py                   the table and bowl: shifted poses, table-relative heights
   scripts/
     sequence.py              the frozen motions: detect / home
     acquire.py               over / descend / punch / scoop
@@ -335,7 +402,11 @@ kinova/
     capture_home.py          re-measure a pose
     check_connection.py      identity, firmware, live joints
 feeding/
+  lib.sh                     sourced by every stage script: config, containers, the run record
   camera.py                  shared: intrinsics, depth correction, colour<->depth mapping
+  viz.py                     debug images (depth PNGs with marks)
+  review.py                  make review: a run record read back
+  locate_bowl.py             make locate-bowl
   stage1.sh                  make perceive
   perceive.py                detection
   locate_anything.py         LocateAnything-3B wrapper, label-aware parsing

@@ -1,25 +1,30 @@
 #!/usr/bin/env python3
 """Food acquisition, one step at a time. Frozen 2026-09-23 after it ran end to end.
 
+    python -m kinova.scripts.acquire pick                       # the default: over + re-measure + plunge + scoop
     python -m kinova.scripts.acquire over    --target /tmp/target.json
-    python -m kinova.scripts.acquire descend --under /tmp/under.json --to-above 0.030
+    python -m kinova.scripts.acquire plunge  --under /tmp/under.json [--then-scoop] [--validate-only]
+    python -m kinova.scripts.acquire scoop   [--speed 25] [--validate-only]
+    python -m kinova.scripts.acquire descend --under /tmp/under.json --to-above 0.030   # the stepped route
     python -m kinova.scripts.acquire punch   --under /tmp/under.json
-    python -m kinova.scripts.acquire scoop   [--speed 20]
 
 feeding/acquire.sh runs them in order with a depth re-measure between each, and
-is what `make acquire` calls. Every motion goes through safe_move.
+is what `make acquire` calls. Every motion goes through safe_move / motion.
 
   over     at the overlook height, translate until the utensil tip's vertical
            line passes through the target food. Refuses unless at
            food_detect_start and the move is small and level.
-  descend  straight down until the tip is --to-above over the food's TOP, using
-           a depth reading taken from WHERE THE ARM IS (measure_under.json).
-           Refuses a descent that would end below 10 mm (approach_stop_m).
-  punch    straight down to bowl floor + 5 mm, slowly.
-  scoop    the food rises straight up while the utensil turns vertical ->
-           horizontal about it, pointing +Y (toward the user). Planned here as a
-           continuous joint path (a single Cartesian move is unreachable: J6
-           hits its limit), validated by the controller, run as one trajectory.
+  plunge   from OVER straight down through the food to the bowl floor in ONE
+           smooth trajectory (fast, easing to slow above the food).
+  scoop    the food rises while the utensil turns vertical -> horizontal about
+           it, pointing +Y (toward the user), backing off to the bowl's scoop
+           end. Planned as a continuous joint path (a single Cartesian move is
+           unreachable: J6 hits its limit), validated by the controller, run as
+           one trajectory.
+  pick     over -> fresh depth -> plunge -> scoop in this one process.
+  descend  (stepped route) straight down until the tip is --to-above over the
+           food's TOP, using a depth reading taken from WHERE THE ARM IS.
+  punch    (stepped route) straight down to the bowl floor, slowly.
 
 Measured on the arm, 2026-09-23, fork on a strawberry:
   over     berry lands 1.2 mm from the fork's vertical line
@@ -38,75 +43,140 @@ import argparse
 import itertools
 import json
 import math
-import sys
+import os
 import time
+from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
-from kortex_api.autogen.messages import Base_pb2
 
+import runlog
+from kinova import scene
 from kinova.connection import kinova_connection
-from kinova.scripts.safe_move import (MoveError, TorqueGuard, _events, fold, goto_cartesian,
+from kinova.motion import (A_MAX, CAM_IN_TOOL, LIMITS, _time_scale)  # noqa: F401 -- re-exported (tests/arm_values.py)
+from kinova.motion import (R_from_kortex, _ik, _waypoints, kortex_from_R, margin, max_step, record_plan, rot_x,
+                           tip_in_tool, validate, waypoint_list)
+from kinova.scripts.safe_move import (Joints, MoveError, TorqueGuard, _events, fold, goto_cartesian,
                                       joints, tilt_deg, tool_pose)
-
 from settings import cfg
-from kinova.motion import (A_MAX, CAM_IN_TOOL, LIMITS, R_from_kortex, _ik, _time_scale, _waypoints,  # noqa: F401
-                           kortex_from_R, rot_x, tip_in_tool)
+
+if TYPE_CHECKING:
+    from kinova.connection import KinovaConnection
+
+log = runlog.get("acquire")
 
 A_ = cfg.acquisition
 MAX_OVER_M = float(A_.over_max_m)             # OVER stays inside the bowl, never a transit
 BACKOFF_FROM = float(A_.scoop.backoff_from)   # fraction of the scoop before the back-off starts
 PUNCH_FLOOR_M = float(cfg.utensil.punch_floor_margin_m)   # nominal; really ~5-10 mm (camera_to_tip stored long)
+PLUNGE_FAST = float(A_.plunge.fast_mps)            # m/s down to SLOW_ABOVE the food top
+PLUNGE_SLOW = float(A_.plunge.slow_mps)            # m/s through the food, to the floor
+SLOW_ABOVE = float(A_.plunge.slow_above_food_m)    # the overlook reads the food top 4-7 mm high; this covers it
+SCOOP_TORQUE_NM = float(cfg.guards.torque_step_nm.scoop)   # 2.5 tripped on the arm's own acceleration
+
+STATE_DIR = Path(os.environ.get("RAMMP_STATE_DIR", "/tmp"))   # what the steps hand each other (the shell copies in/out)
+PUNCH_DONE = STATE_DIR / "punch_done.json"    # the food piece on the tip, for a scoop run as its own step
+SCOOP_LOG = STATE_DIR / "scoop_log.json"      # the food point's path during the scoop (feeding/acquire.sh keeps it)
 
 
-def cal():
-    """(the bowl's overlook pose + the utensil's aim settings, the camera's colour intrinsics) -- kept for callers
-    written against the old calibration files; new code reads cfg directly."""
-    pose = dict(cfg.overlook_pose())
-    pose.update(aim_offset_base_m=list(cfg.utensil.aim_offset_base_m), camera_to_tip_m=cfg.utensil.camera_to_tip_m,
-                utensil_tip_px=list(cfg.utensil.tip_px), approach_stop_m=A_.stepped.approach_stop_m,
-                scoop_end=dict(cfg.bowl.scoop_end))
-    return pose, dict(cfg.camera.colour)
+# ------------------------------------------------------------------ inputs and plans
+
+@dataclass
+class Under:
+    """What is under the utensil tip (feeding/measure_under.py): distances from the camera, m."""
+    raw: dict                          # the reading as measured, kept whole for the record
+    gap_top: float                     # tip -> food top
+    top: float | None = None
+    floor: float | None = None         # the bowl floor beside the food; None = no reading
+    gap_floor: float | None = None     # tip -> floor
+    height: float | None = None        # food height (floor - top)
+    depth_source: str | None = None    # "da3-raw" = raw Depth Anything 3, no sensor depth
+    filled_top: float = 0.0            # fraction of each reading from the Depth Anything 3 fallback
+    filled_floor: float = 0.0
+
+    @classmethod
+    def from_dict(cls, u: dict) -> "Under":
+        return cls(raw=u, gap_top=u["gap_top"], top=u.get("top"), floor=u.get("floor"),
+                   gap_floor=u.get("gap_floor"), height=u.get("height"), depth_source=u.get("depth_source"),
+                   filled_top=u.get("filled_top", 0), filled_floor=u.get("filled_floor", 0))
+
+    @classmethod
+    def load(cls, path: str | Path) -> "Under":
+        return cls.from_dict(json.loads(Path(path).read_text()))
+
+    @property
+    def has_floor(self) -> bool:
+        return "floor" in self.raw
 
 
+@dataclass
+class FoodOnTip:
+    """The food piece the punch / plunge went through: sets where its centre (the scoop's pivot) is."""
+    height: float = 0.030              # m
+    floor_m: float = PUNCH_FLOOR_M     # how far above the bowl floor the tip stopped
+
+    def save(self) -> None:
+        PUNCH_DONE.write_text(json.dumps(dict(height=self.height, floor_m=self.floor_m)))
+
+    @classmethod
+    def load(cls) -> "FoodOnTip":
+        d = json.loads(PUNCH_DONE.read_text()) if PUNCH_DONE.exists() else {}
+        return cls(height=d.get("height", 0.030), floor_m=d.get("floor_m", PUNCH_FLOOR_M))
 
 
+@dataclass
+class ScoopSettings:
+    speed_dps: float = float(A_.scoop.speed_dps)   # fast on purpose: at 6 deg/s (25 s) the berry slid off
+    rot_exp: float = float(A_.scoop.rot_exp)       # turn angle = 90 * s**rot_exp
+    waypoints: int = int(A_.scoop.waypoints)
+    ramp: float = 0.25
 
 
+@dataclass
+class ScoopPlan:
+    path: list[Joints]                     # the joint path, from the start state it was planned for
+    o_piv: np.ndarray                      # the food point (pivot) in the tool frame
+    piv_at: Callable[[float], np.ndarray]  # s -> where the food point should be (base frame)
+    piv0: np.ndarray                       # the food point at the start
 
 
+class DepthUnavailable(Exception):
+    """No usable sensor depth under the tip after OVER: the shell falls back to the filled measurement."""
 
 
-def _vertical_move(conn, down_m, speed, label):
+# ------------------------------------------------------------------ the stepped route and OVER
+
+def _vertical_move(conn: KinovaConnection, down_m: float, speed: float, label: str) -> None:
     p = tool_pose(conn)
     goto_cartesian(conn, (p[0], p[1], p[2] - down_m), tuple(p[3:]), speed=speed, label=label)
 
 
-# ------------------------------------------------------------------ steps
-
-def over(conn, a):
-    pose, _ = cal()
-    off = max(abs(fold(x - y)) for x, y in zip(joints(conn), pose["joints_deg"]))
+def over(conn: KinovaConnection, target_path: str) -> None:
+    """At the overlook height, slide until the utensil tip's vertical line passes through the target food."""
+    off = max_step(joints(conn), scene.overlook_joints(conn))
     if off > 1.0:
         raise MoveError("not at food_detect_start (%.1f deg away) -- run: make detect" % off)
-    goal = list(json.loads(Path(a.target).read_text())["tool_goal"])
-    off_xy = pose.get("aim_offset_base_m", [0.0, 0.0])     # measured aim correction, base frame
-    goal[0] += off_xy[0]; goal[1] += off_xy[1]
+    goal = list(json.loads(Path(target_path).read_text())["tool_goal"])
+    aim = cfg.utensil.aim_offset_base_m          # measured aim correction, base frame
+    goal[0] += aim[0]
+    goal[1] += aim[1]
     p = tool_pose(conn)
     d = math.hypot(goal[0] - p[0], goal[1] - p[1])
     if abs(goal[2] - p[2]) > 0.002 or d > MAX_OVER_M:
         raise MoveError("target is not a small level move (%.0f mm across) -- re-run make perceive"
                         % (1000 * d))
+    runlog.event("over", goal=goal, aim_offset_m=list(aim), across_m=d)
     goto_cartesian(conn, goal, tuple(p[3:]), speed=float(A_.over_speed_mps), label="OVER")
 
 
-def descend(conn, a):
-    pose, _ = cal()
-    u = json.loads(Path(a.under).read_text())
-    stop = max(a.to_above, pose.get("approach_stop_m", 0.010))
-    down = u["gap_top"] - stop
+def descend(conn: KinovaConnection, under_path: str, to_above: float) -> None:
+    """Straight down until the tip is `to_above` over the food's top (never closer than approach_stop_m)."""
+    u = Under.load(under_path)
+    stop = max(to_above, float(A_.stepped.approach_stop_m))
+    down = u.gap_top - stop
     if down <= 0:
-        print("    already %.1f mm above the food, nothing to do" % (1000 * u["gap_top"]))
+        log.info("    already %.1f mm above the food, nothing to do", 1000 * u.gap_top)
         return
     if down > float(A_.stepped.descend_max_m):
         raise MoveError("descent of %.0f mm is not an approach -- re-measure" % (1000 * down))
@@ -115,120 +185,163 @@ def descend(conn, a):
     if fast > 0:
         _vertical_move(conn, fast, float(A_.stepped.fast_mps), "descend")
     _vertical_move(conn, down - fast, float(A_.stepped.slow_mps), "descend, slow")
-    print("    tip now ~%.1f mm above the food top" % (1000 * (u["gap_top"] - down)))
+    log.info("    tip now ~%.1f mm above the food top", 1000 * (u.gap_top - down))
 
 
-def punch(conn, a):
-    u = json.loads(Path(a.under).read_text())
-    if "floor" not in u:
+def punch(conn: KinovaConnection, under_path: str, floor_m: float) -> None:
+    """Straight down, slowly, to `floor_m` above the bowl floor (the stepped route's last move)."""
+    u = Under.load(under_path)
+    if not u.has_floor:
         raise MoveError("no floor reading under the tip -- cannot punch safely")
-    stop_above_floor = a.floor_m
-    down = u["gap_floor"] - stop_above_floor
+    down = u.gap_floor - floor_m
     if not 0.010 < down < 0.060:
         raise MoveError("punch depth %.1f mm is outside the sane range" % (1000 * down))
-    print("    food %.1f mm tall: stop %.1f mm above the bowl floor -> %.1f mm down"
-          % (1000 * u["height"], 1000 * stop_above_floor, 1000 * down))
+    log.info("    food %.1f mm tall: stop %.1f mm above the bowl floor -> %.1f mm down",
+             1000 * u.height, 1000 * floor_m, 1000 * down)
     first = min(0.020, down)
     _vertical_move(conn, first, float(A_.stepped.slow_mps), "punch")
     if down > first:
         _vertical_move(conn, down - first, float(A_.stepped.slow_mps), "punch, finish")
-    Path("/tmp/punch_done.json").write_text(json.dumps(dict(height=u["height"], floor_m=a.floor_m)))
+    FoodOnTip(height=u.height, floor_m=floor_m).save()
 
 
-PLUNGE_FAST = float(A_.plunge.fast_mps)            # m/s down to SLOW_ABOVE the food top
-PLUNGE_SLOW = float(A_.plunge.slow_mps)            # m/s through the food, to the floor
-SLOW_ABOVE = float(A_.plunge.slow_above_food_m)    # the overlook reads the food top 4-7 mm high; this covers it
+# ------------------------------------------------------------------ the plunge
+
+def _check_plunge(u: Under, floor_m: float) -> float:
+    """The plunge depth (m) if the reading is trustworthy enough to stop at the bowl floor; else MoveError."""
+    if not u.has_floor:
+        raise MoveError("no floor reading under the tip -- cannot punch safely")
+    if u.depth_source == "da3-raw" and (u.filled_floor > 0 or u.filled_top > 0):
+        raise MoveError("the floor under the tip was measured on RAW Depth Anything 3 (no sensor depth to fit it to) "
+                        "-- not accurate enough to stop at the bowl floor; nothing moved")
+    if u.filled_floor > float(A_.plunge.refuse_if_floor_filled_over):
+        # the fallback gets the level right (median ~1 mm) but its local shape can be 25-60 mm off: never stop
+        # a plunge on it
+        raise MoveError("%.0f%% of the floor reading under the tip is the Depth Anything 3 fallback -- its local "
+                        "error (up to ~60 mm) is too large to stop at the bowl floor; nothing moved" % (100 * u.filled_floor))
+    down = u.gap_floor - floor_m
+    lo, hi = A_.plunge.sane_range_m
+    if not lo < down < hi:
+        raise MoveError("plunge of %.0f mm is outside the sane range (80-250) -- re-measure" % (1000 * down))
+    lo, hi = A_.plunge.food_height_range_m
+    if not lo < u.height < hi:
+        raise MoveError("food %.0f mm tall is implausible -- re-measure" % (1000 * u.height))
+    return down
 
 
-def plunge(conn, a):
+def _vertical_path(conn: KinovaConnection, q0: Joints, T0: np.ndarray, rpy: tuple, down: float) -> tuple[list[Joints], list[float]]:
+    """A continuous IK path straight down `down` m, and the distance travelled at each point."""
+    n = int(math.ceil(down / float(A_.plunge.ik_step_m)))   # fewer IK calls: planning is dead time
+    path, prev, dist = [q0], q0, [0.0]
+    for k in range(1, n + 1):
+        dk = down * k / n
+        q = _ik(conn, (T0[0], T0[1], T0[2] - dk), rpy, prev)
+        if q is None or max_step(q, prev) > 8:
+            raise MoveError("no continuous plunge path at %.0f mm -- nothing moved" % (1000 * dk))
+        prev = q
+        path.append(q)
+        dist.append(dk)
+    return path, dist
+
+
+def _plunge_speed(slow_at: float) -> Callable[[float], float]:
+    """Tool speed (m/s) at distance x travelled: ramp in, fast, then ease (smoothstep) to slow at `slow_at`."""
+    def v(x: float) -> float:
+        ramp = min(1.0, 0.25 + x / 0.015)
+        w = min(1.0, max(0.0, (x - (slow_at - 0.015)) / 0.015))
+        w = w * w * (3 - 2 * w)
+        return ramp * (PLUNGE_FAST + (PLUNGE_SLOW - PLUNGE_FAST) * w)
+    return v
+
+
+def _run_watched(conn: KinovaConnection, wl: Any, total: float, label: str, on_sample: Callable[[Any], str | None],
+                 **meta: Any) -> str | None:
+    """Execute a validated trajectory; stop the arm on the first sample on_sample(feedback) objects to.
+    Returns that objection (None = it ran to the end). Every sample goes to the run record."""
+    ev = _events(conn)
+    ev.clear()
+    tel = runlog.Telemetry(label)
+    why = None
+    conn.base.ExecuteWaypointTrajectory(wl)
+    t0 = time.time()
+    try:
+        while time.time() - t0 < total + 15:
+            time.sleep(0.02)
+            fb = conn.base_cyclic.RefreshFeedback()
+            tel.add(fb)
+            why = on_sample(fb)
+            if why is None and any(e[0] == "ACTION_ABORT" for e in ev):
+                why = "controller aborted"
+            if why:
+                conn.base.Stop()
+                break
+            if any(e[0] == "ACTION_END" for e in ev):
+                break
+    finally:
+        tel.save(outcome=why or "done", planned_s=total, **meta)
+    return why
+
+
+def plunge(conn: KinovaConnection, under_path: str, floor_m: float, scoop_with: ScoopSettings | None = None,
+           validate_only: bool = False) -> None:
     """OVER -> punch in ONE smooth move (user, 2026-09-24: no stopping on the way down).
 
     Aimed at the FLOOR read from the overlook, which matched the later close re-measures to within 1 mm
     on every run (the food TOP read 4-7 mm high -- why the stepped route re-measured; the slow zone
     starts SLOW_ABOVE the top to cover that). One joint trajectory along the vertical, fast then easing
-    to 5 mm/s through the food, validated by the controller, watched for torque."""
+    to 5 mm/s through the food, validated by the controller, watched for torque. With `scoop_with`, the
+    scoop is planned before the plunge starts and runs straight after it: no pause at the bottom."""
     t_plan = time.time()
-    u = json.loads(Path(a.under).read_text())
-    if "floor" not in u:
-        raise MoveError("no floor reading under the tip -- cannot punch safely")
-    floor_m = a.floor_m
-    if u.get("depth_source") == "da3-raw" and (u.get("filled_floor", 0) > 0 or u.get("filled_top", 0) > 0):
-        raise MoveError("the floor under the tip was measured on RAW Depth Anything 3 (no sensor depth to fit it to) "
-                        "-- not accurate enough to stop at the bowl floor; nothing moved")
-    if u.get("filled_floor", 0) > float(A_.plunge.refuse_if_floor_filled_over):
-        # the fallback gets the level right (median ~1 mm) but its local shape can be 25-60 mm off: never stop
-        # a plunge on it
-        raise MoveError("%.0f%% of the floor reading under the tip is the Depth Anything 3 fallback -- its local "
-                        "error (up to ~60 mm) is too large to stop at the bowl floor; nothing moved" % (100 * u["filled_floor"]))
-    down = u["gap_floor"] - floor_m
-    lo_, hi_ = A_.plunge.sane_range_m
-    if not lo_ < down < hi_:
-        raise MoveError("plunge of %.0f mm is outside the sane range (80-250) -- re-measure" % (1000 * down))
-    lo_, hi_ = A_.plunge.food_height_range_m
-    if not lo_ < u["height"] < hi_:
-        raise MoveError("food %.0f mm tall is implausible -- re-measure" % (1000 * u["height"]))
-    slow_at = max(0.0, u["gap_top"] - SLOW_ABOVE)          # distance travelled when the slow zone starts
-    p = tool_pose(conn); q0 = joints(conn); T0 = np.array(p[:3])
-    n = int(math.ceil(down / float(A_.plunge.ik_step_m))); path = [q0]; prev = q0; d = [0.0]   # fewer IK calls: planning is dead time
-    for k in range(1, n + 1):
-        dk = down * k / n
-        q = _ik(conn, (T0[0], T0[1], T0[2] - dk), tuple(p[3:]), prev)
-        if q is None or max(abs(fold(x - y)) for x, y in zip(q, prev)) > 8:
-            raise MoveError("no continuous plunge path at %.0f mm -- nothing moved" % (1000 * dk))
-        prev = q; path.append(q); d.append(dk)
-
-    def v(x):                                               # smooth: ramp in, fast, ease to slow
-        ramp = min(1.0, 0.25 + x / 0.015)
-        w = min(1.0, max(0.0, (x - (slow_at - 0.015)) / 0.015))
-        w = w * w * (3 - 2 * w)
-        return ramp * (PLUNGE_FAST + (PLUNGE_SLOW - PLUNGE_FAST) * w)
+    u = Under.load(under_path)
+    down = _check_plunge(u, floor_m)
+    slow_at = max(0.0, u.gap_top - SLOW_ABOVE)          # distance travelled when the slow zone starts
+    p = tool_pose(conn)
+    q0 = joints(conn)
+    T0 = np.array(p[:3])
+    path, dist = _vertical_path(conn, q0, T0, tuple(p[3:]), down)
+    v = _plunge_speed(slow_at)
     raw = [x.position for x in conn.base_cyclic.RefreshFeedback().actuators]
     for scale in (1.0, 0.75, 0.5):
-        wl = Base_pb2.WaypointList(); wl.duration = 0.0; wl.use_optimal_blending = False
-        cur, pq = list(raw), path[0]; total = 0.0
-        for k, q in enumerate(path[1:], 1):
-            cur = [c + fold(x - y) for c, x, y in zip(cur, q, pq)]
-            dt = (d[k] - d[k - 1]) / (scale * v(0.5 * (d[k] + d[k - 1]))); total += dt
-            w_ = wl.waypoints.add(); w_.name = "p%02d" % k
-            w_.angular_waypoint.angles.extend(cur); w_.angular_waypoint.duration = dt; pq = q
-        errs = list(conn.base.ValidateWaypointList(wl).trajectory_error_report.trajectory_error_elements)
+        durations = [(dist[k] - dist[k - 1]) / (scale * v(0.5 * (dist[k] + dist[k - 1]))) for k in range(1, len(dist))]
+        total = sum(durations)
+        wl = waypoint_list(raw, path, durations, prefix="p")
+        errs = validate(conn, wl)
         if not errs:
             break
-        print("    x%.2f speed refused by the controller: %s" % (scale, " ".join(str(errs[0]).split())))
+        log.info("    x%.2f speed refused by the controller: %s", scale, " ".join(str(errs[0]).split()))
     else:
         raise MoveError("controller refused the plunge -- nothing moved")
-    print("    food %.1f mm tall: %.0f mm down to the floor + %.0f mm, slow from %.0f mm; %.1f s"
-          % (1000 * u["height"], 1000 * down, 1000 * floor_m, 1000 * slow_at, total))
+    record_plan("plunge", wl, speed_scale=scale, down_m=down, slow_at_m=slow_at)
+    log.info("    food %.1f mm tall: %.0f mm down to the floor + %.0f mm, slow from %.0f mm; %.1f s",
+             1000 * u.height, 1000 * down, 1000 * floor_m, 1000 * slow_at, total)
+    runlog.event("plunge_plan", down_m=down, floor_m=floor_m, food_height_m=u.height, slow_at_m=slow_at,
+                 seconds=total, speed_scale=scale, under=u.raw)
     scoop_plan = None
-    if a.then_scoop:                                          # plan the scoop NOW, from where the plunge will end
+    if scoop_with is not None:                                # plan the scoop NOW, from where the plunge will end
         Te = np.array([T0[0], T0[1], T0[2] - down])
-        scoop_plan = plan_scoop(conn, a, path[-1], Te, R_from_kortex(*p[3:]),
-                                dict(height=u["height"], floor_m=floor_m))
-    print("    plunge%s planned in %.1f s" % (" + scoop" if scoop_plan else "", time.time() - t_plan))
-    if a.validate_only:
-        print("    validate-only: controller accepted it, nothing moved")
+        scoop_plan = plan_scoop(conn, scoop_with, path[-1], Te, R_from_kortex(*p[3:]),
+                                FoodOnTip(height=u.height, floor_m=floor_m))
+    log.info("    plunge%s planned in %.1f s", " + scoop" if scoop_plan else "", time.time() - t_plan)
+    if validate_only:
+        log.info("    validate-only: controller accepted it, nothing moved")
         return
-    ev = _events(conn); ev.clear(); guard = TorqueGuard(); t0 = time.time()
-    conn.base.ExecuteWaypointTrajectory(wl)
-    while time.time() - t0 < total + 15:
-        time.sleep(0.02)
-        hit = guard.update([x.torque for x in conn.base_cyclic.RefreshFeedback().actuators])
-        if hit or any(e[0] == "ACTION_ABORT" for e in ev):
-            conn.base.Stop()
-            raise MoveError("plunge stopped: %s" % ("joint %d torque step" % (hit[0] + 1) if hit else "controller aborted"))
-        if any(e[0] == "ACTION_END" for e in ev):
-            break
-    print("    plunge done in %.1f s" % (time.time() - t0))
-    Path("/tmp/punch_done.json").write_text(json.dumps(dict(height=u["height"], floor_m=floor_m)))
+    guard = TorqueGuard()
+
+    def contact(fb: Any) -> str | None:
+        hit = guard.update([x.torque for x in fb.actuators])
+        return "joint %d torque step" % (hit[0] + 1) if hit else None
+    t0 = time.time()
+    why = _run_watched(conn, wl, total, "plunge", contact)
+    if why:
+        raise MoveError("plunge stopped: %s" % why)
+    log.info("    plunge done in %.1f s", time.time() - t0)
+    FoodOnTip(height=u.height, floor_m=floor_m).save()
     if scoop_plan is not None:
-        run_scoop(conn, a, scoop_plan)                        # no pause at the bottom: already planned
+        run_scoop(conn, scoop_with, scoop_plan, validate_only)   # no pause at the bottom: already planned
 
 
-class DepthUnavailable(Exception):
-    """No usable sensor depth under the tip after OVER: the shell falls back to the filled measurement."""
-
-
-def pick(conn, a):
+def pick(conn: KinovaConnection, target_path: str, under_path: str, floor_m: float, scoop_with: ScoopSettings,
+         validate_only: bool = False) -> None:
     """OVER -> fresh depth from the resident depth server -> plan plunge + scoop -> plunge -> scoop, all in
     THIS process: no program restarts, no reconnection, so the arm does not stand still between them
     (user, 2026-09-25). The floor is still re-measured from above the berry after OVER: read from the overlook
@@ -236,140 +349,147 @@ def pick(conn, a):
     import io
     import urllib.request
     from feeding.measure_under import measure
-    over(conn, a)
+    over(conn, target_path)
     t = time.time()
     try:
-        with urllib.request.urlopen("http://127.0.0.1:%d/median?frames=%d" % (int(cfg.deployment.servers.depth_port), int(cfg.perception.depth_frames)), timeout=15) as r:
+        url = "http://127.0.0.1:%d/median?frames=%d" % (int(cfg.deployment.servers.depth_port),
+                                                         int(cfg.perception.depth_frames))
+        with urllib.request.urlopen(url, timeout=15) as r:
             d = np.load(io.BytesIO(r.read()))
     except Exception as e:  # noqa: BLE001
         raise DepthUnavailable("depth server: %s" % e)
+    runlog.save_arrays("depth_at_over", depth_mm=d)
     try:
         u = measure(d, 0.41)
     except SystemExit as e:                    # measure_under's own "no depth return under the tip"
         raise DepthUnavailable(str(e))
+    runlog.save_json("under_over", u)
     if "floor" not in u:
         raise DepthUnavailable("no floor reading beside the food")
-    print("  under the tip: top %.1f mm (tip %.1f mm above it), floor %.1f mm (tip %.1f mm above it), food %.1f mm tall"
-          "   [fresh depth in %.1f s]" % (1000 * u["top"], 1000 * u["gap_top"], 1000 * u["floor"], 1000 * u["gap_floor"],
-                                           1000 * u["height"], time.time() - t))
-    Path(a.under).write_text(json.dumps(u))
-    try:
-        Path("/work_out/under_over.json").write_text(json.dumps(u))      # for the run's record (host /tmp/demo_state)
-    except OSError:
-        pass
-    a.then_scoop = True
-    plunge(conn, a)
+    log.info("  under the tip: top %.1f mm (tip %.1f mm above it), floor %.1f mm (tip %.1f mm above it), food %.1f mm tall"
+             "   [fresh depth in %.1f s]", 1000 * u["top"], 1000 * u["gap_top"], 1000 * u["floor"], 1000 * u["gap_floor"],
+             1000 * u["height"], time.time() - t)
+    Path(under_path).write_text(json.dumps(u))
+    (STATE_DIR / "under_over.json").write_text(json.dumps(u))           # feeding/acquire.sh copies it to the bite
+    plunge(conn, under_path, floor_m, scoop_with, validate_only)
 
 
+# ------------------------------------------------------------------ the scoop
 
-
-
-
-SCOOP_TORQUE_NM = float(cfg.guards.torque_step_nm.scoop)   # 2.5 tripped on the arm's own acceleration
-
-
-
-
-
-
-def plan_scoop(conn, a, q0, T0, R0, done):
+def plan_scoop(conn: KinovaConnection, st: ScoopSettings, q0: Joints, T0: np.ndarray, R0: np.ndarray,
+               food: FoodOnTip) -> ScoopPlan:
     """Plan the scoop from a given arm state (the current one, or where the plunge WILL end -- so the
     plunge can flow straight into it with no planning pause at the bottom)."""
-    pose, _ = cal()
-    h = done.get("height", 0.030)
     tip = tip_in_tool()
     # the punch leaves the tip floor_m above the floor; the food's centre is at h/2
-    food_up = max(0.0, h / 2.0 - done.get("floor_m", PUNCH_FLOOR_M))
+    food_up = max(0.0, food.height / 2.0 - food.floor_m)
     o_piv = tip - np.array([0, 0, food_up])
     piv0 = T0 + R0 @ o_piv
-    end_z = pose["tool_pose"]["z_m"] + (R0 @ tip)[2]          # tip height at the overlook
+    end_z = scene.overlook_pose()["tool_pose"]["z_m"] + (R0 @ tip)[2]        # tip height at the overlook
     rise = end_z - piv0[2]
-    m = lambda q: min(LIMITS[i] - abs(q[i]) for i in LIMITS)
     # With a calibrated scoop_end, the food also backs off to where that pose holds it: the rotation still
     # starts at once, the back-off mostly once the utensil is past steep (from BACKOFF_FROM of the scoop).
-    se = pose.get("scoop_end")
+    se = scene.scoop_end()                       # moved with the bowl / table
     back = np.zeros(3)
     if se:
         pivE = np.array(se["tool_m"]) + rot_x(90.0) @ R0 @ o_piv
-        back = pivE - piv0; rise = back[2]; back[2] = 0.0
+        back = pivE - piv0
+        rise = back[2]
+        back[2] = 0.0
         if np.linalg.norm(back) > float(A_.scoop.max_backoff_m):
             raise MoveError("backing off %.0f mm is too far -- not the bowl this was built for" % (1000 * np.linalg.norm(back)))
 
-    def piv_at(s):
+    def piv_at(s: float) -> np.ndarray:
         x = min(1.0, max(0.0, (s - BACKOFF_FROM) / (1 - BACKOFF_FROM)))
         return piv0 + np.array([0, 0, rise * s]) + x * x * (3 - 2 * x) * back
 
-    def at(s):
-        th = 90.0 * s ** a.rot_exp
-        R = rot_x(th) @ R0
+    def at(s: float) -> tuple[np.ndarray, tuple[float, float, float]]:
+        R = rot_x(90.0 * s ** st.rot_exp) @ R0
         return piv_at(s) - R @ o_piv, kortex_from_R(R)
 
-    def along(qe):
+    def along(qe: Joints) -> list[Joints] | None:
         """A continuous joint path, the IK guess blended from the start toward the end shape qe."""
         prev, cand = q0, [q0]
-        for k in range(1, a.n + 1):
-            s = k / a.n
+        for k in range(1, st.waypoints + 1):
+            s = k / st.waypoints
             T, r = at(s)
             q = _ik(conn, T, r, [fold(x + fold(y - x) * s) for x, y in zip(q0, qe)])
-            if q is None or max(abs(fold(x - y)) for x, y in zip(q, prev)) > 12:
+            if q is None or max_step(q, prev) > 12:
                 return None
-            prev = q; cand.append(q)
+            prev = q
+            cand.append(q)
         return cand
 
     # the calibrated end shape first (the one delivery was built from) -- the search only if it fails
     path = along(se["joints_deg"]) if se else None
     if path is None:
-        T, r = at(1.0); ends = []
-        for j1, j2, j3, j4, j6, fl in itertools.product((q0[0], 150, 120, 100), (-30, 0, 30, 60),
-                                                        (q0[2], 30, 60, 85), (-135, -110),
-                                                        (-85, -50, 50, 85), (0, 1)):
-            g = [j1, j2, j3, j4, q0[4], j6, q0[6]]
-            if fl:
-                g[4], g[6] = fold(g[4] + 180), fold(g[6] + 180)
-            q = _ik(conn, T, r, g)
-            if q and m(q) > 8:
-                ends.append(q)
-        ends.sort(key=lambda q: max(abs(fold(x - y)) for x, y in zip(q, q0)))
-        for qe in ends[:10]:
-            path = along(qe)
-            if path:
-                break
+        path = _search_scoop(conn, q0, at, along)
     if path is None:
         raise MoveError("no continuous scoop path from here -- nothing moved")
-    print("    scoop planned: food rises %.0f mm%s while turning 90 deg; %d waypoints, min joint margin %.1f deg"
-          % (1000 * rise, ", backing off %.0f mm" % (1000 * np.linalg.norm(back)) if se else "", a.n, min(m(q) for q in path)))
-    return dict(path=path, o_piv=o_piv, piv_at=piv_at, piv0=piv0)
+    log.info("    scoop planned: food rises %.0f mm%s while turning 90 deg; %d waypoints, min joint margin %.1f deg",
+             1000 * rise, ", backing off %.0f mm" % (1000 * np.linalg.norm(back)) if se else "", st.waypoints,
+             min(margin(q) for q in path))
+    runlog.event("scoop_plan", rise_m=rise, backoff_m=float(np.linalg.norm(back)), waypoints=st.waypoints,
+                 min_margin_deg=min(margin(q) for q in path), food_height_m=food.height)
+    return ScoopPlan(path=path, o_piv=o_piv, piv_at=piv_at, piv0=piv0)
 
 
-def scoop(conn, a):
-    done = json.loads(Path("/tmp/punch_done.json").read_text()) if Path("/tmp/punch_done.json").exists() else {}
+def _search_scoop(conn: KinovaConnection, q0: Joints, at: Callable, along: Callable) -> list[Joints] | None:
+    """No calibrated scoop end (or it failed): try IK end shapes from a grid of seeds, nearest first."""
+    T, r = at(1.0)
+    ends = []
+    for j1, j2, j3, j4, j6, flip in itertools.product((q0[0], 150, 120, 100), (-30, 0, 30, 60),
+                                                      (q0[2], 30, 60, 85), (-135, -110),
+                                                      (-85, -50, 50, 85), (0, 1)):
+        g = [j1, j2, j3, j4, q0[4], j6, q0[6]]
+        if flip:
+            g[4], g[6] = fold(g[4] + 180), fold(g[6] + 180)
+        q = _ik(conn, T, r, g)
+        if q and margin(q) > 8:
+            ends.append(q)
+    ends.sort(key=lambda q: max_step(q, q0))
+    for qe in ends[:10]:
+        path = along(qe)
+        if path:
+            return path
+    return None
+
+
+def scoop(conn: KinovaConnection, st: ScoopSettings, validate_only: bool = False) -> None:
+    """The scoop as its own step, from where the arm is (after punch / plunge)."""
     p = tool_pose(conn)
-    run_scoop(conn, a, plan_scoop(conn, a, joints(conn), np.array(p[:3]), R_from_kortex(*p[3:]), done))
+    run_scoop(conn, st, plan_scoop(conn, st, joints(conn), np.array(p[:3]), R_from_kortex(*p[3:]), FoodOnTip.load()),
+              validate_only)
 
 
-def run_scoop(conn, a, plan):
-    path, o_piv, piv_at, piv0 = plan["path"], plan["o_piv"], plan["piv_at"], plan["piv0"]
-    path = [joints(conn)] + path[1:]                         # start from where the arm actually is
+def run_scoop(conn: KinovaConnection, st: ScoopSettings, plan: ScoopPlan, validate_only: bool = False) -> None:
+    """Validate and run a planned scoop, watching the food point: off its path or dropping = stop."""
+    path = [joints(conn)] + plan.path[1:]                    # start from where the arm actually is
     # one smooth trajectory, validated by the controller; slower only if refused
-    wl, speed = _waypoints(conn, path, a.speed, a.ramp, "scoop")
+    wl, speed = _waypoints(conn, path, st.speed_dps, st.ramp, "scoop")
     total = sum(w.angular_waypoint.duration for w in wl.waypoints)
-    print("    scoop at %.0f deg/s: %.1f s" % (speed, total))
-    if a.validate_only:
-        print("    validate-only: controller accepted it, nothing moved")
+    log.info("    scoop at %.0f deg/s: %.1f s", speed, total)
+    if validate_only:
+        log.info("    validate-only: controller accepted it, nothing moved")
         return
-    # 4. watch: the food must stay on its planned path (its vertical line, if not backing off) and not drop
-    plan_piv = np.array([piv_at(k / 400) for k in range(401)])
-    ev = _events(conn); ev.clear(); guard = TorqueGuard(limit=SCOOP_TORQUE_NM); log = []; why = None; worst = 0.0
-    conn.base.ExecuteWaypointTrajectory(wl)
+    # watch: the food must stay on its planned path (its vertical line, if not backing off) and not drop
+    plan_piv = np.array([plan.piv_at(k / 400) for k in range(401)])
+    guard = TorqueGuard(limit=SCOOP_TORQUE_NM)
+    food_log: list[dict] = []
+    worst = 0.0
+    pv = plan.piv0
     t0 = time.time()
-    while time.time() - t0 < total + 15:
-        time.sleep(0.02)
-        fb = conn.base_cyclic.RefreshFeedback(); b = fb.base
+
+    def food_on_path(fb: Any) -> str | None:
+        nonlocal worst, pv
+        b = fb.base
         pv = np.array([b.tool_pose_x, b.tool_pose_y, b.tool_pose_z]) + \
-            R_from_kortex(b.tool_pose_theta_x, b.tool_pose_theta_y, b.tool_pose_theta_z) @ o_piv
+            R_from_kortex(b.tool_pose_theta_x, b.tool_pose_theta_y, b.tool_pose_theta_z) @ plan.o_piv
         near = plan_piv[np.argmin(np.linalg.norm(plan_piv - pv, axis=1))]
-        off = math.hypot(*(pv[:2] - near[:2])); worst = max(worst, off)
-        log.append(dict(t=time.time() - t0, piv=pv.tolist(), off=off))
+        off = math.hypot(*(pv[:2] - near[:2]))
+        worst = max(worst, off)
+        food_log.append(dict(t=time.time() - t0, piv=pv.tolist(), off=off))
+        why = None
         if off > float(cfg.guards.scoop_food_off_path_m):
             why = "food point %.1f mm off its planned path" % (1000 * off)
         elif pv[2] < near[2] - float(cfg.guards.scoop_food_drop_m):
@@ -377,27 +497,27 @@ def run_scoop(conn, a, plan):
         hit = guard.update([x.torque for x in fb.actuators])
         if hit and not why:
             why = "joint %d torque step" % (hit[0] + 1)
-        if any(e[0] == "ACTION_ABORT" for e in ev) and not why:
-            why = "controller aborted"
-        if why:
-            conn.base.Stop()
-            break
-        if any(e[0] == "ACTION_END" for e in ev):
-            break
-    Path("/tmp/scoop_log.json").write_text(json.dumps(log))
+        return why
+    why = _run_watched(conn, wl, total, "scoop", food_on_path, speed_dps=speed)
+    SCOOP_LOG.write_text(json.dumps(food_log))
+    runlog.save_json("scoop_food_path", dict(planned=plan_piv, actual=food_log))
     p = tool_pose(conn)
     ax = R_from_kortex(*p[3:]) @ np.array([0, 0, 1.0])
     if why:
         raise MoveError("scoop stopped: " + why)
-    print("    food rose %.1f mm, worst %.1f mm off its path, utensil axis (%.2f %.2f %.2f), %.1f s"
-          % (1000 * (pv[2] - piv0[2]), 1000 * worst, *ax, time.time() - t0))
+    runlog.event("scoop", rose_m=float(pv[2] - plan.piv0[2]), worst_off_path_m=worst, axis=ax,
+                 seconds=time.time() - t0)
+    log.info("    food rose %.1f mm, worst %.1f mm off its path, utensil axis (%.2f %.2f %.2f), %.1f s",
+             1000 * (pv[2] - plan.piv0[2]), 1000 * worst, *ax, time.time() - t0)
 
+
+# ------------------------------------------------------------------ command line
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("step", choices=["over", "descend", "punch", "plunge", "scoop", "pick"])
-    ap.add_argument("--target", default="/tmp/target.json")
-    ap.add_argument("--under", default="/tmp/under.json", help="measure_under.py output")
+    ap.add_argument("--target", default=str(STATE_DIR / "target.json"))
+    ap.add_argument("--under", default=str(STATE_DIR / "under.json"), help="measure_under.py output")
     ap.add_argument("--to-above", type=float, default=float(A_.stepped.approach_stop_m), help="descend: stop this far above the food top")
     ap.add_argument("--floor-m", type=float, default=PUNCH_FLOOR_M, help="punch: stop this far above the bowl floor")
     ap.add_argument("--speed", type=float, default=float(A_.scoop.speed_dps),
@@ -410,17 +530,31 @@ def main() -> int:
     ap.add_argument("--validate-only", action="store_true", help="scoop: plan and let the controller validate; do not move")
     ap.add_argument("--then-scoop", action="store_true", help="plunge: plan the scoop first and run it straight after")
     a = ap.parse_args()
+    log_ = runlog.setup("acquire")
+    st = ScoopSettings(speed_dps=a.speed, rot_exp=a.rot_exp, waypoints=a.n, ramp=a.ramp)
+    steps: dict[str, Callable[[KinovaConnection], None]] = dict(
+        over=lambda c: over(c, a.target),
+        descend=lambda c: descend(c, a.under, a.to_above),
+        punch=lambda c: punch(c, a.under, a.floor_m),
+        plunge=lambda c: plunge(c, a.under, a.floor_m, st if a.then_scoop else None, a.validate_only),
+        scoop=lambda c: scoop(c, st, a.validate_only),
+        pick=lambda c: pick(c, a.target, a.under, a.floor_m, st, a.validate_only),
+    )
+    runlog.event("start", command=a.step, args=vars(a))
     with kinova_connection() as conn:
         try:
-            dict(over=over, descend=descend, punch=punch, plunge=plunge, scoop=scoop, pick=pick)[a.step](conn, a)
+            steps[a.step](conn)
             p = tool_pose(conn)
-            print("  %s done: tool (%.4f %.4f %.4f), utensil %.1f deg off vertical"
-                  % (a.step, p[0], p[1], p[2], tilt_deg(conn)))
+            tilt = tilt_deg(conn)
+            log_.info("  %s done: tool (%.4f %.4f %.4f), utensil %.1f deg off vertical", a.step, p[0], p[1], p[2], tilt)
+            runlog.event("done", command=a.step, tool=p, tilt_deg=tilt)
         except DepthUnavailable as e:
-            print("\n  no sensor depth under the tip (%s) -- the shell falls back to the filled measurement" % e, file=sys.stderr)
+            log_.error("\n  no sensor depth under the tip (%s) -- the shell falls back to the filled measurement", e)
+            runlog.event("stopped", command=a.step, reason="depth unavailable: %s" % e, rc=6)
             return 6
         except MoveError as e:
-            print("\n  STOPPED: %s" % e, file=sys.stderr)
+            log_.error("\n  STOPPED: %s", e)
+            runlog.event("stopped", command=a.step, reason=str(e), rc=1)
             return 1
     return 0
 

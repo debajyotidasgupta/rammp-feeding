@@ -11,23 +11,22 @@
 # mouth: sidestep 50 mm away from the user (-Y) and look again, twice at most; then the nose estimate.
 # Every approach uses only the detection made at that pose, just before it.
 # Exit 7 = the user did not open their mouth within 60 s: the arm retracted with the food still on it.
+#
+# Records into the bite's deliver/: one look_<n>/ per look at the face, arm/ for the arm (feeding/lib.sh).
 set -euo pipefail
 cd "$(dirname "$0")/.."
-S() { python3 -m settings get "$1"; }     # a value from config/ (settings.py)
-PY="$(S deployment.venvs.detector)/bin/python"   # LocateAnything (fallback)
-MPY="$(S deployment.venvs.face)/bin/python"      # MediaPipe face landmarks (first choice, ~25 ms)
-DRIVER="$(S deployment.containers.driver)"; VISION="$(S deployment.containers.vision)"
-FRAMES="$(S perception.depth_frames)"; RUNS="$(S deployment.runs_dir)"
+source feeding/lib.sh                            # PY: LocateAnything (fallback); MPY: MediaPipe (first choice, ~25 ms)
+bite_attach; session_begin deliver; stage_begin deliver
 OPEN_WAIT_S="$(S delivery.open_mouth_timeout_s)"; FACE_DETECTOR="$(S features.face_detector)"
 STOP_AFTER="${STOP_AFTER:-}"; START_AT="${START_AT:-swing}"; VALIDATE="${VALIDATE:-}"; WAIT_OPEN="${WAIT_OPEN-$(S features.wait_for_open_mouth)}"   # default from config/; WAIT_OPEN= to skip
-ARM="docker exec -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/work -w /work "$DRIVER" python3 -u -m kinova.scripts.deliver"
+ARM="$(arm_cmd deliver)"
 VO=""; [ -n "$VALIDATE" ] && VO="--validate-only"
 STAGES="swing present bite retract"
 case " $STAGES " in *" $START_AT "*) ;; *) echo "START_AT must be one of: $STAGES"; exit 2 ;; esac
 started=0
 run() { [ "$1" = "$START_AT" ] && started=1; [ "$started" = 1 ]; }
 stop_here() { [ "$STOP_AFTER" = "$1" ] && { echo; echo "stopped after $1 (STOP_AFTER)"; exit 0; } || true; }
-arm() { $ARM "$@" 2>&1 | { grep -v Deprecation || true; }; return "${PIPESTATUS[0]}"; }
+arm() { $ARM "$@" 2>&1 | { grep --line-buffered -v Deprecation || true; }; return "${PIPESTATUS[0]}"; }
 
 capture_colour() {   # $1 = run dir: one colour frame, ~1 s
   PYTHONPATH=. "$MPY" -m feeding.grab_frame "$1/colour.jpg" >/dev/null 2>&1 && return 0
@@ -45,17 +44,17 @@ capture_depth() {    # $1 = run dir: 20-frame median depth
     docker cp "$VISION":/tmp/dl_depth.npy "$1/depth.npy" >/dev/null 2>&1 || true
   fi
   # fallback: fill sensor holes (the food hiding the face from the depth camera) from Depth Anything 3
-  PYTHONPATH=.:$HOME/da3src/src "$PY" -m feeding.depth_fill "$1" 2>/dev/null | sed 's/^/    /' || true
+  PYTHONPATH=.:$HOME/da3src/src "$PY" -m feeding.depth_fill "$1" 2>/dev/null | sed -u 's/^/    /' || true
 }
 detect_face() {      # $1 = run dir: MediaPipe, else LocateAnything
   rc=5
   if [ "$FACE_DETECTOR" = mediapipe ]; then
-    set +e; PYTHONPATH=. "$MPY" -m feeding.detect_mouth_mp "$1" 2>/dev/null | grep -E "^(nose|mouth|mediapipe)" | sed 's/^/    /'
+    set +e; PYTHONPATH=. "$MPY" -m feeding.detect_mouth_mp "$1" 2>/dev/null | grep --line-buffered -E "^(nose|mouth|mediapipe)" | sed -u 's/^/    /'
     rc=${PIPESTATUS[0]}; set -e
   fi
   if [ "$rc" != 0 ]; then
     [ "$FACE_DETECTOR" = mediapipe ] && echo "    MediaPipe found no face -- LocateAnything"
-    PYTHONPATH=. "$PY" -m feeding.detect_mouth "$1" 2>/dev/null | grep -E "^(nose|mouth)" | sed 's/^/    /'
+    PYTHONPATH=. "$PY" -m feeding.detect_mouth "$1" 2>/dev/null | grep --line-buffered -E "^(nose|mouth)" | sed -u 's/^/    /'
   fi
 }
 
@@ -67,11 +66,12 @@ fi
 if run present; then
   echo "$(date +%T) [2/4] PRESENT"
   for SHIFT in 0 50 100; do
-    D="$RUNS/deliver_$(date +%Y%m%d_%H%M%S)"; mkdir -p "$D"
+    D="$STAGE_DIR/look_$(( $(find "$STAGE_DIR" -maxdepth 1 -name 'look_*' | wc -l) + 1 ))"; mkdir -p "$D"
+    export RAMMP_RECORD="$D"
     if [ -n "$WAIT_OPEN" ] && [ "$SHIFT" = 0 ]; then
-      set +e; PYTHONPATH=. "$MPY" -m feeding.detect_mouth_mp "$D" --wait-open "$OPEN_WAIT_S" 2>/dev/null | grep -v -E "^(W0000|I0000|INFO)"; rc=${PIPESTATUS[0]}; set -e
+      set +e; PYTHONPATH=. "$MPY" -m feeding.detect_mouth_mp "$D" --wait-open "$OPEN_WAIT_S" 2>/dev/null | grep --line-buffered -v -E "^(W0000|I0000|INFO)"; rc=${PIPESTATUS[0]}; set -e
       if [ "$rc" != 0 ]; then       # no open mouth = the user does not want this bite: take it back
-        echo "    no open mouth -- not approaching; retracting"
+        echo "    no open mouth -- not approaching; retracting"; ev declined
         arm retract; exit 7
       fi
     else

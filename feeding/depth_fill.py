@@ -103,6 +103,9 @@ def main() -> int:
         np.save(D_dir / (stem + "_sensor.npy"), np.load(dpath))
     np.save(dpath, out.astype(np.float32)); np.save(D_dir / (stem + "_filled_mask.npy"), mask)
     (D_dir / (stem + "_fill.json")).write_text(json.dumps(info))
+    from feeding.viz import depth_png
+    depth_png(out, D_dir / (stem + "_filled.png"), filled=mask, text="%.0f%% from Depth Anything 3 (%s)"
+              % (100 * info["filled_frac"], info["source"]))
     print("depth: %.0f%% filled from Depth Anything 3 (%s%s)" % (
         100 * info["filled_frac"], info["source"],
         "; fit x%.3f %+.0f mm, median residual %.1f mm" % (info["fit"]["scale"], info["fit"]["offset_mm"],

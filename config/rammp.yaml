@@ -28,6 +28,13 @@ deployment:
     face_port: 8766             # MediaPipe
     depth_port: 8767            # the depth stream, inside the vision container
 
+workspace:                      # where the table and the bowl are in THIS deployment (arm base frame, m).
+  # The bowl profile's poses were captured at its `captured_at`; every bowl-dependent pose is shifted by the
+  # difference (kinova/scene.py). Measure with `make locate-bowl` after `make perceive`, or a tape: only the
+  # change matters. Moving the bowl or raising the table = edit these two lines (or config/local.yaml).
+  table_height_m: 0.2140        # the table surface beside the bowl (2026-09-24 runs: 0.213-0.215; the bowl floor 0.221)
+  bowl_centre_m: [0.2692, 0.2765]   # the bowl's centre on the table (x, y) (the same runs: +-2 mm)
+
 features:                       # what to switch on and off
   resident_models: true         # make feed starts the servers and waits until every model is warm
   wait_for_open_mouth: true     # approach only once the user opens their mouth
@@ -52,7 +59,8 @@ motion:
   no_progress_s: 3.0            # nothing moved by then: the controller ignored the move
   near_pose_deg: 1.0            # within this of a pose's joints = "at" that pose
   sequence:                     # make detect / make start
-    lift_z_m: 0.545             # tool z at the top of the lift from feeding_start
+    lift_z_m: 0.545             # tool z at the top of the lift from feeding_start (the arm's reach sets it)
+    min_lift_above_table_m: 0.25   # the swing to the bowl crosses the table: refuse a lift top lower than this
     lift_mps: 0.06
     swing_dps: 20.0
 
@@ -126,4 +134,5 @@ delivery:
     swing_dps: 25.0
     down_dps: 20.0
     home_dps: 20.0
-    min_tip_z_m: 0.300          # the joint move home must keep the utensil tip above this
+    min_tip_above_table_m: 0.086   # the joint move home keeps the utensil tip this far above the table (0.300 m
+                                   # absolute; unsteered, that move dipped the tip to the bowl floor, 0.222)

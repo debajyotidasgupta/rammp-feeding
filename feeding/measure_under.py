@@ -92,6 +92,12 @@ def main() -> int:
     if fill_p.exists():
         m["depth_source"] = json.loads(fill_p.read_text()).get("source", "sensor")
     Path(a.out).write_text(json.dumps(m, indent=2))
+    from feeding.viz import depth_png                  # the debug image: where it read the top and the floor
+    ud, vd = m["depth_px"]
+    r_b = FOOD_HALF_M * FXD / m["top"]
+    depth_png(np.load(a.depth), Path(a.out).with_suffix(".png"), filled=np.load(mask_p) if mask_p.exists() else None,
+              circles=[(ud, vd, 7, "white"), (ud, vd, 1.3 * r_b, "yellow"), (ud, vd, 2.6 * r_b, "yellow")],
+              text="top %.0f mm, floor %s" % (1000 * m["top"], "%.0f mm" % (1000 * m["floor"]) if "floor" in m else "none"))
     s = "  under the tip: top %.1f mm (tip %.1f mm above it)" % (1000 * m["top"], 1000 * m["gap_top"])
     if m.get("filled_floor") or m.get("filled_top"):
         s += " [%.0f%% of the top, %.0f%% of the floor from Depth Anything 3: %s]" % (

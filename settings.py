@@ -12,12 +12,14 @@
 Layers, later wins: config/rammp.yaml < the selected profiles (config/camera|utensil|bowl/<name>.yaml, under
 cfg.camera / cfg.utensil / cfg.bowl) < config/local.yaml (per machine, not committed) < RAMMP_SET="a.b=1,c=2".
 RAMMP_CONFIG points at another config directory. Profiles can be swapped per run: RAMMP_UTENSIL=spoon etc.
+Lists work in RAMMP_SET: RAMMP_SET="workspace.bowl_centre_m=[0.28, 0.27],delivery.stop_m=0.06".
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -98,7 +100,7 @@ def load() -> Cfg:
     local = CONFIG / "local.yaml"
     if local.exists():
         _merge(c, yaml.safe_load(local.read_text()) or {})
-    for item in filter(None, os.environ.get("RAMMP_SET", "").split(",")):
+    for item in filter(None, re.split(r",(?![^\[]*\])", os.environ.get("RAMMP_SET", ""))):   # commas in [..] kept
         k, _, v = item.partition("=")
         _set(c, k.strip(), yaml.safe_load(v))
     return Cfg(_fill(c, dict(arm_ip=c["deployment"]["arm"]["ip"])))

@@ -52,12 +52,22 @@ import math
 import statistics
 import time
 from collections import deque
+from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 import numpy as np
 
 from kortex_api.autogen.messages import Base_pb2
 
+import runlog
 from settings import cfg
+
+if TYPE_CHECKING:
+    from kinova.connection import KinovaConnection
+
+Joints = list[float]          # 7 joint angles, deg, folded to (-180, 180]
+Pose = list[float]            # tool x y z (m), theta x y z (deg): Kortex's fixed-frame XYZ Euler angles
+
+log = runlog.get("safe_move")
 
 MAX_TILT_DEG = float(cfg.motion.max_tilt_deg)                # how far off straight-down the utensil may ever get
 TORQUE_STEP_NM = float(cfg.guards.torque_step_nm.default)    # a step this big against recent history = contact
@@ -74,7 +84,7 @@ def fold(d: float) -> float:
     return (d + 180.0) % 360.0 - 180.0
 
 
-def approach_axis(tx: float, ty: float, tz: float):
+def approach_axis(tx: float, ty: float, tz: float) -> tuple[float, float, float]:
     """Tool +z (where the utensil points) in base coords, from Kortex's
     fixed-frame XYZ Euler angles: R = Rz @ Ry @ Rx, third column."""
     tx, ty, tz = (math.radians(v) for v in (tx, ty, tz))
@@ -84,27 +94,31 @@ def approach_axis(tx: float, ty: float, tz: float):
     return (cz * sy * cx + sz * sx, sz * sy * cx - cz * sx, cy * cx)
 
 
-def tilt_of(base) -> float:
+def tilt_of(base: Any) -> float:
+    """Angle between the utensil and straight down, from a feedback `base` message."""
     ax = approach_axis(base.tool_pose_theta_x, base.tool_pose_theta_y, base.tool_pose_theta_z)
     return math.degrees(math.acos(max(-1.0, min(1.0, -ax[2]))))
 
 
-def tilt_deg(conn) -> float:
+def tilt_deg(conn: KinovaConnection) -> float:
     """Angle between the utensil and straight down, right now."""
     return tilt_of(conn.base_cyclic.RefreshFeedback().base)
 
 
-def joints(conn) -> list[float]:
+def joints(conn: KinovaConnection) -> Joints:
+    """The arm's joint angles now, folded."""
     return [fold(a.position) for a in conn.base_cyclic.RefreshFeedback().actuators]
 
 
-def tool_pose(conn) -> list[float]:
+def tool_pose(conn: KinovaConnection) -> Pose:
+    """The tool pose now (the configured tool frame, not the flange)."""
     b = conn.base_cyclic.RefreshFeedback().base
     return [b.tool_pose_x, b.tool_pose_y, b.tool_pose_z,
             b.tool_pose_theta_x, b.tool_pose_theta_y, b.tool_pose_theta_z]
 
 
-def pitch_sum(q) -> float:
+def pitch_sum(q: Sequence[float]) -> float:
+    """J2 + J4 + J6, folded: ~-180 points the utensil straight down."""
     return fold(q[1] + q[3] + q[5])
 
 
@@ -116,11 +130,12 @@ class TorqueGuard:
     against.
     """
 
-    def __init__(self, n=7, span=12, gap=5, limit=TORQUE_STEP_NM):
+    def __init__(self, n: int = 7, span: int = 12, gap: int = 5, limit: float = TORQUE_STEP_NM):
         self.hist = [deque(maxlen=span + gap) for _ in range(n)]
         self.span, self.gap, self.limit = span, gap, limit
 
-    def update(self, tau):
+    def update(self, tau: Sequence[float]) -> tuple[int, float, float] | None:
+        """Add one sample per joint; (joint index, torque, its baseline) on a step, else None."""
         for i, t in enumerate(tau):
             self.hist[i].append(t)
         for i, h in enumerate(self.hist):
@@ -140,8 +155,8 @@ _BAD_STATES = {Base_pb2.ARMSTATE_IN_FAULT, Base_pb2.ARMSTATE_MAINTENANCE,
                Base_pb2.ARMSTATE_BASE_INITIALIZATION}
 
 
-def _events(conn):
-    """Action notifications for this connection, subscribed once."""
+def _events(conn: KinovaConnection) -> list[tuple[str, str]]:
+    """Action notifications for this connection, subscribed once: (event name, abort detail) in order."""
     if not hasattr(conn, "_move_events"):
         conn._move_events = []
 
@@ -158,7 +173,8 @@ def _events(conn):
     return conn._move_events
 
 
-def _preflight(conn, label):
+def _preflight(conn: KinovaConnection, label: str) -> list[tuple[str, str]]:
+    """Refuse in a fault / maintenance / initialising state; clear and return the event list."""
     s = conn.base.GetArmState().active_state
     if s in _BAD_STATES:
         raise MoveError("%s REFUSED: arm state is %s" % (label, Base_pb2.ArmState.Name(s)))
@@ -167,7 +183,7 @@ def _preflight(conn, label):
     return ev
 
 
-def _report(conn) -> str:
+def _report(conn: KinovaConnection) -> str:
     """The controller's itemised reason for a rejected trajectory."""
     try:
         r = conn.base.GetTrajectoryErrorReport()
@@ -185,13 +201,16 @@ def _report(conn) -> str:
     return (" -- " + "; ".join(out)) if out else ""
 
 
-def _abort_reason(ev):
+def _abort_reason(ev: list[tuple[str, str]]) -> str | None:
     aborts = [d for e, d in ev if e == "ACTION_ABORT"]
     return aborts[-1] if aborts else None
 
 
 class ContactGuard:
     """Stops on CONTACT during a descent, from the arm's own force estimate (fz).
+
+    Not used by the current stages (the plunge became one joint trajectory watched by TorqueGuard); kept, with
+    its measurements, for any Cartesian descent that needs a force stop: goto_cartesian(..., contact=...).
 
     Triggers on STIFFNESS -- dF/dz, newtons per millimetre of descent -- not on
     force level and not on force rate. Measured on this arm:
@@ -208,11 +227,16 @@ class ContactGuard:
     Upward push on the utensil tip reads as +fz (finger-press test).
     """
 
-    def __init__(self, k_npmm=0.10, window_mm=3.0, settle_s=0.8, cap_n=3.0, confirm=3):
+    def __init__(self, k_npmm: float = 0.10, window_mm: float = 3.0, settle_s: float = 0.8, cap_n: float = 3.0,
+                 confirm: int = 3):
         self.k, self.win, self.settle, self.cap, self.confirm = k_npmm, window_mm, settle_s, cap_n, confirm
-        self.d, self.f, self.base, self.z0, self.hits = [], [], None, None, 0
+        self.d: list[float] = []
+        self.f: list[float] = []
+        self.base: float | None = None
+        self.z0: float | None = None
+        self.hits = 0
 
-    def update(self, t, fz, z):
+    def update(self, t: float, fz: float, z: float) -> str | None:
         """t s since the move began, fz N, z tool height m. Reason string on contact."""
         if t < self.settle:
             return None
@@ -221,9 +245,11 @@ class ContactGuard:
         d = 1000.0 * (self.z0 - z)                   # mm descended since settling
         if fz - self.base > self.cap:
             return "fz %.2f N above its settled value (cap %.1f)" % (fz - self.base, self.cap)
-        self.d.append(d); self.f.append(fz)
+        self.d.append(d)
+        self.f.append(fz)
         while self.d and self.d[-1] - self.d[0] > self.win:
-            self.d.pop(0); self.f.pop(0)
+            self.d.pop(0)
+            self.f.pop(0)
         if len(self.d) >= 4 and self.d[-1] - self.d[0] > 0.5 * self.win:
             k = float(np.polyfit(self.d, self.f, 1)[0])
             self.hits = self.hits + 1 if k > self.k else 0
@@ -232,12 +258,25 @@ class ContactGuard:
         return None
 
 
-def _watch(conn, label, arrived, start_q, max_tilt, torque_limit, timeout, ev,
-           contact=None, log=None):
-    """Shared monitor for both move types. Raises on every failure.
+def _watch(conn: KinovaConnection, label: str, arrived: Callable[[Any, Joints], bool], start_q: Joints,
+           max_tilt: float, torque_limit: float, timeout: float, ev: list[tuple[str, str]],
+           contact: ContactGuard | None = None) -> tuple[float, float]:
+    """Shared monitor for both move types: (worst tilt deg, seconds) on arrival; raises MoveError on every
+    failure, after stopping the arm. Every sample goes to the run record (runlog.Telemetry)."""
+    tel = runlog.Telemetry(label)
+    outcome = "error"
+    try:
+        worst, dt = _watch_loop(conn, label, arrived, start_q, max_tilt, torque_limit, timeout, ev, contact, tel)
+        outcome = "done"
+        return worst, dt
+    except MoveError as e:
+        outcome = str(e)
+        raise
+    finally:
+        tel.save(outcome=outcome)
 
-    contact: a ContactGuard, or None. log: a list to append per-sample records to.
-    """
+
+def _watch_loop(conn, label, arrived, start_q, max_tilt, torque_limit, timeout, ev, contact, tel):
     guard = TorqueGuard(limit=torque_limit)
     t0 = time.time()
     worst = 0.0
@@ -245,15 +284,11 @@ def _watch(conn, label, arrived, start_q, max_tilt, torque_limit, timeout, ev,
     while time.time() - t0 < timeout:
         time.sleep(0.05)
         fb = conn.base_cyclic.RefreshFeedback()
+        tel.add(fb)
         t = tilt_of(fb.base)
         worst = max(worst, t)
         fz = fb.base.tool_external_wrench_force_z
         now = time.time() - t0
-        if log is not None:
-            log.append(dict(t=now, z=fb.base.tool_pose_z, fz=fz,
-                            fx=fb.base.tool_external_wrench_force_x,
-                            fy=fb.base.tool_external_wrench_force_y,
-                            tau=[a.torque for a in fb.actuators], label=label))
         if contact is not None:
             why = contact.update(now, fz, fb.base.tool_pose_z)
             if why:
@@ -295,10 +330,15 @@ def _watch(conn, label, arrived, start_q, max_tilt, torque_limit, timeout, ev,
     raise MoveError("%s TIMED OUT after %.0f s" % (label, timeout))
 
 
-def goto(conn, target, speed: float = 10.0, tol: float = 0.08, label: str = "",
-         max_tilt: float = MAX_TILT_DEG, torque_limit: float = TORQUE_STEP_NM,
-         verbose: bool = True):
-    """Joint move to a COMPLETE 7-joint target, keeping the utensil down."""
+def goto(conn: KinovaConnection, target: Sequence[float], speed: float = 10.0, tol: float = 0.08,
+         label: str = "", max_tilt: float = MAX_TILT_DEG, torque_limit: float = TORQUE_STEP_NM,
+         verbose: bool = True) -> None:
+    """Joint move to a COMPLETE 7-joint target, keeping the utensil down.
+
+    speed is the fastest joint's average deg/s (the move is time-synchronised: every joint starts and ends
+    together); tol the arrival tolerance per joint, deg. Refuses (MoveError, nothing moved) a target near a
+    joint limit or one that does not point the utensil down within max_tilt.
+    """
     target = [fold(v) for v in target]
     if len(target) != 7:
         raise MoveError("%s REFUSED: need all 7 joints, never a single-joint move" % label)
@@ -315,7 +355,7 @@ def goto(conn, target, speed: float = 10.0, tol: float = 0.08, label: str = "",
     travel = max(abs(fold(t - c)) for t, c in zip(target, q0))
     if travel < tol:
         if verbose:
-            print("    %-24s already there" % label)
+            log.info("    %-24s already there", label)
         return
     a = Base_pb2.Action()
     a.name = label or "goto"
@@ -339,21 +379,22 @@ def goto(conn, target, speed: float = 10.0, tol: float = 0.08, label: str = "",
     worst, dt = _watch(conn, label,
                        lambda fb, q: all(abs(fold(a - b)) < tol for a, b in zip(target, q)),
                        q0, max_tilt, torque_limit, max(20.0, 6.0 * travel / speed), ev)
+    runlog.event("goto", label=label, target=target, travel_deg=travel, seconds=dt, worst_tilt_deg=worst)
     if verbose:
-        print("    %-24s ok  %6.1f deg in %4.1f s, worst tilt %.1f deg" % (label, travel, dt, worst))
+        log.info("    %-24s ok  %6.1f deg in %4.1f s, worst tilt %.1f deg", label, travel, dt, worst)
 
 
-def goto_cartesian(conn, xyz, rpy, speed: float = 0.05, tol_m: float = 0.002,
-                   label: str = "", max_tilt: float = MAX_TILT_DEG,
+def goto_cartesian(conn: KinovaConnection, xyz: Sequence[float], rpy: Sequence[float], speed: float = 0.05,
+                   tol_m: float = 0.002, label: str = "", max_tilt: float = MAX_TILT_DEG,
                    torque_limit: float = TORQUE_STEP_NM, verbose: bool = True,
-                   contact=None, log=None):
-    """One smooth straight-line tool move to (xyz, rpy) -- not a staircase."""
+                   contact: ContactGuard | None = None) -> None:
+    """One smooth straight-line tool move to (xyz m, rpy deg) at `speed` m/s -- not a staircase."""
     ev = _preflight(conn, label)
     p0 = tool_pose(conn)
     dist = math.dist(p0[:3], xyz)
     if dist < tol_m:
         if verbose:
-            print("    %-24s already there" % label)
+            log.info("    %-24s already there", label)
         return
     a = Base_pb2.Action()
     a.name = label or "goto_cartesian"
@@ -365,12 +406,13 @@ def goto_cartesian(conn, xyz, rpy, speed: float = 0.05, tol_m: float = 0.002,
     cp.constraint.speed.orientation = 10.0
     conn.base.ExecuteAction(a)
 
-    def arrived(fb, q):
+    def arrived(fb: Any, q: Joints) -> bool:
         b = fb.base
         return math.dist((b.tool_pose_x, b.tool_pose_y, b.tool_pose_z), xyz) < tol_m
 
     worst, dt = _watch(conn, label, arrived, joints(conn), max_tilt, torque_limit,
-                       max(20.0, 4.0 * dist / speed), ev, contact=contact, log=log)
+                       max(20.0, 4.0 * dist / speed), ev, contact=contact)
+    runlog.event("goto_cartesian", label=label, target=list(xyz) + list(rpy), distance_m=dist, seconds=dt,
+                 worst_tilt_deg=worst)
     if verbose:
-        print("    %-24s ok  %5.0f mm in %4.1f s, worst tilt %.1f deg"
-              % (label, 1000 * dist, dt, worst))
+        log.info("    %-24s ok  %5.0f mm in %4.1f s, worst tilt %.1f deg", label, 1000 * dist, dt, worst)

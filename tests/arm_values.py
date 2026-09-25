@@ -50,7 +50,7 @@ with mock.patch.object(sys, "argv", ["deliver", "bite"]):
             dl.main()
         except SystemExit:
             pass
-out["deliver_args"] = {k: v for k, v in captured.items() if k != "step"}
+out["deliver_args"] = {k: v for k, v in captured.items() if k not in ("step", "command")}   # (step was the command)
 import kinova.connection as cn
 out["connection"] = dict(ip=cn.DEFAULT_IP, tcp=cn.TCP_PORT, udp=cn.UDP_PORT)
 print(json.dumps(out, indent=1, sort_keys=True, default=float))

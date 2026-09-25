@@ -75,7 +75,19 @@ def wait_open(D: Path, timeout: float, det=None) -> int:
 
 
 def _wait(det, cap, D, timeout):
-    t0 = time.time(); since = None; last = -1.0
+    """The open-mouth wait. Records the opening over time (open_wait.json) and, if the user never opens,
+    the last frame seen (open_wait_last.jpg) -- to tell "declined" from "face not seen"."""
+    t0 = time.time(); since = None; last = -1.0; trace = []; rgb = None
+
+    def record(result):
+        try:
+            (D / "open_wait.json").write_text(json.dumps(dict(result=result, threshold=OPEN_RATIO, hold_s=OPEN_HOLD_S,
+                                                              t=[r[0] for r in trace], opening=[r[1] for r in trace],
+                                                              face=[r[2] for r in trace])))
+            if result != "open" and rgb is not None:
+                Image.fromarray(rgb).save(D / "open_wait_last.jpg")
+        except Exception:  # noqa: BLE001 -- a debug record
+            pass
     print("    waiting up to %.0f s for an open mouth (opening > %.2f for %.1f s)" % (timeout, OPEN_RATIO, OPEN_HOLD_S))
     while time.time() - t0 < timeout:
         ok, bgr = cap.read()
@@ -84,6 +96,7 @@ def _wait(det, cap, D, timeout):
         rgb = bgr[:, :, ::-1]
         L, _ = landmarks(det, np.rot90(rgb, -1))            # == PIL ROTATE_270 (90 deg clockwise)
         o = opening(L) if L is not None else 0.0
+        trace.append((round(time.time() - t0, 3), round(o, 4), L is not None))
         if time.time() - last > 2.0:
             print("      mouth opening %.2f" % o); last = time.time()
         if o > OPEN_RATIO:
@@ -91,10 +104,12 @@ def _wait(det, cap, D, timeout):
             if time.time() - since >= OPEN_HOLD_S:
                 Image.fromarray(rgb).save(D / "colour.jpg")
                 print("    mouth open (%.2f) after %.1f s" % (o, time.time() - t0))
+                record("open")
                 return 0
         else:
             since = None
     print("    no open mouth in %.0f s" % timeout)
+    record("no open mouth")
     return 4
 
 

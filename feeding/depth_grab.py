@@ -27,6 +27,8 @@ def main() -> int:
         print("depth server: %s" % e, file=sys.stderr)
         return 1
     np.save(a.out, d)
+    from feeding.viz import depth_png
+    depth_png(d, str(a.out)[:-4] + ".png" if str(a.out).endswith(".npy") else str(a.out) + ".png")
     v = d > 0
     print("depth %dx%d, %.1f%% valid, median %.0f mm, %.2f s" % (d.shape[1], d.shape[0], 100 * v.mean(),
                                                                np.median(d[v]) if v.any() else 0, time.time() - t0))

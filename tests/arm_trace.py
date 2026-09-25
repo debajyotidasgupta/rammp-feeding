@@ -125,13 +125,13 @@ def write(path, obj):
     Path(path).write_text(json.dumps(obj))
 
 
-def face(nose_depth=0.44, mouth=True, stale=False, filled=False, name="face"):
+def face(nose_depth=0.44, mouth=True, stale=False, filled=False, name="face", mouth_depth=0.445):
     d = WORK / name
     d.mkdir(exist_ok=True)
     (d / "colour.jpg").write_bytes(b"jpg")
     f = dict(nose=dict(box_upright=[330, 475, 390, 525], depth_m=nose_depth))
     if mouth:
-        f["mouth"] = dict(box_upright=[320, 530, 400, 570], depth_m=0.445, cam_xyz=[0.004, -0.006, 0.445],
+        f["mouth"] = dict(box_upright=[320, 530, 400, 570], depth_m=mouth_depth, cam_xyz=[0.004, -0.006, mouth_depth],
                           prompt="mouth", depth_filled=filled)
     (d / "face.json").write_text(json.dumps(f))
     now = fk.clock.time()
@@ -255,6 +255,7 @@ def _scenarios(trace):
     before = (list(ARM.q), list(ARM.pose))
     run(DEL, ["sidestep", "--step", "0.05"], trace)          # as deliver.sh calls it
     ARM.place(*before)                                       # the next steps from the same pose either way
+    run(DEL, ["approach"] + face(nose_depth=0.905, mouth_depth=0.921, name="stale_depth"), trace)   # exit 5
     run(DEL, ["approach", "--validate-only"] + face(name="v"), trace)
     run(DEL, ["approach"] + face(filled=True, name="filled"), trace)
     t0 = fk.clock.time()

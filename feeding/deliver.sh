@@ -83,6 +83,12 @@ if run present; then
     docker cp "$D/face.json" "$DRIVER":"$C/face.json" >/dev/null; docker cp "$D/colour.jpg" "$DRIVER":"$C/colour.jpg" >/dev/null
     NOSE=""; [ "$SHIFT" = 100 ] && NOSE="--allow-nose"
     set +e; arm approach --face "$C/face.json" --colour "$C/colour.jpg" $NOSE $VO; rc=$?; set -e
+    if [ $rc = 5 ]; then           # the depth was not a face at the fork (a stale frame): one fresh look from here
+      echo "    looking again (fresh colour + depth)"; ev depth_implausible
+      D2="${D}_again"; mkdir -p "$D2"; capture_colour "$D2"; capture_depth "$D2"; detect_face "$D2"; D="$D2"
+      docker cp "$D/face.json" "$DRIVER":"$C/face.json" >/dev/null; docker cp "$D/colour.jpg" "$DRIVER":"$C/colour.jpg" >/dev/null
+      set +e; arm approach --face "$C/face.json" --colour "$C/colour.jpg" $NOSE $VO; rc=$?; set -e
+    fi
     [ $rc = 0 ] && break
     [ $rc != 3 ] && { echo "present refused -- nothing further moved ($D)"; exit 1; }
     [ -n "$VALIDATE" ] && { echo "    validate-only: would sidestep -Y 50 mm and look again"; exit 0; }

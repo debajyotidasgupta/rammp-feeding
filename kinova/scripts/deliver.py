@@ -31,7 +31,8 @@ retract   (fast: no food, moving away) back off along the utensil to the swing's
           proven joint move to food_detect_start. Without the steering the joint move dips the tip to the
           bowl floor (222 mm); with it, never below ~340 mm.
 
-Exit codes: 0 done, 1 stopped (nothing further moved), 3 mouth not usable (sidestep and look again), 4 no bite.
+Exit codes: 0 done, 1 stopped (nothing further moved), 3 mouth not usable (sidestep and look again), 4 no bite,
+5 the depth is not plausibly a face at the fork (look again from here).
 """
 
 from __future__ import annotations
@@ -296,6 +297,18 @@ def _mouth_box_problem(m: dict | None, n: dict, ncx: float, ncy: float, nw: floa
     return None
 
 
+def _depth_implausible(f: dict, mouth_z: float) -> str | None:
+    """Why the mouth's depth cannot be a face at the fork (a stale or misregistered depth frame), or None."""
+    lo, hi = (float(x) for x in MC.depth_range_m)
+    if not lo <= mouth_z <= hi:
+        return "mouth depth %.0f mm is outside %.0f-%.0f mm" % (1000 * mouth_z, 1000 * lo, 1000 * hi)
+    face_z = (f.get("face") or {}).get("depth_m")
+    if face_z and abs(mouth_z - face_z) > float(MC.max_face_diff_m):
+        return "mouth depth %.0f mm is %.0f mm off the face's %.0f" % (1000 * mouth_z, 1000 * abs(mouth_z - face_z),
+                                                                        1000 * face_z)
+    return None
+
+
 def approach(conn: KinovaConnection, face_path: str, colour_path: str, allow_nose: bool = False,
              validate_only: bool = False) -> int:
     """Straight in to STOP_M short of the mouth, from a fresh detection made at this pose. 3 = mouth not usable."""
@@ -309,6 +322,11 @@ def approach(conn: KinovaConnection, face_path: str, colour_path: str, allow_nos
         log.info("    mouth not usable (%s) -- sidestep and look again", source)
         runlog.event("mouth_not_usable", why=source)
         return 3
+    bad = _depth_implausible(f, cam[2])
+    if bad:
+        log.info("    %s -- not approaching; look again", bad)
+        runlog.event("depth_implausible", why=bad)
+        return 5
     p = tool_pose(conn)
     q0 = joints(conn)
     T0 = np.array(p[:3])

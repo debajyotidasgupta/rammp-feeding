@@ -193,6 +193,9 @@ delivery:
     below_nose_heights: [0.4, 1.5]   # its centre this many nose heights below the nose's
     max_sideways_nose_widths: 1.0
     max_depth_diff_m: 0.030     # from the nose's depth
+    depth_range_m: [0.25, 0.75] # a mouth outside this is not a face at the fork: a stale / misregistered depth
+                                # frame (2026-09-25: 921 mm, the face was ~0.52 m) -- look again, never approach
+    max_face_diff_m: 0.080      # the mouth's depth vs the face box's median depth
   level_tol: 0.1                # |utensil axis z| below this = level (at the user)
   pointing_tol_cos: 0.99        # the utensil points at the user (+Y) / back along the swing: cos of the angle
   arrived_m: 0.003              # closer than this to a goal = already there

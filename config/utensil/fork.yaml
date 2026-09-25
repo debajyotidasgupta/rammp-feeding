@@ -5,12 +5,14 @@
 name: fork
 camera_to_tip_m: 0.265          # measured 260-261 (ruler to bare table + depth; camera case + 6.7 mm); stored long on
                                 # purpose, so every stop errs high: a nominal 10 mm hover looks like 15-20 mm by eye
-tip_px: [685, 476]              # the tine tips in the colour image (the fork is fixed to the camera: the same pixels
+tip_px: [690, 436]              # the tine tips in the colour image (the fork is fixed to the camera: the same pixels
+                                # at every pose). 2026-09-25 18:00, after the arm's power-cycle re-seated the fork: the
+                                # tips moved ~35 px up in the overlook image (was (685, 476), set 16:3x below)
                                 # at every pose). 2026-09-25, measured in the overlook image: the white fork's top
                                 # 12 rows, x 657..724 -> 49 mm off the camera's vertical at camera_to_tip. Was
                                 # (644, 405), 34.5 mm off: a cube plunge landed ~15 mm -X, ~12 mm -Y of centre,
                                 # which the correction accounts for (fork_20260924.yaml keeps the old values)
-image_region_px: [640, 460, 760, 719]   # its pixels at the overlook -- never detected, never mistaken for food
+image_region_px: [640, 420, 760, 719]   # its pixels at the overlook -- never detected, never mistaken for food
 tine_offset_tool_m: [-0.005, 0.0, 0.0]   # the tines' offset from tip_px's tip, TOOL frame: the fork head curves, so
                                     # they meet the food off where the image puts the tip. Part of the tip model
                                     # (kinova/motion.tip_in_tool: plunge, scoop pivot, the approach to the mouth) and

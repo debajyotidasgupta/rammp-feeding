@@ -36,6 +36,7 @@ STEER_WITHIN = float(cfg.motion.steer_within_deg)     # steer J2/J4/J6 off a lim
 STEER_STEP = float(cfg.motion.steer_step_deg)
 SPEED_FALLBACKS = [float(f) for f in cfg.motion.speed_fallbacks]   # refused: retry at these fractions
 WATCH_EXTRA_S = float(cfg.motion.watch_extra_s)       # stop watching this long after the planned end
+ACCEL_FACTOR = float(cfg.motion.controller_accel_factor)   # the controller sees this much more acceleration
 
 PoseAt = Callable[[float], "tuple[np.ndarray, np.ndarray]"]   # s in [0, 1] -> (tool xyz, R)
 
@@ -255,6 +256,7 @@ def _waypoints(conn: KinovaConnection, path: Sequence[Sequence[float]], top_spee
     raw = [x.position for x in conn.base_cyclic.RefreshFeedback().actuators]
     asked = top_speed
     top_speed, amax = capped(conn, top_speed)
+    amax /= ACCEL_FACTOR                  # as the controller will measure it: accepted at full speed, not halved
     if top_speed < asked:
         log.info("    %-26s %.0f deg/s asked, the arm's limit allows %.0f", what, asked, top_speed)
     for speed in [top_speed * f for f in SPEED_FALLBACKS]:

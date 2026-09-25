@@ -62,6 +62,9 @@ features:                       # what to switch on and off
 motion:
   joint_accel_cap_dps2: 72.0    # per joint, every trajectory (the controller refuses above 80). Was 40, then 60:
                                 # with the faster speeds (2026-09-25) short moves would never reach cruise
+  controller_accel_factor: 1.6  # the controller interpolates waypoints more sharply than the time scaling's own
+                                # estimate: it measured 1.55-1.56x (115 vs 72, 84 vs 54 deg/s^2, 2026-09-25) and
+                                # refused -- then every retry halved the move. Plan with the cap / this
   joint_limits_deg: {2: 128.9, 4: 147.8, 6: 120.3}   # J2 / J4 / J6; the others are continuous
   joint_limit_margin_deg: 0.3   # a target this close to a limit is refused (Kortex silently ignores it)
   plan_min_margin_deg: 3.0      # planned paths keep at least this from every limit

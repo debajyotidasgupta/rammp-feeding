@@ -21,6 +21,8 @@ change, and say which steps changed and why. History:
               with the previous values pinned the trace was identical.
   2026-09-25  goto re-sends a joint move the controller refuses as too short at its stated minimum duration;
               the fake refuses like the arm (joint_limit_dps) -- two scenarios added, nothing else changed.
+  2026-09-25  trajectories planned with the acceleration cap / motion.controller_accel_factor (1.6): with the
+              factor pinned to 1.0 the trace was identical; validated on the arm (1.0 and 1.3 refused, 1.6 accepted).
 
 No robot, no network. Each scenario is the real command line (the module's main()), run on one persisted fake
 arm, like a session on the real one. The trace holds, per step: every controller request (IK, FK, validated and

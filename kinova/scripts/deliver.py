@@ -511,7 +511,8 @@ def _down_and_home(conn: KinovaConnection, st: DeliveryState, q1: Joints, q2: Jo
     if not go:
         return
     try:
-        goto(conn, qd, speed=RETRACT_HOME_DPS, label="-> food_detect_start", max_tilt=95.0)
+        goto(conn, qd, speed=RETRACT_HOME_DPS, label="-> food_detect_start", max_tilt=95.0,
+             torque_limit=RETRACT_TORQUE_NM)      # at 61 deg/s J2's own acceleration stepped 2.7 N.m (2026-09-25)
     except MoveError as e:
         # braking at the end of this faster move reads as a torque step (J2 -7.8 -> -4.8 N.m on
         # 2026-09-24, nothing touched): if the arm is already there, it arrived

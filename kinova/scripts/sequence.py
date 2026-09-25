@@ -68,6 +68,7 @@ DETECT = cfg.path("bowl.overlook_pose")           # the selected bowl's food_det
 LIFT_Z = float(cfg.motion.sequence.lift_z_m)      # m, tool z at the top of the lift (stall is ~0.565)
 NEAR_DEG = float(cfg.motion.near_pose_deg)        # within this of a pose's joints = "at" that pose
 LIFT_SPEED = float(cfg.motion.sequence.lift_mps)
+DESCEND_SPEED = float(cfg.motion.sequence.descend_mps)   # into the parking pose: slower, it brakes near the table
 SWING_SPEED = float(cfg.motion.sequence.swing_dps)
 SETTLE_DPS = float(cfg.motion.settle_dps)         # the final settle / snap onto a measured pose
 KNOWN_DEG = float(cfg.motion.known_pose_deg)      # within this of a pose = one `home` knows how to retrace from
@@ -167,7 +168,7 @@ def home_(conn: KinovaConnection) -> None:
     h = home["tool_pose"]
     goto_cartesian(conn, (h["x_m"], h["y_m"], h["z_m"]),
                    (h["theta_x_deg"], h["theta_y_deg"], h["theta_z_deg"]),
-                   speed=LIFT_SPEED, label="descend (smooth)")
+                   speed=DESCEND_SPEED, label="descend (smooth)")
     goto(conn, home["joints_deg"], speed=SETTLE_DPS, label="snap onto feeding_start")
     report(conn, "at feeding_start")
 

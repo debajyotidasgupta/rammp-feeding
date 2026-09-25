@@ -81,7 +81,9 @@ motion:
   sequence:                     # make detect / make start
     lift_z_m: 0.545             # tool z at the top of the lift from feeding_start (the arm's reach sets it)
     min_lift_above_table_m: 0.25   # the swing to the bowl crosses the table: refuse a lift top lower than this
-    lift_mps: 0.22              # (2026-09-25, user: faster everywhere but the plunge; was 0.06, then 0.13)
+    lift_mps: 0.22              # up from feeding_start (2026-09-25, user: faster everywhere but the plunge; was 0.06)
+    descend_mps: 0.13           # down into feeding_start: at 0.22 the braking at the bottom read as a contact
+                                # (J4 -6.9 -> -4.0 N.m, nothing touched, 2026-09-25)
     swing_dps: 65.0             # joints ~70-80 deg/s max (was 20, then 44)
 
 guards:                         # contact guard: a joint-torque step this big against recent history = stop

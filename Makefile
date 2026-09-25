@@ -83,7 +83,8 @@ models:
 	else PYTHONPATH=. nohup $(FACE_PY) -m feeding.detect_mouth_mp --serve > $(RUNS)/face_server.log 2>&1 & \
 	  echo "starting face server (log: $(RUNS)/face_server.log)"; fi
 	@if curl -s -m 2 http://127.0.0.1:$(DEPTH_PORT)/ping | grep -q ok; then echo "depth server already up"; \
-	else docker cp feeding/depth_server.py $(VISION):/tmp/depth_server.py >/dev/null && \
+	else docker exec $(VISION) pkill -f "[d]epth_server.py" >/dev/null 2>&1; \
+	  docker cp feeding/depth_server.py $(VISION):/tmp/depth_server.py >/dev/null && \
 	  docker exec -d $(VISION) bash -lc "source /opt/ros/humble/setup.bash; source /ros2_ws/install/setup.bash; cd /tmp && python3 depth_server.py --port $(DEPTH_PORT) --topic $(DEPTH_TOPIC) > /tmp/depth_server.log 2>&1" && \
 	  echo "starting depth server (in $(VISION))"; fi
 	@for i in $$(seq 1 $(MODELS_WAIT)); do curl -s -m 2 http://127.0.0.1:$(DET_PORT)/ping | grep -q ok && curl -s -m 2 http://127.0.0.1:$(FACE_PORT)/ping | grep -q ok && curl -s -m 2 http://127.0.0.1:$(DEPTH_PORT)/ping | grep -q ok && { echo "all models loaded and warm, depth streaming ($${i} s)"; exit 0; }; sleep 1; done; echo "models did not come up -- see $(RUNS)/*.log"; exit 1

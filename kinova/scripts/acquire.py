@@ -207,6 +207,46 @@ def punch(conn: KinovaConnection, under_path: str, floor_m: float) -> None:
 
 # ------------------------------------------------------------------ the plunge
 
+@dataclass
+class PlungeDepth:
+    down: float                        # m straight down from where the tip is
+    food: FoodOnTip                    # the piece as the scoop will see it
+    mode: str                          # "floor": to the measured bowl floor; "below top": packed food, no floor seen
+
+
+NF = A_.plunge.no_floor
+
+
+def _plunge_depth(u: Under, floor_m: float, tip_z: float) -> PlungeDepth:
+    """How far to plunge: to the bowl floor when it is seen beside the food, else (packed food, config
+    acquisition.plunge.no_floor) a fixed depth below the food's top, never closer to the table than allowed."""
+    lo_h = float(A_.plunge.food_height_range_m[0])
+    packed = not u.has_floor or u.height <= lo_h
+    if not (packed and NF.enabled):
+        down = _check_plunge(u, floor_m)
+        return PlungeDepth(down, FoodOnTip(height=u.height, floor_m=floor_m), "floor")
+    why = "no floor reading beside it" if not u.has_floor else "the floor ring reads the neighbours (%.0f mm \"tall\")" % (1000 * u.height)
+    if u.depth_source == "da3-raw" or u.filled_top > 0.5:
+        raise MoveError("packed food (%s) and its top is the Depth Anything 3 fallback -- too uncertain to plunge "
+                        "below it; nothing moved" % why)
+    below = float(NF.depth_below_top_m)
+    down = u.gap_top + below
+    lowest = scene.table_height() + float(NF.min_tip_above_table_m)
+    if tip_z - down < lowest:
+        down = tip_z - lowest
+        below = down - u.gap_top
+        log.info("    (the plunge stops %.0f mm above the table: %.0f mm into the food instead of %.0f)",
+                 1000 * float(NF.min_tip_above_table_m), 1000 * below, 1000 * float(NF.depth_below_top_m))
+        if below < 0.010:
+            raise MoveError("packed food, but the table is only %.0f mm below its top -- not a plunge; nothing moved"
+                            % (1000 * (below + float(NF.min_tip_above_table_m))))
+    lo, hi = A_.plunge.sane_range_m
+    if not lo < down < hi:
+        raise MoveError("plunge of %.0f mm is outside the sane range (80-250) -- re-measure" % (1000 * down))
+    log.info("    packed food (%s): plunging %.0f mm below its top", why, 1000 * below)
+    return PlungeDepth(down, FoodOnTip(height=below, floor_m=0.0), "below top")
+
+
 def _check_plunge(u: Under, floor_m: float) -> float:
     """The plunge depth (m) if the reading is trustworthy enough to stop at the bowl floor; else MoveError."""
     if not u.has_floor:
@@ -293,11 +333,12 @@ def plunge(conn: KinovaConnection, under_path: str, floor_m: float, scoop_with: 
     scoop is planned before the plunge starts and runs straight after it: no pause at the bottom."""
     t_plan = time.time()
     u = Under.load(under_path)
-    down = _check_plunge(u, floor_m)
-    slow_at = max(0.0, u.gap_top - SLOW_ABOVE)          # distance travelled when the slow zone starts
     p = tool_pose(conn)
     q0 = joints(conn)
     T0 = np.array(p[:3])
+    plan = _plunge_depth(u, floor_m, T0[2] + (R_from_kortex(*p[3:]) @ tip_in_tool())[2])
+    down = plan.down
+    slow_at = max(0.0, u.gap_top - SLOW_ABOVE)          # distance travelled when the slow zone starts
     path, dist = _vertical_path(conn, q0, T0, tuple(p[3:]), down)
     v = _plunge_speed(slow_at)
     raw = [x.position for x in conn.base_cyclic.RefreshFeedback().actuators]
@@ -312,15 +353,18 @@ def plunge(conn: KinovaConnection, under_path: str, floor_m: float, scoop_with: 
     else:
         raise MoveError("controller refused the plunge -- nothing moved")
     record_plan("plunge", wl, speed_scale=scale, down_m=down, slow_at_m=slow_at)
-    log.info("    food %.1f mm tall: %.0f mm down to the floor + %.0f mm, slow from %.0f mm; %.1f s",
-             1000 * u.height, 1000 * down, 1000 * floor_m, 1000 * slow_at, total)
-    runlog.event("plunge_plan", down_m=down, floor_m=floor_m, food_height_m=u.height, slow_at_m=slow_at,
-                 seconds=total, speed_scale=scale, under=u.raw)
+    if plan.mode == "floor":
+        log.info("    food %.1f mm tall: %.0f mm down to the floor + %.0f mm, slow from %.0f mm; %.1f s",
+                 1000 * u.height, 1000 * down, 1000 * floor_m, 1000 * slow_at, total)
+    else:
+        log.info("    %.0f mm down, %.0f mm below the food's top, slow from %.0f mm; %.1f s",
+                 1000 * down, 1000 * plan.food.height, 1000 * slow_at, total)
+    runlog.event("plunge_plan", mode=plan.mode, down_m=down, floor_m=floor_m, food_height_m=plan.food.height,
+                 slow_at_m=slow_at, seconds=total, speed_scale=scale, under=u.raw)
     scoop_plan = None
     if scoop_with is not None:                                # plan the scoop NOW, from where the plunge will end
         Te = np.array([T0[0], T0[1], T0[2] - down])
-        scoop_plan = plan_scoop(conn, scoop_with, path[-1], Te, R_from_kortex(*p[3:]),
-                                FoodOnTip(height=u.height, floor_m=floor_m))
+        scoop_plan = plan_scoop(conn, scoop_with, path[-1], Te, R_from_kortex(*p[3:]), plan.food)
     log.info("    plunge%s planned in %.1f s", " + scoop" if scoop_plan else "", time.time() - t_plan)
     if validate_only:
         log.info("    validate-only: controller accepted it, nothing moved")
@@ -335,7 +379,7 @@ def plunge(conn: KinovaConnection, under_path: str, floor_m: float, scoop_with: 
     if why:
         raise MoveError("plunge stopped: %s" % why)
     log.info("    plunge done in %.1f s", time.time() - t0)
-    FoodOnTip(height=u.height, floor_m=floor_m).save()
+    plan.food.save()
     if scoop_plan is not None:
         run_scoop(conn, scoop_with, scoop_plan, validate_only)   # no pause at the bottom: already planned
 
@@ -364,11 +408,15 @@ def pick(conn: KinovaConnection, target_path: str, under_path: str, floor_m: flo
     except SystemExit as e:                    # measure_under's own "no depth return under the tip"
         raise DepthUnavailable(str(e))
     runlog.save_json("under_over", u)
-    if "floor" not in u:
+    if "floor" not in u and not NF.enabled:
         raise DepthUnavailable("no floor reading beside the food")
-    log.info("  under the tip: top %.1f mm (tip %.1f mm above it), floor %.1f mm (tip %.1f mm above it), food %.1f mm tall"
-             "   [fresh depth in %.1f s]", 1000 * u["top"], 1000 * u["gap_top"], 1000 * u["floor"], 1000 * u["gap_floor"],
-             1000 * u["height"], time.time() - t)
+    if "floor" in u:
+        log.info("  under the tip: top %.1f mm (tip %.1f mm above it), floor %.1f mm (tip %.1f mm above it), food %.1f mm tall"
+                 "   [fresh depth in %.1f s]", 1000 * u["top"], 1000 * u["gap_top"], 1000 * u["floor"], 1000 * u["gap_floor"],
+                 1000 * u["height"], time.time() - t)
+    else:
+        log.info("  under the tip: top %.1f mm (tip %.1f mm above it), no floor visible beside it   [fresh depth in %.1f s]",
+                 1000 * u["top"], 1000 * u["gap_top"], time.time() - t)
     Path(under_path).write_text(json.dumps(u))
     (STATE_DIR / "under_over.json").write_text(json.dumps(u))           # feeding/acquire.sh copies it to the bite
     plunge(conn, under_path, floor_m, scoop_with, validate_only)

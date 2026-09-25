@@ -86,6 +86,12 @@ acquisition:
     sane_range_m: [0.080, 0.250]
     food_height_range_m: [0.010, 0.060]
     refuse_if_floor_filled_over: 0.5   # fraction of the floor reading from the depth fallback
+    no_floor:                   # packed food: no bowl floor visible beside the target (the floor ring reads the
+                                # neighbouring pieces: food "thinner" than food_height_range_m, or no floor at all)
+      enabled: true
+      depth_below_top_m: 0.025  # plunge this far below the target's top instead (user, 2026-09-25: 25-30 mm)
+      min_tip_above_table_m: 0.010   # never deeper than this above the table (workspace.table_height_m), whatever
+                                     # the depth says; shorter than 10 mm into the food after that = refused
   scoop:
     speed_dps: 25.0
     rot_exp: 0.8                # turn angle = 90 * s**rot_exp: <1 starts turning the moment the food lifts

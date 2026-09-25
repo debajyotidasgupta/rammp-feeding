@@ -4,9 +4,12 @@
     python tests/arm_trace.py OUT.json --compare BASE.json
     python tests/arm_trace.py /tmp/t.json --compare tests/golden/arm_trace.json.gz    # against the committed one
 
-tests/golden/arm_trace.json.gz is the trace of the code as committed (2026-09-25: identical to the code before
-the readability pass except `deliver sidestep`, which never ran before -- its --step clashed with the step
-argument). Re-record it only for an INTENDED behaviour change, and say which steps changed and why.
+tests/golden/arm_trace.json.gz is the trace of the code as committed. Re-record it only for an INTENDED behaviour
+change, and say which steps changed and why. History:
+  2026-09-25  the readability pass: identical to the code before except `deliver sidestep`, which never ran
+              (its --step clashed with the step argument).
+  2026-09-25  packed food (acquisition.plunge.no_floor): step 24 (food "3 mm tall") now plunges 25 mm below
+              its top instead of refusing; 21-23 read the arm pose before refusing; the packed_scenarios added.
 
 No robot, no network. Each scenario is the real command line (the module's main()), run on one persisted fake
 arm, like a session on the real one. The trace holds, per step: every controller request (IK, FK, validated and
@@ -242,6 +245,26 @@ def scenarios(trace):
     ARM.place(pose=SCOOP_END_POSE[:1] + [0.2] + SCOOP_END_POSE[2:]); run(DEL, ["swing"], trace)   # outside the region
 
 
+def packed_scenarios(trace):
+    """Packed food: no bowl floor visible beside the target -- plunge a fixed depth below its top."""
+    ws = cfg["workspace"]
+    t0 = ws["table_height_m"]
+    try:
+        ARM.place(DETECT["joints_deg"]); write(STATE / "under.json", dict(top=0.39, gap_top=0.125))   # no floor at all
+        run(ACQ, ["plunge", "--then-scoop"], trace)
+        ws["table_height_m"] = 0.392 - 0.125 - 0.010 - 0.015            # the table 15 mm below the food's top + margin
+        ARM.place(DETECT["joints_deg"]); under(0.125, 0.128)
+        run(ACQ, ["plunge", "--validate-only"], trace)                    # shortened to the table bound
+        ws["table_height_m"] = 0.392 - 0.125 - 0.010 - 0.005
+        ARM.place(DETECT["joints_deg"]); under(0.125, 0.128)
+        run(ACQ, ["plunge"], trace)                                       # the table too close: refused
+        ws["table_height_m"] = t0
+        ARM.place(DETECT["joints_deg"]); under(0.125, 0.128, filled_top=0.9)
+        run(ACQ, ["plunge"], trace)                                       # the top is the DA3 fallback: refused
+    finally:
+        ws["table_height_m"] = t0
+
+
 def moved_scenarios(trace):
     """The bowl moved and the table raised: every bowl-dependent pose follows (kinova/scene.py)."""
     ws = cfg["workspace"]
@@ -307,6 +330,8 @@ def main():
     scenarios(trace)
     if "workspace" in cfg:                     # (the code before kinova/scene.py has no workspace)
         moved_scenarios(trace)
+    if "no_floor" in cfg.acquisition.plunge:
+        packed_scenarios(trace)
     clear_state()
     Path(a.out).write_text(json.dumps(trace, indent=0))
     print("%d steps -> %s" % (len(trace), a.out))

@@ -130,6 +130,13 @@ go to a scratch directory (`RAMMP_STATE_DIR`), never the arm's live `/tmp`.
 | PLUNGE | **one smooth move** from the overlook to the **measured bowl floor** (nominal; really ~5–10 mm above it): 20 mm/s, easing to 5 mm/s from 20 mm above the food top | 2026-09-24: 173 mm in 20.2 s, same end depth as the stepped punch |
 | SCOOP | food rises while the utensil turns vertical -> horizontal (+Y); the turn **starts the moment the food lifts** (90°·s^0.8). With the bowl in front of the user it also **backs off to the old scoop end** (`scoop_end`, 206 mm), mostly after the first 20% |  6.3 s at 20 °/s; rose 164.5 mm, 1.0 mm off vertical; berry held |
 
+**Packed food** (`acquisition.plunge.no_floor`, 2026-09-25). When no bowl floor shows beside the target -- the
+floor ring reads the neighbouring pieces, so the food looks under 10 mm tall, or there is no floor reading at
+all -- the plunge goes `depth_below_top_m` (25 mm) below the target's top instead of to the floor, never closer
+than 10 mm to the table (`workspace.table_height_m`: shortened to that, refused if that leaves < 10 mm in the
+food), and never on a top read from the Depth Anything 3 fallback. The scoop then takes the tip as the piece's
+bottom. The torque guard still stops the plunge on contact.
+
 **Why one plunge, not steps.** The stepped route stopped at 30 and 10 mm to re-measure, because the overlook
 reads the food TOP 4–7 mm high. But the punch aims at the FLOOR, and the overlook's floor reading matched the
 close re-measures to within 1 mm on every run (e.g. 172.3 mm, then 65.3 after 107 mm down: predicted 65.3).

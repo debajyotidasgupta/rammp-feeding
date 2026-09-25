@@ -334,7 +334,7 @@ def _run_watched(conn: KinovaConnection, wl: Any, total: float, label: str, on_s
     return why
 
 
-def plunge(conn: KinovaConnection, under_path: str, floor_m: float, scoop_with: ScoopSettings | None = None,
+def plunge(conn: KinovaConnection, under: str | Under, floor_m: float, scoop_with: ScoopSettings | None = None,
            validate_only: bool = False) -> None:
     """OVER -> punch in ONE smooth move (user, 2026-09-24: no stopping on the way down).
 
@@ -344,7 +344,7 @@ def plunge(conn: KinovaConnection, under_path: str, floor_m: float, scoop_with: 
     to 5 mm/s through the food, validated by the controller, watched for torque. With `scoop_with`, the
     scoop is planned before the plunge starts and runs straight after it: no pause at the bottom."""
     t_plan = time.time()
-    u = Under.load(under_path)
+    u = under if isinstance(under, Under) else Under.load(under)     # a path: measured by the shell
     p = tool_pose(conn)
     q0 = joints(conn)
     T0 = np.array(p[:3])
@@ -429,9 +429,13 @@ def pick(conn: KinovaConnection, target_path: str, under_path: str, floor_m: flo
     else:
         log.info("  under the tip: top %.1f mm (tip %.1f mm above it), no floor visible beside it   [fresh depth in %.1f s]",
                  1000 * u["top"], 1000 * u["gap_top"], time.time() - t)
-    Path(under_path).write_text(json.dumps(u))
-    (STATE_DIR / "under_over.json").write_text(json.dumps(u))           # feeding/acquire.sh copies it to the bite
-    plunge(conn, under_path, floor_m, scoop_with, validate_only)
+    # Handed on in memory: under_path belongs to the shell (it copies its measurements there, host-owned, and the
+    # container's root may not overwrite them -- 2026-09-25, the first feed after a stepped-route test stopped here)
+    try:
+        (STATE_DIR / "under_over.json").write_text(json.dumps(u))       # feeding/acquire.sh copies it to the bite
+    except OSError as e:
+        log.info("    (could not keep the reading in %s: %s -- it is in the run record)", STATE_DIR, e)
+    plunge(conn, Under.from_dict(u), floor_m, scoop_with, validate_only)
 
 
 # ------------------------------------------------------------------ the scoop

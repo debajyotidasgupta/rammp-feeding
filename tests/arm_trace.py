@@ -12,6 +12,8 @@ change, and say which steps changed and why. History:
               its top instead of refusing; 21-23 read the arm pose before refusing; the packed_scenarios added.
   2026-09-25  a "floor" > 25 mm above the table is food: the scenarios' table set to 0.255 (just under their
               synthetic floor); a packed scenario with a high false floor added.
+  2026-09-25  pick hands its floor reading to the plunge in memory: it no longer writes under.json (the shell's
+              file; the container could not overwrite it) -- the pick steps' state files differ, nothing else.
 
 No robot, no network. Each scenario is the real command line (the module's main()), run on one persisted fake
 arm, like a session on the real one. The trace holds, per step: every controller request (IK, FK, validated and

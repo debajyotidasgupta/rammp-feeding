@@ -4,6 +4,8 @@
 streams:
   colour_rtsp: rtsp://{arm_ip}/color      # {arm_ip} is filled from deployment.arm.ip
   depth_topic: /camera/depth/image_raw    # ROS 2, in the vision container
+  depth_topics: [/camera/depth/image_raw, /camera2/depth/image_raw]   # two depth nodes, 31 s apart:
+                    # the arm ends each RTSP session every ~62 s and recovery takes 10-20 s (2026-09-25)
 
 colour:
   width: 1280

@@ -44,7 +44,8 @@ def median(frames):
 def main() -> int:
     global PORT, TOPIC
     import argparse
-    ap = argparse.ArgumentParser(); ap.add_argument("--port", type=int, default=PORT); ap.add_argument("--topic", default=TOPIC)
+    ap = argparse.ArgumentParser(); ap.add_argument("--port", type=int, default=PORT)
+    ap.add_argument("--topic", nargs="+", default=[TOPIC], help="one or more depth topics, merged (staggered sessions)")
     a = ap.parse_args(); PORT, TOPIC = a.port, a.topic
     import rclpy
     from rclpy.node import Node
@@ -54,7 +55,8 @@ def main() -> int:
     class Sub(Node):
         def __init__(self):
             super().__init__("depth_server")
-            self.create_subscription(Image, TOPIC, self.cb, qos_profile_sensor_data)
+            for t in TOPIC:          # the arm ends each RTSP session every ~62 s: two sessions, 31 s apart, cover it
+                self.create_subscription(Image, t, self.cb, qos_profile_sensor_data)
 
         def cb(self, msg):
             arr = np.frombuffer(msg.data, dtype=np.uint16).reshape(msg.height, msg.width).copy()

@@ -31,7 +31,7 @@ RUNS       := $(shell $(SET) deployment.runs_dir)
 DET_PORT   := $(shell $(SET) deployment.servers.detector_port)
 FACE_PORT  := $(shell $(SET) deployment.servers.face_port)
 DEPTH_PORT := $(shell $(SET) deployment.servers.depth_port)
-DEPTH_TOPIC:= $(shell $(SET) camera.streams.depth_topic)
+DEPTH_TOPIC:= $(shell $(SET) camera.streams.depth_topics)
 MODELS_WAIT:= $(shell $(SET) deployment.servers.startup_timeout_s)
 # RTSP transport for the depth stream. The session drops periodically either way
 # (an upstream timeout, not a network fault -- the link measures 0% loss), but
@@ -175,7 +175,13 @@ depth:
 	     device:=$(ARM_IP) launch_color:=false launch_depth:=true \
 	     depth_camera_info_url:=file:///calib/depth_480x270.ini \
 	     depth_rtsp_element_config:="depth protocols=$(RTSP_PROTOCOLS) latency=30"'
-	@echo "depth node started; topic /camera/depth/image_raw (per-unit calibration)"
+	@docker exec -d kinova_vision bash -lc 'sleep 31; source /opt/ros/humble/setup.bash; source /ros2_ws/install/setup.bash; \
+	   exec ros2 launch kinova_vision kinova_vision.launch.py camera:=camera2 \
+	     device:=$(ARM_IP) launch_color:=false launch_depth:=true \
+	     depth_camera_info_url:=file:///calib/depth_480x270.ini \
+	     depth_rtsp_element_config:="depth protocols=$(RTSP_PROTOCOLS) latency=30" > /tmp/camera2.log 2>&1'
+	@echo "depth nodes started: /camera/depth/image_raw now, /camera2/depth/image_raw in 31 s (the arm ends each"
+	@echo "RTSP session every ~62 s; staggered, one of the two is always streaming)"
 
 clean-depth:
 	-docker rm -f kinova_vision

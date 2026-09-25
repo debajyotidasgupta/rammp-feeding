@@ -55,8 +55,8 @@ features:                       # what to switch on and off
   utensil_cross_check: false    # also detect the utensil, to check its stored image region
 
 motion:
-  joint_accel_cap_dps2: 60.0    # per joint, every trajectory (the controller refuses above 80). Was 40: with the
-                                # 2.2x speeds (2026-09-25) short moves would never reach cruise
+  joint_accel_cap_dps2: 72.0    # per joint, every trajectory (the controller refuses above 80). Was 40, then 60:
+                                # with the faster speeds (2026-09-25) short moves would never reach cruise
   joint_limits_deg: {2: 128.9, 4: 147.8, 6: 120.3}   # J2 / J4 / J6; the others are continuous
   joint_limit_margin_deg: 0.3   # a target this close to a limit is refused (Kortex silently ignores it)
   plan_min_margin_deg: 3.0      # planned paths keep at least this from every limit
@@ -65,6 +65,8 @@ motion:
   near_pose_deg: 1.0            # within this of a pose's joints = "at" that pose
   known_pose_deg: 5.0           # `make start`: within this of food_detect_start / the lift top = a pose it retraces from
   settle_dps: 10.0              # the final settle / snap onto a measured pose (x2, was 5)
+  goto_pad_s: 0.3               # a joint move's duration = travel / speed + this (the ramp at each end), at least
+  goto_min_s: 0.8               # this. Was 1.0 / 1.5 s: at 65 deg/s the pad was a third of every swing
   max_joint_step_deg: 8         # a continuous IK path: a bigger step on any joint is a jump, not a path
   steer_within_deg: 25          # paths steer J2 / J4 / J6 away from a limit once within this of it ...
   steer_step_deg: 3.0           # ... by this much of IK guess per step
@@ -77,8 +79,8 @@ motion:
   sequence:                     # make detect / make start
     lift_z_m: 0.545             # tool z at the top of the lift from feeding_start (the arm's reach sets it)
     min_lift_above_table_m: 0.25   # the swing to the bowl crosses the table: refuse a lift top lower than this
-    lift_mps: 0.13              # x2.2 (2026-09-25, user: 2-2.5x everywhere but the plunge; was 0.06)
-    swing_dps: 44.0             # x2.2 (was 20)
+    lift_mps: 0.22              # (2026-09-25, user: faster everywhere but the plunge; was 0.06, then 0.13)
+    swing_dps: 65.0             # joints ~70-80 deg/s max (was 20, then 44)
 
 guards:                         # contact guard: a joint-torque step this big against recent history = stop
   torque_window: {span: 12, gap: 5}   # samples: the baseline window, and the gap before the sample compared to it
@@ -93,7 +95,7 @@ guards:                         # contact guard: a joint-torque step this big ag
   scoop_food_drop_m: 0.010      # ... or this far below it
 
 acquisition:
-  over_speed_mps: 0.11          # x2.2 (was 0.05)
+  over_speed_mps: 0.15          # (was 0.05, then 0.11)
   over_max_m: 0.10              # OVER is a small correction inside the bowl, never a transit
   over_level_tol_m: 0.002       # OVER's goal must be at the overlook height, within this
   over_depth_guess_m: 0.41      # where the floor measurement starts looking, from OVER (camera to food, m)
@@ -154,7 +156,7 @@ perception:
 delivery:
   lift_m: 0.175                 # above the scoop end, before the swing (60 mm touched the bowl)
   retract_tries_m: [0.120, 0.100, 0.080, 0.060, 0.040, 0.0]   # retraction along the utensil while swinging
-  swing_dps: 44.0               # x2.2 (was 20)
+  swing_dps: 65.0               # (was 20, then 44)
   detect_sidestep_m: 0.050      # to the user's right (-Y) before looking
   stop_m: 0.080                 # utensil tip short of the mouth (safe for any cube-sized piece)
   stop_extra_if_depth_filled_m: 0.040
@@ -184,10 +186,10 @@ delivery:
   bite_hold_s: 0.10
   bite_timeout_s: 60.0
   retract:
-    back_off_mps: 0.13          # x2.2 (was 0.060)
-    swing_dps: 55.0             # x2.2 (was 25)
-    down_dps: 44.0              # x2.2 (was 20)
-    home_dps: 44.0              # x2.2 (was 20)
+    back_off_mps: 0.20          # (was 0.060, then 0.13)
+    swing_dps: 65.0             # (was 25, then 55)
+    down_dps: 65.0              # (was 20, then 44)
+    home_dps: 65.0              # (was 20, then 44)
     max_from_swing_end_m: 0.400 # further than this from where the swing ended = not retracing from here
     resume_tol_m: 0.020         # within this of the swing's start (utensil turned back) = legs 1-2 already done
     descend_to_above_scoop_end_m: 0.080   # the descent's end; the lift's arm shape at this height steers it

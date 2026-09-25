@@ -17,6 +17,8 @@ change, and say which steps changed and why. History:
   2026-09-25  motion 2.2x faster except the plunge (config): durations and speeds differ everywhere; with the old
               speeds pinned (RAMMP_SET) the trace was identical to the previous golden one -- the tool-frame tine
               offset, the depth retries and the wait record change nothing else.
+  2026-09-25  transit moves near the arm's limits (65 deg/s, 0.22 m/s lift, 72 deg/s^2, joint-move pad 0.3 s):
+              with the previous values pinned the trace was identical.
 
 No robot, no network. Each scenario is the real command line (the module's main()), run on one persisted fake
 arm, like a session on the real one. The trace holds, per step: every controller request (IK, FK, validated and

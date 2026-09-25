@@ -375,7 +375,7 @@ def goto(conn: KinovaConnection, target: Sequence[float], speed: float = 10.0, t
     # J2+J4+J6 linearly between its endpoints. Under a per-joint speed limit a
     # short-travel joint finishes early and the sum wanders.
     rj.constraint.type = Base_pb2.JOINT_CONSTRAINT_DURATION
-    rj.constraint.value = max(1.5, travel / speed + 1.0)
+    rj.constraint.value = max(float(cfg.motion.goto_min_s), travel / speed + float(cfg.motion.goto_pad_s))
     conn.base.ExecuteAction(a)
     worst, dt = _watch(conn, label,
                        lambda fb, q: all(abs(fold(a - b)) < tol for a, b in zip(target, q)),

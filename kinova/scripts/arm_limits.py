@@ -38,7 +38,8 @@ def read(conn) -> dict:
     cc = _client(conn)
     names = {v: k for k, v in CC.ControlMode.items()}
     h = cc.GetKinematicHardLimits()
-    out = dict(hard=dict(joint_speed_dps=[math.degrees(v) for v in h.joint_speed_limits],
+    # the hard limits come back mixed: joint speeds in deg/s, accelerations in rad/s^2 (80 / 70 and 5.2 / 10)
+    out = dict(hard=dict(joint_speed_dps=list(h.joint_speed_limits),
                          joint_accel_dps2=[math.degrees(v) for v in h.joint_acceleration_limits],
                          twist_linear_mps=h.twist_linear, twist_angular_dps=h.twist_angular), soft={})
     for m in cc.GetAllKinematicSoftLimits().kinematic_limits_list:

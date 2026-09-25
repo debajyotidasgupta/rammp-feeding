@@ -84,7 +84,9 @@ RETRACT_MPS = 0.060            # back off along the utensil
 RETRACT_SWING_DPS = 25.0
 RETRACT_DOWN_DPS = 20.0
 RETRACT_HOME_DPS = 20.0
-RETRACT_TORQUE_NM = 6.0        # empty utensil, moving away: J1 starting the fast reverse swing with the arm
+RETRACT_TORQUE_NM = 6.0
+SWING_TORQUE_NM = 6.0          # lift + swing: open air, food level; 2.5 tripped on acceleration
+APPROACH_TORQUE_NM = 4.0       # toward the face: 2.5 tripped when the user sat down (the chair shakes the mount)        # empty utensil, moving away: J1 starting the fast reverse swing with the arm
                                # stretched out stepped past 2.5 N.m with nothing touching (2026-09-24 demo)
 MIN_TIP_Z = 0.300              # the return's joint move must keep the utensil tip above this
 UP_W, UP_H = 720, 1280         # upright (rotated) image
@@ -234,7 +236,7 @@ def swing(conn, a):
 
 
 def _swing_go(conn, a, path, rmax, q80, up, p, z0):
-    run_path(conn, path, SWING_DPS, "lift + swing + step right", not a.validate_only)
+    run_path(conn, path, SWING_DPS, "lift + swing + step right", not a.validate_only, torque_limit=SWING_TORQUE_NM)
     if a.validate_only:
         return
     pe = tool_pose(conn)          # the retract's back-off returns here
@@ -303,7 +305,8 @@ def approach(conn, a):
     path, err = homotopy(conn, q0, lambda s: (T0 + (Tg - T0) * s, R), 40)
     if path is None:
         raise MoveError("approach " + err + " -- not moving")
-    run_path(conn, path, dps_for(path, L, APPROACH_MPS), "approach at %.0f mm/s" % (1000 * APPROACH_MPS), not a.validate_only)
+    run_path(conn, path, dps_for(path, L, APPROACH_MPS), "approach at %.0f mm/s" % (1000 * APPROACH_MPS), not a.validate_only,
+             torque_limit=APPROACH_TORQUE_NM)
     if not a.validate_only:
         tip = np.array(tool_pose(conn)[:3]) + R @ tip_in_tool()
         print("    utensil tip %.0f mm from the detected mouth" % (1000 * np.linalg.norm(mouth - tip)))

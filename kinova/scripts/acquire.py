@@ -263,7 +263,8 @@ def _timing(path, peak, ramp):
     return [max(0.02, d) for d in np.diff(t)]
 
 
-A_MAX = 50.0                   # deg/s^2 per joint (the controller refuses above 80)
+A_MAX = 40.0                   # deg/s^2 per joint (controller refuses above 80); 40 for smoother starts
+SCOOP_TORQUE_NM = 6.0          # contact guard in the scoop: 2.5 tripped on the arm's own acceleration
 
 
 def _time_scale(path, vmax, amax=A_MAX):
@@ -398,7 +399,7 @@ def run_scoop(conn, a, plan):
         return
     # 4. watch: the food must stay on its planned path (its vertical line, if not backing off) and not drop
     plan_piv = np.array([piv_at(k / 400) for k in range(401)])
-    ev = _events(conn); ev.clear(); guard = TorqueGuard(); log = []; why = None; worst = 0.0
+    ev = _events(conn); ev.clear(); guard = TorqueGuard(limit=SCOOP_TORQUE_NM); log = []; why = None; worst = 0.0
     conn.base.ExecuteWaypointTrajectory(wl)
     t0 = time.time()
     while time.time() - t0 < total + 15:

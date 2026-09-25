@@ -35,7 +35,7 @@ SDK        := $(HOME)/kortex_api_2.8.0_$(ARCHTAG)
 # sync.sh --delete and needs sudo to clear.
 INARM      := docker exec -e PYTHONDONTWRITEBYTECODE=1 tcp_rec python3 -u -m
 
-.PHONY: sdk kortex vision images depth clean-depth status state start detect perceive over acquire deliver retract feed capture
+.PHONY: sdk kortex vision images depth clean-depth status state start detect perceive over acquire deliver retract feed detector capture
 
 # --- the arm ----------------------------------------------------------------
 # Every motion goes through kinova/scripts/safe_move.py: utensil kept pointing
@@ -56,6 +56,13 @@ detect:
 # the optional Depth Anything 3 cross-check.
 perceive:
 	@feeding/stage1.sh
+
+# Keep the detection model loaded between bites (loading it costs 13.6 s). Runs in the background;
+# perceive uses it when it is up and loads the model itself when it is not.
+detector:
+	@if curl -s -m 2 http://127.0.0.1:8765/ping | grep -q ok; then echo "detector already running"; \
+	else PYTHONPATH=. nohup $$HOME/venvs/la/bin/python -m feeding.detector_server > $$HOME/rammp_runs/detector.log 2>&1 & \
+	  echo "detector starting (log: ~/rammp_runs/detector.log)"; fi
 
 # Acquisition, one verified step at a time. Uses the latest make perceive run.
 over:

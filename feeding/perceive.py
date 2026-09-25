@@ -89,17 +89,21 @@ def main() -> int:
     ap.add_argument("--out", default="scene_det")
     ap.add_argument("--food", default="food pieces")
     ap.add_argument("--utensil", default="spoon", help="phrase for the cross-check only")
+    ap.add_argument("--check-utensil", action="store_true", help="also detect the utensil, to cross-check its stored region")
     ap.add_argument("--pose", default=str(Path(__file__).resolve().parent.parent
                                           / "calibration" / "food_detect_pose.json"),
                     help="pose file carrying the fixed utensil_px region")
     a = ap.parse_args()
 
-    img = Image.open(a.image).convert("RGB")
-    la = LocateAnything()
+    img = Image.open(a.image).convert("RGB"); img.filename = a.image     # the detector server reads the file
+    from feeding.detector_server import connect
+    la = connect()                                  # the resident model if `make detector` is up, else load here
 
     result, groups = {"image": a.image, "width": img.width, "height": img.height}, []
     t0 = time.perf_counter()
-    food_all = la.locate(img, a.food, max_new_tokens=512)
+    # 128, not 512: past the real pieces the model repeats itself (80 boxes for 4 berries, 14 s); 128 tokens
+    # is ~20 boxes, more than a bowl holds, in ~5 s
+    food_all = la.locate(img, a.food, max_new_tokens=128)
     food = [b for b in food_all if plausible(b)]
     t_food = time.perf_counter() - t0
 
@@ -109,7 +113,9 @@ def main() -> int:
         return ([b] if b and plausible(b) else []), time.perf_counter() - t
 
     bowl, t_bowl = one("bowl")
-    seen, t_ute = one(a.utensil)
+    # the utensil is not detected (its region is stored); the cross-check query cost ~2 s a bite and is
+    # now only run on request
+    seen, t_ute = one(a.utensil) if a.check_utensil else ([], 0.0)
 
     from feeding.locate_anything import Box
     pose = json.loads(Path(a.pose).read_text())

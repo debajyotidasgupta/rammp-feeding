@@ -132,7 +132,8 @@ go to a scratch directory (`RAMMP_STATE_DIR`), never the arm's live `/tmp`.
 
 **Packed food** (`acquisition.plunge.no_floor`, 2026-09-25). When no bowl floor shows beside the target -- the
 floor ring reads the neighbouring pieces, so the food looks under 10 mm tall, or there is no floor reading at
-all -- the plunge goes `depth_below_top_m` (25 mm) below the target's top instead of to the floor, never closer
+all, or the "floor" is more than 25 mm above the table (`floor_max_above_table_m`: a real bowl floor sits a few mm
+above it) -- the plunge goes `depth_below_top_m` (25 mm) below the target's top instead of to the floor, never closer
 than 10 mm to the table (`workspace.table_height_m`: shortened to that, refused if that leaves < 10 mm in the
 food), and never on a top read from the Depth Anything 3 fallback. The scoop then takes the tip as the piece's
 bottom. The torque guard still stops the plunge on contact.

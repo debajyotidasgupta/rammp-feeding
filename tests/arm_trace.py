@@ -10,6 +10,8 @@ change, and say which steps changed and why. History:
               (its --step clashed with the step argument).
   2026-09-25  packed food (acquisition.plunge.no_floor): step 24 (food "3 mm tall") now plunges 25 mm below
               its top instead of refusing; 21-23 read the arm pose before refusing; the packed_scenarios added.
+  2026-09-25  a "floor" > 25 mm above the table is food: the scenarios' table set to 0.255 (just under their
+              synthetic floor); a packed scenario with a high false floor added.
 
 No robot, no network. Each scenario is the real command line (the module's main()), run on one persisted fake
 arm, like a session on the real one. The trace holds, per step: every controller request (IK, FK, validated and
@@ -171,6 +173,21 @@ def under(top_gap, floor_gap, **extra):
 
 
 def scenarios(trace):
+    # the synthetic floor readings below (gap_floor 0.123 from a tip at z 0.392) put the bowl floor at z ~0.27: the
+    # table just under it, as with the real bowl -- else the packed-food rule would read every one as food
+    nodes = [n for n in (dict.get(cfg, "workspace", {}), dict.get(cfg["bowl"], "captured_at", {}))   # the real
+             if "table_height_m" in n]                                                              # nodes
+    real = [n["table_height_m"] for n in nodes]
+    for n in nodes:
+        n["table_height_m"] = 0.255
+    try:
+        _scenarios(trace)
+    finally:
+        for n, v in zip(nodes, real):
+            n["table_height_m"] = v
+
+
+def _scenarios(trace):
     clear_state()
     # --- stage 1 motions
     ARM.place(HOME["joints_deg"])
@@ -259,6 +276,8 @@ def packed_scenarios(trace):
         ARM.place(DETECT["joints_deg"]); under(0.125, 0.128)
         run(ACQ, ["plunge"], trace)                                       # the table too close: refused
         ws["table_height_m"] = t0
+        ARM.place(DETECT["joints_deg"]); under(0.119, 0.132)                 # 13 mm "tall", the floor 40 mm up
+        run(ACQ, ["plunge", "--validate-only"], trace)
         ARM.place(DETECT["joints_deg"]); under(0.125, 0.128, filled_top=0.9)
         run(ACQ, ["plunge"], trace)                                       # the top is the DA3 fallback: refused
     finally:

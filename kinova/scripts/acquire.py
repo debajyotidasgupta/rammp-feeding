@@ -223,11 +223,18 @@ def _plunge_depth(u: Under, floor_m: float, tip_z: float) -> PlungeDepth:
     """How far to plunge: to the bowl floor when it is seen beside the food, else (packed food, config
     acquisition.plunge.no_floor) a fixed depth below the food's top, never closer to the table than allowed."""
     lo_h = float(A_.plunge.food_height_range_m[0])
-    packed = not u.has_floor or u.height <= lo_h
-    if not (packed and NF.enabled):
+    floor_above_table = (tip_z - u.gap_floor - scene.table_height()) if u.has_floor else None
+    if not u.has_floor:
+        why = "no floor reading beside it"
+    elif u.height <= lo_h:
+        why = "the floor ring reads the neighbours (%.0f mm \"tall\")" % (1000 * u.height)
+    elif floor_above_table > float(NF.floor_max_above_table_m):
+        why = "the \"floor\" beside it is %.0f mm above the table: food" % (1000 * floor_above_table)
+    else:
+        why = None
+    if why is None or not NF.enabled:
         down = _check_plunge(u, floor_m)
         return PlungeDepth(down, FoodOnTip(height=u.height, floor_m=floor_m), "floor")
-    why = "no floor reading beside it" if not u.has_floor else "the floor ring reads the neighbours (%.0f mm \"tall\")" % (1000 * u.height)
     if u.depth_source == "da3-raw" or u.filled_top > float(NF.refuse_if_top_filled_over):
         raise MoveError("packed food (%s) and its top is the Depth Anything 3 fallback -- too uncertain to plunge "
                         "below it; nothing moved" % why)

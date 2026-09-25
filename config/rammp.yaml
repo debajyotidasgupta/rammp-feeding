@@ -110,6 +110,8 @@ acquisition:
     no_floor:                   # packed food: no bowl floor visible beside the target (the floor ring reads the
                                 # neighbouring pieces: food "thinner" than food_height_range_m, or no floor at all)
       enabled: true
+      floor_max_above_table_m: 0.025   # a "floor" higher than this above the table is food, not the floor
+                                       # (the round bowl's floor: 7 mm; packed pieces read 40+ mm, 2026-09-25)
       depth_below_top_m: 0.025  # plunge this far below the target's top instead (user, 2026-09-25: 25-30 mm)
       min_tip_above_table_m: 0.010   # never deeper than this above the table (workspace.table_height_m), whatever
                                      # the depth says ...

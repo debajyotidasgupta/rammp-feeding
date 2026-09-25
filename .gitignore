@@ -5,3 +5,5 @@ __pycache__/
 captures/
 # Staged KORTEX SDK: architecture-specific, fetched with `make sdk`.
 docker/vendor/kortex_api_*
+presentation/data/
+presentation/out/

@@ -7,6 +7,5 @@ camera_to_tip_m: 0.265          # measured 260-261 (ruler to bare table + depth;
                                 # purpose, so every stop errs high: a nominal 10 mm hover looks like 15-20 mm by eye
 tip_px: [644, 405]              # where the utensil meets the food in the overlook image (not its box centre)
 image_region_px: [640, 405, 750, 719]   # its pixels at the overlook -- never detected, never mistaken for food
-aim_offset_base_m: [0.005, -0.006]      # (x, y) in the arm's base frame: +5 mm into the flesh past the tines,
-                                        # -6 mm for the fork head's curve (user, by eye at a 10 mm hover)
+# the aim offset depends on the food as much as the fork: config/food/<name>.yaml
 punch_floor_margin_m: 0.0       # nominal margin above the measured bowl floor; really ~5-10 mm (see camera_to_tip)

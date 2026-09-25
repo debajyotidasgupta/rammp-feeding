@@ -84,7 +84,7 @@ def main() -> int:
     tgt = None
     if a.target:
         t = json.loads(Path(a.target).read_text())
-        u, v = t["berry_bbox_centre"]; zb = t["berry_depth_m"]; dx, dy = cfg.utensil.aim_offset_base_m
+        u, v = t["berry_bbox_centre"]; zb = t["berry_depth_m"]; dx, dy = cfg.food.aim_offset_base_m
         # the aim offset moves the tool by (dx, dy): the point under the tip is that far from the berry centre.
         # At the overlook orientation a scene point further +X appears higher (-v), further +Y further left (-u).
         tgt = (u - dy * FXC / zb, v - dx * FYC / zb, zb)

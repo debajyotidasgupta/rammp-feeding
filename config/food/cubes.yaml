@@ -1,0 +1,9 @@
+# Cut cubes, ~20-30 mm (melon, apple, pineapple, cheese, cooked meat), often packed with no bowl floor showing
+# between them -- the plunge then goes a fixed depth below the piece's top (acquisition.plunge.no_floor).
+# A different food: copy this file, set what differs, select it in rammp.yaml (profiles.food) or RAMMP_FOOD=<name>.
+
+name: cubes
+prompt: food pieces             # what the detector is asked for
+aim_offset_base_m: [0.0, 0.0]   # (x, y) base frame, added to the detected centre in OVER. A cube is about as wide
+                                # as the fork head (~22 mm): aim at its centre (2026-09-25: the strawberry offset
+                                # put one side of the fork past a cube's corner)

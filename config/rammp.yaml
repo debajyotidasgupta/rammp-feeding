@@ -9,6 +9,7 @@ profiles:
   camera: kinova_wrist          # config/camera/<name>.yaml -- intrinsics, extrinsic, depth correction, streams
   utensil: fork                 # config/utensil/<name>.yaml -- camera-to-tip, tip pixel, aim offset, ...
   bowl: front                   # config/bowl/<name>.yaml -- the overlook pose over it, where the scoop ends
+  food: cubes                   # config/food/<name>.yaml -- the detector prompt, the aim offset
 
 deployment:
   arm:
@@ -137,7 +138,6 @@ acquisition:
     slow_mps: 0.005
 
 perception:
-  food_prompt: food pieces
   min_box_side_px: 25
   max_box_aspect: 3.0
   food_inside_bowl_min: 0.8     # fraction of a food box inside the bowl box

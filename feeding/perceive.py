@@ -90,7 +90,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", required=True)
     ap.add_argument("--out", default="scene_det")
-    ap.add_argument("--food", default=cfg.perception.food_prompt)
+    ap.add_argument("--food", default=cfg.food.prompt)
     ap.add_argument("--utensil", default="spoon", help="phrase for the cross-check only")
     ap.add_argument("--check-utensil", action="store_true", default=bool(cfg.features.utensil_cross_check),
                     help="also detect the utensil, to cross-check its stored region")

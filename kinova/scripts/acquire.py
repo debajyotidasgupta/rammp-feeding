@@ -159,7 +159,7 @@ def over(conn: KinovaConnection, target_path: str) -> None:
     if off > float(cfg.motion.near_pose_deg):
         raise MoveError("not at food_detect_start (%.1f deg away) -- run: make detect" % off)
     goal = list(json.loads(Path(target_path).read_text())["tool_goal"])
-    aim = cfg.utensil.aim_offset_base_m          # measured aim correction, base frame
+    aim = cfg.food.aim_offset_base_m             # the food profile's aim correction, base frame
     goal[0] += aim[0]
     goal[1] += aim[1]
     p = tool_pose(conn)

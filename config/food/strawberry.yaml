@@ -1,0 +1,8 @@
+# Whole strawberries, big (35-40 mm), spaced in the bowl -- the food the acquisition was frozen on (2026-09-24).
+
+name: strawberry
+prompt: food pieces
+aim_offset_base_m: [0.005, -0.006]   # (x, y) base frame, user-confirmed by eye at a 10 mm hover (2026-09-24,
+                                     # "this looks perfect"). X +5 mm: the fork's tines extend forward, so aim into
+                                     # the bulk of the flesh. Y -6 mm (away from the user): the fork head curves, so
+                                     # the tines meet the food ~5-7 mm off the tool axis.

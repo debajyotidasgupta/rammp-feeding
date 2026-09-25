@@ -38,7 +38,8 @@ Every number that is tuned or changes with the deployment, and every on/off swit
 config/rammp.yaml             deployment (arm IP, containers, venvs, ports, models), features (on/off),
                               motion limits, contact-guard thresholds, acquisition / perception / delivery tunables
 config/camera/<name>.yaml     intrinsics, depth->colour extrinsic, depth scale/offset correction, camera-in-tool, streams
-config/utensil/<name>.yaml    camera-to-tip, tip pixel, image region, aim offset, punch margin
+config/utensil/<name>.yaml    camera-to-tip, tip pixel, image region, punch margin
+config/food/<name>.yaml       the detector prompt, the aim offset
 config/bowl/<name>.yaml       the overlook pose over it, where the scoop ends, where the swing may start, and
                               `captured_at`: where the table and bowl were when those poses were captured
 config/local.yaml             per-machine overrides (not committed; same keys as rammp.yaml)
@@ -220,8 +221,12 @@ as scratch scripts before being moved here. **Not yet run from these files.**
 | `camera_to_tip_m` | **0.265** | at food_detect_start: ruler from the tip to **bare table** (state the unit!) + the sensor's bare-table depth; cross-check with camera-case-to-tip |
 | `tip_px` | (644, 405) | where the utensil meets the food, **not** its image box centre (a fork's head is wide) — a 10 mm hover and your eye settle it |
 | `image_region_px` | fork's image region | so detection never calls the utensil food |
-| `aim_offset_base_m` | (+5, −6) mm | at a 10 mm hover, by eye: where the tines actually meet the food vs the tool axis |
 | `punch_floor_margin_m` | 0.0 | how far above the bowl floor the plunge stops |
+
+The **aim offset** is per food (`config/food/<name>.yaml`, `profiles.food` or `RAMMP_FOOD`): `strawberry`
+(+5, −6) mm, set by eye at a 10 mm hover -- into the berry's bulk past the tines, and the fork head's curve;
+`cubes` (0, 0): a cube is about as wide as the fork head, and the strawberry offset put one side of the fork past
+a cube's corner (2026-09-25). Check a new food at a 10 mm hover (`make acquire STOP_AFTER=hover10`).
 
 A different bowl: `config/bowl/<name>.yaml` (overlook pose file, `scoop_end`, swing-start region). A different
 camera: `config/camera/<name>.yaml`; if its depth reads consistently off, set `depth.scale` / `depth.offset_m`

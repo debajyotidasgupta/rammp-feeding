@@ -3,15 +3,15 @@
     from settings import cfg
     cfg.delivery.stop_m                 # attribute access
     cfg.get("guards.torque_step_nm.approach")
-    cfg.utensil.camera_to_tip_m         # the selected utensil profile
+    cfg.utensil.camera_to_tip_m         # the selected utensil profile (camera / utensil / bowl / food)
     cfg.overlook_pose()                 # the bowl's measured overlook pose (joints + tool pose)
 
     python3 -m settings get delivery.stop_m     # shell: prints the value (true -> 1, false -> empty)
     python3 -m settings dump                    # the merged configuration, as YAML
 
-Layers, later wins: config/rammp.yaml < the selected profiles (config/camera|utensil|bowl/<name>.yaml, under
-cfg.camera / cfg.utensil / cfg.bowl) < config/local.yaml (per machine, not committed) < RAMMP_SET="a.b=1,c=2".
-RAMMP_CONFIG points at another config directory. Profiles can be swapped per run: RAMMP_UTENSIL=spoon etc.
+Layers, later wins: config/rammp.yaml < the selected profiles (config/camera|utensil|bowl|food/<name>.yaml, under
+cfg.camera / cfg.utensil / cfg.bowl / cfg.food) < config/local.yaml (per machine, not committed) < RAMMP_SET="a.b=1,c=2".
+RAMMP_CONFIG points at another config directory. Profiles can be swapped per run: RAMMP_UTENSIL=spoon, RAMMP_FOOD=strawberry etc.
 Lists work in RAMMP_SET: RAMMP_SET="workspace.bowl_centre_m=[0.28, 0.27],delivery.stop_m=0.06".
 """
 
@@ -93,7 +93,7 @@ def _fill(node, subs):
 
 def load() -> Cfg:
     c = yaml.safe_load((CONFIG / "rammp.yaml").read_text())
-    for kind in ("camera", "utensil", "bowl"):
+    for kind in ("camera", "utensil", "bowl", "food"):
         name = os.environ.get("RAMMP_" + kind.upper(), c["profiles"][kind])
         c["profiles"][kind] = name
         c[kind] = yaml.safe_load((CONFIG / kind / (name + ".yaml")).read_text())

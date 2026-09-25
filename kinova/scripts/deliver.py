@@ -84,6 +84,8 @@ RETRACT_MPS = 0.060            # back off along the utensil
 RETRACT_SWING_DPS = 25.0
 RETRACT_DOWN_DPS = 20.0
 RETRACT_HOME_DPS = 20.0
+RETRACT_TORQUE_NM = 6.0        # empty utensil, moving away: J1 starting the fast reverse swing with the arm
+                               # stretched out stepped past 2.5 N.m with nothing touching (2026-09-24 demo)
 MIN_TIP_Z = 0.300              # the return's joint move must keep the utensil tip above this
 UP_W, UP_H = 720, 1280         # upright (rotated) image
 
@@ -140,7 +142,7 @@ def homotopy(conn, q0, at, n, toward=None):
     return path, None
 
 
-def run_path(conn, path, dps, label, go, torque_stop=True, ramp=0.25, from_here=True):
+def run_path(conn, path, dps, label, go, torque_stop=True, ramp=0.25, from_here=True, torque_limit=2.5):
     """Validate a joint path with the controller; with go, execute it and watch it. A path that starts
     somewhere the arm is not yet (from_here=False, validate-only) can only be IK-checked: the controller
     validates relative to the arm's current joints."""
@@ -153,7 +155,7 @@ def run_path(conn, path, dps, label, go, torque_stop=True, ramp=0.25, from_here=
     print("    %-26s controller accepted at %.1f deg/s: %.1f s%s" % (label, sp, total, "" if go else "  (validate only)"))
     if not go:
         return
-    ev = _events(conn); ev.clear(); guard = TorqueGuard()
+    ev = _events(conn); ev.clear(); guard = TorqueGuard(limit=torque_limit)
     conn.base.ExecuteWaypointTrajectory(wl)
     t0 = time.time()
     while time.time() - t0 < total + 15:
@@ -389,13 +391,13 @@ def retract(conn, a):
     elif rc:
         path2 = [q1] + rc["path2"][1:]
         print("    reverse swing + descent: planned before, reused")
-        run_path(conn, path2, RETRACT_SWING_DPS, "reverse swing", go, from_here=go or L <= 0.003)
+        run_path(conn, path2, RETRACT_SWING_DPS, "reverse swing", go, from_here=go or L <= 0.003, torque_limit=RETRACT_TORQUE_NM)
         q2 = joints(conn) if go else path2[-1]
     else:
         path2, err = homotopy(conn, q1, at2, 60)
         if path2 is None:
             raise MoveError("reverse swing " + err)
-        run_path(conn, path2, RETRACT_SWING_DPS, "reverse swing %.0f deg" % th, go, from_here=go or L <= 0.003)
+        run_path(conn, path2, RETRACT_SWING_DPS, "reverse swing %.0f deg" % th, go, from_here=go or L <= 0.003, torque_limit=RETRACT_TORQUE_NM)
         q2 = joints(conn) if go else path2[-1]
     # 3. down to the scoop end + 80 mm in the scoop's own arm shape, then the proven joint move
     Ta = TS; Td = np.array([TS[0], TS[1], st["scoop_end_z"] + 0.080])
@@ -412,7 +414,7 @@ def retract(conn, a):
     print("    return: utensil tip never below %.0f mm" % (1000 * lo))
     if lo < MIN_TIP_Z:
         raise MoveError("the return would dip the utensil tip to %.0f mm -- stopped" % (1000 * lo))
-    run_path(conn, path3, RETRACT_DOWN_DPS, "down to scoop end + 80 mm", go, from_here=go or resumed)
+    run_path(conn, path3, RETRACT_DOWN_DPS, "down to scoop end + 80 mm", go, from_here=go or resumed, torque_limit=RETRACT_TORQUE_NM)
     if go:
         try:
             goto(conn, qd, speed=RETRACT_HOME_DPS, label="-> food_detect_start", max_tilt=95.0)

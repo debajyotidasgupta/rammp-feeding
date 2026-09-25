@@ -3,7 +3,7 @@
 
 Runs INSIDE the kinova_vision container (rclpy), host network, port 8767:
 
-    GET /median?frames=15      -> .npy bytes (uint16 mm, 0 = no return): the median of the next 15 frames
+    GET /median?frames=15&wait=3  -> .npy bytes (uint16 mm, 0 = no return): the median of the next 15 frames
                                   that ARRIVE AFTER the request -- never frames from before the arm stopped
     GET /ping                  -> ok
 
@@ -70,8 +70,9 @@ def main() -> int:
                 ok = bool(BUF) and time.time() - BUF[-1][0] < 2.0     # frames actually flowing
                 self.send_response(200 if ok else 503); self.end_headers(); self.wfile.write(b"ok" if ok else b"no frames")
                 return
-            n = int(parse_qs(u.query).get("frames", ["15"])[0]); t_req = time.time()
-            while time.time() - t_req < 10.0:
+            q = parse_qs(u.query)
+            n = int(q.get("frames", ["15"])[0]); wait = float(q.get("wait", ["10"])[0]); t_req = time.time()
+            while time.time() - t_req < wait:
                 with LOCK:
                     fresh = [f for t, f in BUF if t > t_req]
                 if len(fresh) >= n:

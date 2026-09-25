@@ -48,11 +48,13 @@ def tip_in_tool() -> np.ndarray:
     tip = camera + camera_to_tip along the axis + the tip's sideways offset,
     read off the image as (tip pixel - image of true vertical) scaled to that
     distance. Image +u is tool -x and image +v is tool -y at the overlook
-    orientation (from motion probes). For the fork this gives (0, 8.8, 142) mm.
+    orientation (from motion probes). Plus the utensil's tine offset (tool frame: a curved fork head meets the
+    food off where the image puts its tip).
     """
     zt = float(cfg.utensil.camera_to_tip_m)
     d = (np.array(cfg.utensil.tip_px, float) - VP) * zt / FXC
-    return CAM_IN_TOOL + np.array([-d[0], -d[1], zt])
+    tine = np.array(cfg.get("utensil.tine_offset_tool_m", [0.0, 0.0, 0.0]), float)
+    return CAM_IN_TOOL + np.array([-d[0], -d[1], zt]) + tine
 
 
 def rot_x(deg: float) -> np.ndarray:

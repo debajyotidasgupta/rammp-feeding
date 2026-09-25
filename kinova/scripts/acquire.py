@@ -167,7 +167,7 @@ def over(conn: KinovaConnection, target_path: str) -> None:
     if abs(goal[2] - p[2]) > float(A_.over_level_tol_m) or d > MAX_OVER_M:
         raise MoveError("target is not a small level move (%.0f mm across) -- re-run make perceive"
                         % (1000 * d))
-    runlog.event("over", goal=goal, aim_offset_m=list(aim), tine_offset_m=cfg.get("utensil.tine_offset_base_m", None),
+    runlog.event("over", goal=goal, aim_offset_m=list(aim), tine_offset_tool_m=cfg.get("utensil.tine_offset_tool_m", None),
                  food_offset_m=cfg.get("food.aim_offset_base_m", None), across_m=d)
     goto_cartesian(conn, goal, tuple(p[3:]), speed=float(A_.over_speed_mps), label="OVER")
 
@@ -402,18 +402,13 @@ def pick(conn: KinovaConnection, target_path: str, under_path: str, floor_m: flo
     THIS process: no program restarts, no reconnection, so the arm does not stand still between them
     (user, 2026-09-25). The floor is still re-measured from above the berry after OVER: read from the overlook
     frame instead it disagreed by up to 11 mm on 2 of 17 runs."""
-    import io
-    import urllib.request
+    from feeding.depth_grab import fetch
     from feeding.measure_under import measure
     over(conn, target_path)
     t = time.time()
-    try:
-        url = "http://127.0.0.1:%d/median?frames=%d" % (int(cfg.deployment.servers.depth_port),
-                                                         int(cfg.perception.depth_frames))
-        with urllib.request.urlopen(url, timeout=15) as r:
-            d = np.load(io.BytesIO(r.read()))
-    except Exception as e:  # noqa: BLE001
-        raise DepthUnavailable("depth server: %s" % e)
+    d = fetch(int(cfg.perception.depth_frames))
+    if d is None:
+        raise DepthUnavailable("depth server: no fresh frames after %d tries" % int(cfg.perception.depth_tries))
     runlog.save_arrays("depth_at_over", depth_mm=d)
     try:
         u = measure(d, float(A_.over_depth_guess_m))

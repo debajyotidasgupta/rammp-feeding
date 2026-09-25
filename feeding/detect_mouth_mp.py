@@ -65,30 +65,39 @@ def wait_open(D: Path, timeout: float, det=None) -> int:
     """Watch the colour stream; save the first frame after the mouth has been open OPEN_HOLD_S."""
     import cv2
     own = det is None
+    t_call = time.time()
     det = det or landmarker(); cap = cv2.VideoCapture(RTSP)
     try:
-        return _wait(det, cap, D, timeout)
+        return _wait(det, cap, D, timeout, open_s=time.time() - t_call)
     finally:
         cap.release()
         if own:
             det.close()
 
 
-def _wait(det, cap, D, timeout):
-    """The open-mouth wait. Records the opening over time (open_wait.json) and, if the user never opens,
-    the last frame seen (open_wait_last.jpg) -- to tell "declined" from "face not seen"."""
-    t0 = time.time(); since = None; last = -1.0; trace = []; rgb = None
+def _wait(det, cap, D, timeout, open_s=0.0):
+    """The open-mouth wait. Records, to tell "declined" from "face not seen" from "the stream is late":
+    open_wait.json -- per frame: the time read (s from the wait's start), the stream's own timestamp (ms), the
+    opening, whether a face was found; and how long the stream took to open. wait_frames/ -- a small upright
+    snapshot every 0.5 s, its opening in the name. open_wait_last.jpg -- the last frame, if never opened."""
+    import cv2
+    t0 = time.time(); since = None; last = -1.0; trace = []; rgb = None; snap_t = -1.0
+    frames_dir = D / "wait_frames"
+    frames_dir.mkdir(exist_ok=True)
 
     def record(result):
         try:
             (D / "open_wait.json").write_text(json.dumps(dict(result=result, threshold=OPEN_RATIO, hold_s=OPEN_HOLD_S,
+                                                              stream_open_s=round(open_s, 3),
                                                               t=[r[0] for r in trace], opening=[r[1] for r in trace],
-                                                              face=[r[2] for r in trace])))
+                                                              face=[r[2] for r in trace],
+                                                              stream_ms=[r[3] for r in trace])))
             if result != "open" and rgb is not None:
                 Image.fromarray(rgb).save(D / "open_wait_last.jpg")
         except Exception:  # noqa: BLE001 -- a debug record
             pass
-    print("    waiting up to %.0f s for an open mouth (opening > %.2f for %.1f s)" % (timeout, OPEN_RATIO, OPEN_HOLD_S))
+    print("    waiting up to %.0f s for an open mouth (opening > %.2f for %.1f s; stream opened in %.1f s)"
+          % (timeout, OPEN_RATIO, OPEN_HOLD_S, open_s))
     while time.time() - t0 < timeout:
         ok, bgr = cap.read()
         if not ok:
@@ -96,7 +105,14 @@ def _wait(det, cap, D, timeout):
         rgb = bgr[:, :, ::-1]
         L, _ = landmarks(det, np.rot90(rgb, -1))            # == PIL ROTATE_270 (90 deg clockwise)
         o = opening(L) if L is not None else 0.0
-        trace.append((round(time.time() - t0, 3), round(o, 4), L is not None))
+        now = time.time() - t0
+        trace.append((round(now, 3), round(o, 4), L is not None, round(float(cap.get(cv2.CAP_PROP_POS_MSEC)), 1)))
+        if now - snap_t >= 0.5:
+            snap_t = now
+            try:
+                Image.fromarray(np.rot90(rgb, -1)).resize((180, 320)).save(frames_dir / ("%05.1f_%.2f.jpg" % (now, o)))
+            except Exception:  # noqa: BLE001 -- a debug record
+                pass
         if time.time() - last > 2.0:
             print("      mouth opening %.2f" % o); last = time.time()
         if o > OPEN_RATIO:

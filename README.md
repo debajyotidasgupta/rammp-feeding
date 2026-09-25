@@ -223,7 +223,8 @@ as scratch scripts before being moved here. **Not yet run from these files.**
 | `image_region_px` | fork's image region | so detection never calls the utensil food |
 | `punch_floor_margin_m` | 0.0 | how far above the bowl floor the plunge stops |
 
-OVER aims at the detected centre + the utensil's **tine offset** (`tine_offset_base_m`: the fork head curves, so
+OVER aims at the detected centre + the utensil's **tine offset** (`tine_offset_tool_m`, tool frame, also part of the tip
+model for the plunge, the scoop and the approach to the mouth: the fork head curves, so
 its tines meet the food off the tool axis; fork: (0, −5) mm, 2026-09-25) + the food's **aim offset**. The aim
 offset is per food (`config/food/<name>.yaml`, `profiles.food` or `RAMMP_FOOD`): `strawberry`
 (+5, −6) mm, set by eye at a 10 mm hover -- into the berry's bulk past the tines, and the fork head's curve;

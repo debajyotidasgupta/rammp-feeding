@@ -58,10 +58,19 @@ class Cfg(dict):
         return p if p.is_absolute() else ROOT / p
 
     def aim_offset(self):
-        """(x, y) m added to a detected food centre in OVER: the utensil's tine offset + the food's aim offset."""
-        u = self.get("utensil.tine_offset_base_m", [0.0, 0.0])
+        """(x, y) m added to a detected food centre in OVER: the utensil's tine offset (tool frame, turned into the
+        base frame at the overlook orientation) + the food's aim offset (base frame)."""
+        import math
+        t = [float(v) for v in self.get("utensil.tine_offset_tool_m", [0.0, 0.0, 0.0])]
+        p = self.overlook_pose()["tool_pose"]
+        tx, ty, tz = (math.radians(p[k]) for k in ("theta_x_deg", "theta_y_deg", "theta_z_deg"))
+        cx, sx, cy, sy, cz, sz = math.cos(tx), math.sin(tx), math.cos(ty), math.sin(ty), math.cos(tz), math.sin(tz)
+        # rows x and y of R = Rz @ Ry @ Rx (Kortex's fixed-frame XYZ)
+        rx = (cz * cy, cz * sy * sx - sz * cx, cz * sy * cx + sz * sx)
+        ry = (sz * cy, sz * sy * sx + cz * cx, sz * sy * cx - cz * sx)
+        u = (sum(a * b for a, b in zip(rx, t)), sum(a * b for a, b in zip(ry, t)))
         f = self.get("food.aim_offset_base_m", [0.0, 0.0])
-        return [float(u[0]) + float(f[0]), float(u[1]) + float(f[1])]
+        return [u[0] + float(f[0]), u[1] + float(f[1])]
 
     def overlook_pose(self):
         return json.loads(self.path("bowl.overlook_pose").read_text())

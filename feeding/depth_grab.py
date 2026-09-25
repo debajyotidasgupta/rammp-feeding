@@ -16,15 +16,26 @@ import numpy as np
 from settings import cfg
 
 
+def fetch(frames: int) -> np.ndarray | None:
+    """A median of fresh frames from the resident depth server: short waits, a few tries (the stream drops and
+    recovers in under a second), None if it never answers."""
+    wait, tries = float(cfg.perception.depth_fresh_wait_s), int(cfg.perception.depth_tries)
+    url = "http://127.0.0.1:%d/median?frames=%d&wait=%.1f" % (int(cfg.deployment.servers.depth_port), frames, wait)
+    for k in range(tries):
+        try:
+            with urllib.request.urlopen(url, timeout=wait + 5) as r:
+                return np.load(io.BytesIO(r.read()))
+        except Exception as e:  # noqa: BLE001
+            print("depth server (try %d/%d): %s" % (k + 1, tries, e), file=sys.stderr)
+    return None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(); ap.add_argument("out")
     ap.add_argument("--frames", type=int, default=int(cfg.perception.depth_frames))
     a = ap.parse_args(); t0 = time.time()
-    try:
-        with urllib.request.urlopen("http://127.0.0.1:%d/median?frames=%d" % (int(cfg.deployment.servers.depth_port), a.frames), timeout=15) as r:
-            d = np.load(io.BytesIO(r.read()))
-    except Exception as e:  # noqa: BLE001
-        print("depth server: %s" % e, file=sys.stderr)
+    d = fetch(a.frames)
+    if d is None:
         return 1
     np.save(a.out, d)
     from feeding.viz import depth_png

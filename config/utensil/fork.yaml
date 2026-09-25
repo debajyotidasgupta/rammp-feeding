@@ -5,7 +5,13 @@
 name: fork
 camera_to_tip_m: 0.265          # measured 260-261 (ruler to bare table + depth; camera case + 6.7 mm); stored long on
                                 # purpose, so every stop errs high: a nominal 10 mm hover looks like 15-20 mm by eye
-tip_px: [644, 405]              # where the utensil meets the food in the overlook image (not its box centre)
-image_region_px: [640, 405, 750, 719]   # its pixels at the overlook -- never detected, never mistaken for food
+tip_px: [685, 476]              # the tine tips in the colour image (the fork is fixed to the camera: the same pixels
+                                # at every pose). 2026-09-25, measured in the overlook image: the white fork's top
+                                # 12 rows, x 657..724 -> 49 mm off the camera's vertical at camera_to_tip. Was
+                                # (644, 405), 34.5 mm off: a cube plunge landed ~15 mm -X, ~12 mm -Y of centre,
+                                # which the correction accounts for (fork_20260924.yaml keeps the old values)
+image_region_px: [640, 460, 760, 719]   # its pixels at the overlook -- never detected, never mistaken for food
+head_width_m: 0.023             # the fork head, across the tines (user, ruler, 2026-09-25). Cross-check: it spans
+                                # ~110 px in the image (x 640..750) = 22.5 mm at camera_to_tip
 # the aim offset depends on the food as much as the fork: config/food/<name>.yaml
 punch_floor_margin_m: 0.0       # nominal margin above the measured bowl floor; really ~5-10 mm (see camera_to_tip)

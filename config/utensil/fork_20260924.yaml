@@ -1,0 +1,15 @@
+# The fork in the gripper. Re-measure all of this whenever the utensil is changed OR re-seated
+# (a robot restart re-initialises the gripper; on 2026-09-24 it pivoted the fork by (-14, -65) px).
+# A new utensil: copy this file (e.g. spoon.yaml), measure, select it in rammp.yaml (profiles.utensil).
+
+# THE FORK'S CALIBRATION UNTIL 2026-09-25 -- kept for the tests (tests/regress.sh, tests/arm_trace.py pin it) and
+# for the record. Superseded by fork.yaml: its tip pixel put the tine tips 34.5 mm off the camera's vertical; they
+# are ~49 mm off (measured in the colour image, 2026-09-25).
+
+name: fork_20260924
+camera_to_tip_m: 0.265          # measured 260-261 (ruler to bare table + depth; camera case + 6.7 mm); stored long on
+                                # purpose, so every stop errs high: a nominal 10 mm hover looks like 15-20 mm by eye
+tip_px: [644, 405]              # where the utensil meets the food in the overlook image (not its box centre)
+image_region_px: [640, 405, 750, 719]   # its pixels at the overlook -- never detected, never mistaken for food
+# the aim offset depends on the food as much as the fork: config/food/<name>.yaml
+punch_floor_margin_m: 0.0       # nominal margin above the measured bowl floor; really ~5-10 mm (see camera_to_tip)

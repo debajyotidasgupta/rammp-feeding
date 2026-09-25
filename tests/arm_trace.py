@@ -41,6 +41,7 @@ import fake_kortex as fk  # noqa: E402
 
 fk.install_clock()
 os.environ.setdefault("RAMMP_FOOD", "strawberry")      # the scenarios were recorded with the strawberry aim offset
+os.environ.setdefault("RAMMP_UTENSIL", "fork_20260924")   # ... and the fork calibration of 2026-09-24
 
 # The stages' state files go to a scratch directory, never the real /tmp: in the driver container those hold
 # the live delivery state and the swing / retract plans.

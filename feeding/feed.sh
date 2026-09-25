@@ -4,13 +4,14 @@
 #   feeding/feed.sh            # detect -> [perceive -> acquire -> deliver] until the bowl is empty or the
 #                              # user declines (no open mouth in 60 s) -> back to feeding_start
 #   BITES=1 feeding/feed.sh    # one bite only (a test run)
+#   FROM_DETECT=1 feeding/feed.sh   # already at food_detect_start (e.g. resuming)
 #
 # Every stage keeps its own checks; this only chains them without waiting between them.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 BITES="${BITES:-99}"
 home() { echo; echo "== back to feeding_start"; make -s start; }
-make -s detect || { echo "could not reach food_detect_start"; exit 1; }
+if [ -z "${FROM_DETECT:-}" ]; then make -s detect || { echo "could not reach food_detect_start"; exit 1; }; fi
 n=0
 while [ "$n" -lt "$BITES" ]; do
   echo; echo "== bite $((n + 1))"; t0=$(date +%s)

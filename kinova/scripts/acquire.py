@@ -49,53 +49,32 @@ from kinova.connection import kinova_connection
 from kinova.scripts.safe_move import (MoveError, TorqueGuard, _events, fold, goto_cartesian,
                                       joints, tilt_deg, tool_pose)
 
-CAL = Path(__file__).resolve().parent.parent.parent / "calibration"
-MAX_OVER_M = 0.10          # OVER stays inside the bowl, never a transit (central berries sit ~70-80 mm out + the aim offset)
-BACKOFF_FROM = 0.2         # fraction of the scoop before the back-off starts
-PUNCH_FLOOR_M = 0.0        # nominal; the real gap is ~5-10 mm (camera_to_tip stored long, floor read beside the food)
-LIMITS = {1: 128.9, 3: 147.8, 5: 120.3}
-# Kinova's model (gen3_7dof.urdf): the colour camera sits at (0, 56.39, -3.05) mm
-# in the end-effector (flange) frame; the configured tool point is 120 mm out
-# along z. So in the TOOL frame the camera is at (0, 56.39, -123.05) mm.
-CAM_IN_TOOL = np.array([0.0, 0.05639, -0.12305])
+from settings import cfg
+from kinova.motion import (A_MAX, CAM_IN_TOOL, LIMITS, R_from_kortex, _ik, _time_scale, _waypoints,  # noqa: F401
+                           kortex_from_R, rot_x, tip_in_tool)
+
+A_ = cfg.acquisition
+MAX_OVER_M = float(A_.over_max_m)             # OVER stays inside the bowl, never a transit
+BACKOFF_FROM = float(A_.scoop.backoff_from)   # fraction of the scoop before the back-off starts
+PUNCH_FLOOR_M = float(cfg.utensil.punch_floor_margin_m)   # nominal; really ~5-10 mm (camera_to_tip stored long)
 
 
 def cal():
-    return (json.loads((CAL / "food_detect_pose.json").read_text()),
-            json.loads((CAL / "colour_intrinsics.json").read_text()))
+    """(the bowl's overlook pose + the utensil's aim settings, the camera's colour intrinsics) -- kept for callers
+    written against the old calibration files; new code reads cfg directly."""
+    pose = dict(cfg.overlook_pose())
+    pose.update(aim_offset_base_m=list(cfg.utensil.aim_offset_base_m), camera_to_tip_m=cfg.utensil.camera_to_tip_m,
+                utensil_tip_px=list(cfg.utensil.tip_px), approach_stop_m=A_.stepped.approach_stop_m,
+                scoop_end=dict(cfg.bowl.scoop_end))
+    return pose, dict(cfg.camera.colour)
 
 
-def tip_in_tool() -> np.ndarray:
-    """Utensil tip in the tool frame, from calibration only.
-
-    tip = camera + camera_to_tip along the axis + the tip's sideways offset,
-    read off the image as (tip pixel - image of true vertical) scaled to that
-    distance. Image +u is tool -x and image +v is tool -y at the overlook
-    orientation (from motion probes). For the fork this gives (0, 8.8, 142) mm.
-    """
-    pose, c = cal()
-    zt = pose["camera_to_tip_m"]
-    d = (np.array(pose["utensil_tip_px"], float) - np.array(c["vertical_vp"])) * zt / c["fx"]
-    return CAM_IN_TOOL + np.array([-d[0], -d[1], zt])
 
 
-def rot_x(deg):
-    t = math.radians(deg); c, s = math.cos(t), math.sin(t)
-    return np.array([[1, 0, 0], [0, c, -s], [0, s, c]])
 
 
-def R_from_kortex(tx, ty, tz):
-    tx, ty, tz = (math.radians(v) for v in (tx, ty, tz))
-    Rx = np.array([[1, 0, 0], [0, math.cos(tx), -math.sin(tx)], [0, math.sin(tx), math.cos(tx)]])
-    Ry = np.array([[math.cos(ty), 0, math.sin(ty)], [0, 1, 0], [-math.sin(ty), 0, math.cos(ty)]])
-    Rz = np.array([[math.cos(tz), -math.sin(tz), 0], [math.sin(tz), math.cos(tz), 0], [0, 0, 1]])
-    return Rz @ Ry @ Rx
 
 
-def kortex_from_R(R):
-    ty = math.degrees(math.asin(max(-1.0, min(1.0, -R[2, 0]))))
-    return (math.degrees(math.atan2(R[2, 1], R[2, 2])), ty,
-            math.degrees(math.atan2(R[1, 0], R[0, 0])))
 
 
 def _vertical_move(conn, down_m, speed, label):
@@ -118,7 +97,7 @@ def over(conn, a):
     if abs(goal[2] - p[2]) > 0.002 or d > MAX_OVER_M:
         raise MoveError("target is not a small level move (%.0f mm across) -- re-run make perceive"
                         % (1000 * d))
-    goto_cartesian(conn, goal, tuple(p[3:]), speed=0.05, label="OVER")
+    goto_cartesian(conn, goal, tuple(p[3:]), speed=float(A_.over_speed_mps), label="OVER")
 
 
 def descend(conn, a):
@@ -129,13 +108,13 @@ def descend(conn, a):
     if down <= 0:
         print("    already %.1f mm above the food, nothing to do" % (1000 * u["gap_top"]))
         return
-    if down > 0.200:
+    if down > float(A_.stepped.descend_max_m):
         raise MoveError("descent of %.0f mm is not an approach -- re-measure" % (1000 * down))
     # fast to within 20 mm of the stop, then slow
     fast = max(0.0, down - 0.020)
     if fast > 0:
-        _vertical_move(conn, fast, 0.015, "descend")
-    _vertical_move(conn, down - fast, 0.005, "descend, slow")
+        _vertical_move(conn, fast, float(A_.stepped.fast_mps), "descend")
+    _vertical_move(conn, down - fast, float(A_.stepped.slow_mps), "descend, slow")
     print("    tip now ~%.1f mm above the food top" % (1000 * (u["gap_top"] - down)))
 
 
@@ -150,15 +129,15 @@ def punch(conn, a):
     print("    food %.1f mm tall: stop %.1f mm above the bowl floor -> %.1f mm down"
           % (1000 * u["height"], 1000 * stop_above_floor, 1000 * down))
     first = min(0.020, down)
-    _vertical_move(conn, first, 0.005, "punch")
+    _vertical_move(conn, first, float(A_.stepped.slow_mps), "punch")
     if down > first:
-        _vertical_move(conn, down - first, 0.005, "punch, finish")
+        _vertical_move(conn, down - first, float(A_.stepped.slow_mps), "punch, finish")
     Path("/tmp/punch_done.json").write_text(json.dumps(dict(height=u["height"], floor_m=a.floor_m)))
 
 
-PLUNGE_FAST = 0.050        # m/s down to SLOW_ABOVE the food top (was 20; user: faster)
-PLUNGE_SLOW = 0.008        # m/s through the food, to the floor (was 5)
-SLOW_ABOVE = 0.020         # the overlook reads the food top 4-7 mm high; this covers it
+PLUNGE_FAST = float(A_.plunge.fast_mps)            # m/s down to SLOW_ABOVE the food top
+PLUNGE_SLOW = float(A_.plunge.slow_mps)            # m/s through the food, to the floor
+SLOW_ABOVE = float(A_.plunge.slow_above_food_m)    # the overlook reads the food top 4-7 mm high; this covers it
 
 
 def plunge(conn, a):
@@ -176,19 +155,21 @@ def plunge(conn, a):
     if u.get("depth_source") == "da3-raw" and (u.get("filled_floor", 0) > 0 or u.get("filled_top", 0) > 0):
         raise MoveError("the floor under the tip was measured on RAW Depth Anything 3 (no sensor depth to fit it to) "
                         "-- not accurate enough to stop at the bowl floor; nothing moved")
-    if u.get("filled_floor", 0) > 0.5:
+    if u.get("filled_floor", 0) > float(A_.plunge.refuse_if_floor_filled_over):
         # the fallback gets the level right (median ~1 mm) but its local shape can be 25-60 mm off: never stop
         # a plunge on it
         raise MoveError("%.0f%% of the floor reading under the tip is the Depth Anything 3 fallback -- its local "
                         "error (up to ~60 mm) is too large to stop at the bowl floor; nothing moved" % (100 * u["filled_floor"]))
     down = u["gap_floor"] - floor_m
-    if not 0.080 < down < 0.250:
+    lo_, hi_ = A_.plunge.sane_range_m
+    if not lo_ < down < hi_:
         raise MoveError("plunge of %.0f mm is outside the sane range (80-250) -- re-measure" % (1000 * down))
-    if not 0.010 < u["height"] < 0.060:
+    lo_, hi_ = A_.plunge.food_height_range_m
+    if not lo_ < u["height"] < hi_:
         raise MoveError("food %.0f mm tall is implausible -- re-measure" % (1000 * u["height"]))
     slow_at = max(0.0, u["gap_top"] - SLOW_ABOVE)          # distance travelled when the slow zone starts
     p = tool_pose(conn); q0 = joints(conn); T0 = np.array(p[:3])
-    n = int(math.ceil(down / 0.006)); path = [q0]; prev = q0; d = [0.0]     # fewer IK calls: planning is dead time
+    n = int(math.ceil(down / float(A_.plunge.ik_step_m))); path = [q0]; prev = q0; d = [0.0]   # fewer IK calls: planning is dead time
     for k in range(1, n + 1):
         dk = down * k / n
         q = _ik(conn, (T0[0], T0[1], T0[2] - dk), tuple(p[3:]), prev)
@@ -258,7 +239,7 @@ def pick(conn, a):
     over(conn, a)
     t = time.time()
     try:
-        with urllib.request.urlopen("http://127.0.0.1:8767/median?frames=15", timeout=15) as r:
+        with urllib.request.urlopen("http://127.0.0.1:%d/median?frames=%d" % (int(cfg.deployment.servers.depth_port), int(cfg.perception.depth_frames)), timeout=15) as r:
             d = np.load(io.BytesIO(r.read()))
     except Exception as e:  # noqa: BLE001
         raise DepthUnavailable("depth server: %s" % e)
@@ -280,84 +261,15 @@ def pick(conn, a):
     plunge(conn, a)
 
 
-def _ik(conn, T, rpy, g):
-    d = Base_pb2.IKData(); p = d.cartesian_pose
-    p.x, p.y, p.z = map(float, T); p.theta_x, p.theta_y, p.theta_z = map(float, rpy)
-    for v in g:
-        d.guess.joint_angles.add().value = v % 360.0
-    try:
-        return [fold(j.value) for j in conn.base.ComputeInverseKinematics(d).joint_angles]
-    except Exception:  # noqa: BLE001 -- unreachable is an answer
-        return None
 
 
-def _timing(path, peak, ramp):
-    """Waypoint durations for a smooth speed profile along the joint path.
-
-    Progress is measured by the leading joint's travel. Speed eases in over the
-    first `ramp` of the time (sin^2, so acceleration is continuous), cruises at
-    `peak` deg/s, and eases out over the last `ramp`.
-    """
-    steps = [max(abs(fold(x - y)) for x, y in zip(q, p)) for p, q in zip(path, path[1:])]
-    L = sum(steps)
-    tau = np.linspace(0.0, 1.0, 4001)
-    v = np.ones_like(tau)
-    up, dn = tau < ramp, tau > 1 - ramp
-    v[up] = np.sin(0.5 * math.pi * tau[up] / ramp) ** 2
-    v[dn] = np.sin(0.5 * math.pi * (1 - tau[dn]) / ramp) ** 2
-    prog = np.concatenate([[0.0], np.cumsum(0.5 * (v[1:] + v[:-1]) * np.diff(tau))])
-    T = L / (peak * prog[-1])                 # cruise speed = peak
-    t = np.interp(np.cumsum([0.0] + steps) / L, prog / prog[-1], tau) * T
-    return [max(0.02, d) for d in np.diff(t)]
 
 
-A_MAX = 40.0                   # deg/s^2 per joint (controller refuses above 80); 40 for smoother starts
-SCOOP_TORQUE_NM = 6.0          # contact guard in the scoop: 2.5 tripped on the arm's own acceleration
+SCOOP_TORQUE_NM = float(cfg.guards.torque_step_nm.scoop)   # 2.5 tripped on the arm's own acceleration
 
 
-def _time_scale(path, vmax, amax=A_MAX):
-    """Segment durations so that EVERY joint's speed stays under vmax and changes by at most amax -- from
-    rest and back to rest. The earlier leading-joint profile let a joint that barely moved in one segment
-    lead the next: J1 went from ~0 (the lift) to full speed (the swing) in one segment, 628 deg/s^2, and
-    the controller refused the lift+swing trajectory at every speed down to 7 deg/s."""
-    D = np.array([[fold(x - y) for x, y in zip(q, p)] for p, q in zip(path, path[1:])])
-    n = len(D)
-    vcap = np.full(n, vmax) if np.isscalar(vmax) else np.asarray(vmax, float)
-    dt = np.maximum(np.abs(D).max(1) / vcap, 0.02)
-    for _ in range(4000):
-        V = D / dt[:, None]
-        Vp = np.vstack([np.zeros(7), V, np.zeros(7)])          # at rest before and after
-        mid = np.concatenate([[dt[0] / 2], (dt[1:] + dt[:-1]) / 2, [dt[-1] / 2]])
-        acc = np.abs(np.diff(Vp, axis=0)).max(1) / mid          # n + 1 junctions
-        bad = acc > amax
-        if not bad.any():
-            break
-        grow = np.zeros(n, bool)
-        idx = np.nonzero(bad)[0]
-        grow[np.clip(idx - 1, 0, n - 1)] = True; grow[np.clip(idx, 0, n - 1)] = True
-        dt[grow] *= 1.03
-    return list(dt)
 
 
-def _waypoints(conn, path, top_speed, ramp, what):
-    """The joint path as one WaypointList the controller has validated; slower if refused.
-    (`ramp` is kept for the callers; the time scaling now bounds acceleration itself.)"""
-    raw = [x.position for x in conn.base_cyclic.RefreshFeedback().actuators]
-    for speed in (top_speed, top_speed * 0.75, top_speed * 0.5, top_speed * 0.35):
-        durs = _time_scale(path, speed, A_MAX * (speed / top_speed))
-        wl = Base_pb2.WaypointList(); wl.duration = 0.0; wl.use_optimal_blending = False
-        cur, prev = list(raw), path[0]
-        for k, (q, dt) in enumerate(zip(path[1:], durs), 1):
-            cur = [c + fold(x - y) for c, x, y in zip(cur, q, prev)]
-            w = wl.waypoints.add(); w.name = "w%02d" % k
-            w.angular_waypoint.angles.extend(cur)
-            w.angular_waypoint.duration = float(dt)
-            prev = q
-        errs = list(conn.base.ValidateWaypointList(wl).trajectory_error_report.trajectory_error_elements)
-        if not errs:
-            return wl, speed
-        print("    %.0f deg/s refused by the controller: %s" % (speed, " ".join(str(errs[0]).split())))
-    raise MoveError("controller refused the %s even at %.0f deg/s -- nothing moved" % (what, top_speed * 0.35))
 
 
 def plan_scoop(conn, a, q0, T0, R0, done):
@@ -380,7 +292,7 @@ def plan_scoop(conn, a, q0, T0, R0, done):
     if se:
         pivE = np.array(se["tool_m"]) + rot_x(90.0) @ R0 @ o_piv
         back = pivE - piv0; rise = back[2]; back[2] = 0.0
-        if np.linalg.norm(back) > 0.300:
+        if np.linalg.norm(back) > float(A_.scoop.max_backoff_m):
             raise MoveError("backing off %.0f mm is too far -- not the bowl this was built for" % (1000 * np.linalg.norm(back)))
 
     def piv_at(s):
@@ -458,9 +370,9 @@ def run_scoop(conn, a, plan):
         near = plan_piv[np.argmin(np.linalg.norm(plan_piv - pv, axis=1))]
         off = math.hypot(*(pv[:2] - near[:2])); worst = max(worst, off)
         log.append(dict(t=time.time() - t0, piv=pv.tolist(), off=off))
-        if off > 0.015:
+        if off > float(cfg.guards.scoop_food_off_path_m):
             why = "food point %.1f mm off its planned path" % (1000 * off)
-        elif pv[2] < near[2] - 0.010:
+        elif pv[2] < near[2] - float(cfg.guards.scoop_food_drop_m):
             why = "food point %.1f mm below its planned path" % (1000 * (near[2] - pv[2]))
         hit = guard.update([x.torque for x in fb.actuators])
         if hit and not why:
@@ -486,14 +398,14 @@ def main() -> int:
     ap.add_argument("step", choices=["over", "descend", "punch", "plunge", "scoop", "pick"])
     ap.add_argument("--target", default="/tmp/target.json")
     ap.add_argument("--under", default="/tmp/under.json", help="measure_under.py output")
-    ap.add_argument("--to-above", type=float, default=0.010, help="descend: stop this far above the food top")
+    ap.add_argument("--to-above", type=float, default=float(A_.stepped.approach_stop_m), help="descend: stop this far above the food top")
     ap.add_argument("--floor-m", type=float, default=PUNCH_FLOOR_M, help="punch: stop this far above the bowl floor")
-    ap.add_argument("--speed", type=float, default=25.0,
+    ap.add_argument("--speed", type=float, default=float(A_.scoop.speed_dps),
                     help="scoop: deg/s. Fast on purpose -- at 6 deg/s (25 s) the berry slid off")
-    ap.add_argument("--rot-exp", type=float, default=0.8,
+    ap.add_argument("--rot-exp", type=float, default=float(A_.scoop.rot_exp),
                     help="scoop: turn angle = 90 * progress**rot_exp. <1 starts turning the moment the food lifts "
                          "(user, 2026-09-24: at 1.6 it rose steep first and gravity works on the food)")
-    ap.add_argument("--n", type=int, default=40, help="scoop waypoints")
+    ap.add_argument("--n", type=int, default=int(A_.scoop.waypoints), help="scoop waypoints")
     ap.add_argument("--ramp", type=float, default=0.25, help="scoop: fraction of the time spent easing in, and out")
     ap.add_argument("--validate-only", action="store_true", help="scoop: plan and let the controller validate; do not move")
     ap.add_argument("--then-scoop", action="store_true", help="plunge: plan the scoop first and run it straight after")

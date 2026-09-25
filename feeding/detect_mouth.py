@@ -24,18 +24,17 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from feeding.locate_anything import LocateAnything
-from feeding.measure_under import CXD, CYD, FXD, FYD, T_D2C
+from settings import cfg
+from feeding.camera import COLOUR_RTSP, CXC, CXD, CYC, CYD, FXC, FXD, FYC, FYD, T_D2C, corrected
 
-CAL = Path(__file__).resolve().parent.parent / "calibration"
 
 
 def main() -> int:
     D = Path(sys.argv[1])
-    c = json.loads((CAL / "colour_intrinsics.json").read_text())
-    cx, cy, fx, fy = c["cx"], c["cy"], c["fx"], c["fy"]
+    cx, cy, fx, fy = CXC, CYC, FXC, FYC
     img = Image.open(D / "colour.jpg").convert("RGB"); H = img.size[1]
     up = img.transpose(Image.ROTATE_270)                    # world-up was image-left: 90 deg clockwise
-    dep = np.load(D / "depth.npy").astype(float); yy, xx = np.mgrid[0:dep.shape[0], 0:dep.shape[1]]
+    dep = corrected(np.load(D / "depth.npy")); yy, xx = np.mgrid[0:dep.shape[0], 0:dep.shape[1]]
 
     def to_orig(x, y):
         return y, H - 1 - x

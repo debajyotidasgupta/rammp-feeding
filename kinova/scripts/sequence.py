@@ -51,15 +51,17 @@ from kinova.connection import kinova_connection
 from kinova.scripts.safe_move import (MoveError, fold, goto, goto_cartesian, joints,
                                       pitch_sum, tilt_deg, tool_pose)
 
+from settings import cfg
+
 CAL = Path(__file__).resolve().parent.parent.parent / "calibration"
 HOME = CAL / "home_pose.json"
 LIFT = CAL / "lift_pose.json"
-DETECT = CAL / "food_detect_pose.json"
+DETECT = cfg.path("bowl.overlook_pose")           # the selected bowl's food_detect_start
 
-LIFT_Z = 0.545           # m, tool z at the top of the lift (stall is ~0.565)
-NEAR_DEG = 1.0           # within this of a pose's joints = "at" that pose
-LIFT_SPEED = 0.06        # m/s
-SWING_SPEED = 20.0       # deg/s (was 10; user: faster)
+LIFT_Z = float(cfg.motion.sequence.lift_z_m)      # m, tool z at the top of the lift (stall is ~0.565)
+NEAR_DEG = float(cfg.motion.near_pose_deg)        # within this of a pose's joints = "at" that pose
+LIFT_SPEED = float(cfg.motion.sequence.lift_mps)
+SWING_SPEED = float(cfg.motion.sequence.swing_dps)
 
 
 def load(p: Path) -> dict:

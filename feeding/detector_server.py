@@ -22,7 +22,9 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from feeding.locate_anything import Box
 
-HOST, PORT = "127.0.0.1", 8765
+from settings import cfg
+
+HOST, PORT = "127.0.0.1", int(cfg.deployment.servers.detector_port)
 
 
 class _Remote:
@@ -82,12 +84,12 @@ def main() -> int:
     da3 = None
     try:
         from depth_anything_3.api import DepthAnything3
-        t0 = time.time(); da3 = DepthAnything3.from_pretrained("depth-anything/DA3METRIC-LARGE").to("cuda").eval()
+        t0 = time.time(); da3 = DepthAnything3.from_pretrained(cfg.deployment.models.depth_anything).to("cuda").eval()
         print("Depth Anything 3 loaded in %.1f s" % (time.time() - t0), flush=True)
     except Exception as e:  # noqa: BLE001 -- detection still works without the depth fallback
         print("Depth Anything 3 NOT loaded (%s) -- no depth fallback" % e, flush=True)
 
-    from feeding.run_depth_anything3 import FX_COLOUR, FY_COLOUR
+    from feeding.camera import FXC as FX_COLOUR, FYC as FY_COLOUR
 
     def depth(img):
         """DA3 metric depth in metres at colour resolution -- exactly as run_depth_anything3.py:

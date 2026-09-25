@@ -13,8 +13,8 @@ hover and found the food 4.7-6.7 mm closer than the overlook reading predicted;
 a reading taken from where the arm now is beats one taken 150 mm further away.
 
 The vertical line is projected through the image of TRUE vertical
-(colour_intrinsics.json vertical_vp) and the MEASURED tip pixel
-(food_detect_pose.json utensil_tip_px) -- not the utensil box's centre, which
+(camera profile: colour.vertical_vp) and the MEASURED tip pixel
+(utensil profile: tip_px) -- not the utensil box's centre, which
 was ~10 mm off for a fork.
 """
 
@@ -26,23 +26,21 @@ from pathlib import Path
 
 import numpy as np
 
-CAL = Path(__file__).resolve().parent.parent / "calibration"
-FXD = FYD = 334.810; CXD = 238.536; CYD = 139.694          # depth, device
-T_D2C = np.array([-0.02706, -0.00997, -0.00471])            # factory extrinsic
-FOOD_HALF_M = 0.017                                         # half a strawberry, for the floor ring
+from settings import cfg
+from feeding.camera import CXC, CXD, CYC, CYD, FXC, FXD, FYC, FYD, T_D2C, VP, corrected
+
+FOOD_HALF_M = float(cfg.perception.food_half_width_m)        # the floor ring beside the food
 
 
 def measure(depth_mm: np.ndarray, guess: float = 0.30, filled: np.ndarray | None = None,
             target: tuple | None = None) -> dict:
-    cal = json.loads((CAL / "colour_intrinsics.json").read_text())
-    pose = json.loads((CAL / "food_detect_pose.json").read_text())
-    cx, cy, fx, fy = cal["cx"], cal["cy"], cal["fx"], cal["fy"]
-    vp = np.array(cal["vertical_vp"])
-    tip = np.array(pose["utensil_tip_px"], dtype=float)
-    zt = pose["camera_to_tip_m"]
+    cx, cy, fx, fy = CXC, CYC, FXC, FYC
+    vp = VP
+    tip = np.array(cfg.utensil.tip_px, dtype=float)
+    zt = float(cfg.utensil.camera_to_tip_m)
     if not zt:
         raise SystemExit("camera_to_tip_m is not set for this utensil -- measure it first")
-    D = depth_mm.astype(float)
+    D = corrected(depth_mm)
     H, W = D.shape
     yy, xx = np.mgrid[0:H, 0:W]
     # target = (u, v, z): read along the vertical line through that scene point instead of the tip's -- i.e.
@@ -85,12 +83,11 @@ def main() -> int:
     mask_p = dp.with_name(dp.stem + "_filled_mask.npy"); fill_p = dp.with_name(dp.stem + "_fill.json")
     tgt = None
     if a.target:
-        t = json.loads(Path(a.target).read_text()); pose = json.loads((CAL / "food_detect_pose.json").read_text())
-        c = json.loads((CAL / "colour_intrinsics.json").read_text())
-        u, v = t["berry_bbox_centre"]; zb = t["berry_depth_m"]; dx, dy = pose.get("aim_offset_base_m", [0.0, 0.0])
+        t = json.loads(Path(a.target).read_text())
+        u, v = t["berry_bbox_centre"]; zb = t["berry_depth_m"]; dx, dy = cfg.utensil.aim_offset_base_m
         # the aim offset moves the tool by (dx, dy): the point under the tip is that far from the berry centre.
         # At the overlook orientation a scene point further +X appears higher (-v), further +Y further left (-u).
-        tgt = (u - dy * c["fx"] / zb, v - dx * c["fy"] / zb, zb)
+        tgt = (u - dy * FXC / zb, v - dx * FYC / zb, zb)
     m = measure(np.load(a.depth), a.guess, np.load(mask_p) if mask_p.exists() else None, target=tgt)
     if fill_p.exists():
         m["depth_source"] = json.loads(fill_p.read_text()).get("source", "sensor")

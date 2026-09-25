@@ -27,6 +27,36 @@ make feed        the whole loop from feeding_start: bite after bite until the bo
 
 Frozen 2026-09-24 (tag `acquire-v1`): two consecutive full runs, fork on strawberries, both picked up and held ("the most perfect scoop"). Run to run: OVER 82/81 mm, punch 45.3/44.3 mm down, scoop 6.3/6.2 s, rise 164.5/163.8 mm, 1.0/1.0 mm off vertical.
 
+## Configuration (`config/`, read by `settings.py`)
+
+Every number that is tuned or changes with the deployment, and every on/off switch, is in YAML -- not in the code:
+
+```
+config/rammp.yaml             deployment (arm IP, containers, venvs, ports, models), features (on/off),
+                              motion limits, contact-guard thresholds, acquisition / perception / delivery tunables
+config/camera/<name>.yaml     intrinsics, depth->colour extrinsic, depth scale/offset correction, camera-in-tool, streams
+config/utensil/<name>.yaml    camera-to-tip, tip pixel, image region, aim offset, punch margin
+config/bowl/<name>.yaml       the overlook pose over it, where the scoop ends, where the swing may start
+config/local.yaml             per-machine overrides (not committed; same keys as rammp.yaml)
+```
+
+Later wins: `rammp.yaml` < the selected profiles < `local.yaml` < `RAMMP_SET`. Profiles are chosen in
+`rammp.yaml: profiles` or per run:
+
+```
+RAMMP_UTENSIL=spoon make feed                         # a new utensil: copy config/utensil/fork.yaml, re-measure
+RAMMP_BOWL=side RAMMP_CAMERA=realsense make perceive
+RAMMP_SET="delivery.stop_m=0.06,features.wait_for_open_mouth=false" make deliver
+python3 -m settings get delivery.bite_n               # any key, from the shell
+python3 -m settings dump                              # the merged result
+```
+
+Python reads it as `from settings import cfg` (`cfg.delivery.bite_n`, `cfg.get("motion.joint_limits_deg.2")`).
+Shared pieces: `feeding/camera.py` (intrinsics, depth correction, colour<->depth pixel mapping) and
+`kinova/motion.py` (IK, time scaling, homotopy, guarded trajectory execution) -- stages import these rather than
+re-defining them. `tests/regress.sh check` (perception on saved runs) and `tests/arm_values.py` (every arm-side
+value) confirm a refactor changes no number.
+
 ## Acquisition (`make acquire` -> `feeding/acquire.sh` -> `kinova/scripts/acquire.py`)
 
 | step | what | measured |
@@ -110,14 +140,19 @@ as scratch scripts before being moved here. **Not yet run from these files.**
 
 ## Per-utensil calibration — measure every time the utensil changes
 
-`calibration/food_detect_pose.json` holds, for the current utensil:
+`config/utensil/<name>.yaml` holds, for each utensil (select with `profiles.utensil` or `RAMMP_UTENSIL`):
 
 | field | fork (current) | how to measure |
 |---|---|---|
 | `camera_to_tip_m` | **0.265** | at food_detect_start: ruler from the tip to **bare table** (state the unit!) + the sensor's bare-table depth; cross-check with camera-case-to-tip |
-| `utensil_tip_px` | (658, 470) | where the utensil meets the food, **not** its image box centre (a fork's head is wide) — a 10 mm hover and your eye settle it |
-| `utensil_px` | fork's image region | so detection never calls the utensil food |
+| `tip_px` | (644, 405) | where the utensil meets the food, **not** its image box centre (a fork's head is wide) — a 10 mm hover and your eye settle it |
+| `image_region_px` | fork's image region | so detection never calls the utensil food |
 | `aim_offset_base_m` | (+5, −6) mm | at a 10 mm hover, by eye: where the tines actually meet the food vs the tool axis |
+| `punch_floor_margin_m` | 0.0 | how far above the bowl floor the plunge stops |
+
+A different bowl: `config/bowl/<name>.yaml` (overlook pose file, `scoop_end`, swing-start region). A different
+camera: `config/camera/<name>.yaml`; if its depth reads consistently off, set `depth.scale` / `depth.offset_m`
+(corrected = raw * scale + offset) from a ruler check rather than touching the code.
 
 Both breakages on 2026-09-23 came from one wrong number: camera-to-tip taken as
 105/115 mm (inches read as centimetres) when it is ~260 mm.
@@ -247,8 +282,8 @@ Scored against checks independent of all of them (a flat table; a strawberry is
 |---|---|
 | `home_pose.json` | **feeding_start** — J1 −90° (arm swung clear of the user), utensil straight down, tool (0.0236, −0.1766, 0.2082) |
 | `lift_pose.json` | top of the lift — feeding_start's xy, z 0.545, J6 3.6° off its limit |
-| `food_detect_pose.json` | **food_detect_start** — over the bowl, **in front of the user** (2026-09-24), camera straight down, tool (0.2205, 0.2826, 0.5344); also the fixed utensil image region. The old pose (bowl to the user's right) is kept as `previous_pose` |
-| `colour_intrinsics.json` | colour principal point, measured |
+| `food_detect_pose.json` | **food_detect_start** — over the bowl, **in front of the user** (2026-09-24), camera straight down, tool (0.2205, 0.2826, 0.5344); named by `config/bowl/front.yaml`. The old pose (bowl to the user's right) is kept as `previous_pose` |
+| `colour_intrinsics.json` | colour principal point, measured -- the record; the values used are in `config/camera/kinova_wrist.yaml` |
 | `depth_480x270.ini` | this depth sensor's own intrinsics, not the package default |
 
 **food_detect_start leans J2 ~+8° toward the table**, not −9.7° back. The camera
@@ -284,8 +319,12 @@ measured: commanding −90.000000 lands at −89.998138 every time. If you ever
 ## Layout
 
 ```
+settings.py                  loads config/ (python: `from settings import cfg`; shell: `python3 -m settings get`)
+config/                      every tunable, switch and deployment value (above)
+tests/                       regress.sh (perception outputs), arm_values.py (arm-side values)
 kinova/
   connection.py              session, routers, teardown
+  motion.py                  shared: IK, time scaling, homotopy, guarded trajectories
   scripts/
     sequence.py              the frozen motions: detect / home
     acquire.py               over / descend / punch / scoop
@@ -296,6 +335,7 @@ kinova/
     capture_home.py          re-measure a pose
     check_connection.py      identity, firmware, live joints
 feeding/
+  camera.py                  shared: intrinsics, depth correction, colour<->depth mapping
   stage1.sh                  make perceive
   perceive.py                detection
   locate_anything.py         LocateAnything-3B wrapper, label-aware parsing

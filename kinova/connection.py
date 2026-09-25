@@ -25,12 +25,15 @@ from kortex_api.autogen.client_stubs.BaseCyclicClientRpc import BaseCyclicClient
 from kortex_api.autogen.client_stubs.DeviceConfigClientRpc import DeviceConfigClient
 from kortex_api.autogen.messages import Session_pb2
 
-DEFAULT_IP = os.environ.get("KINOVA_IP", "192.168.2.67")
-DEFAULT_USERNAME = os.environ.get("KINOVA_USERNAME", "admin")
-DEFAULT_PASSWORD = os.environ.get("KINOVA_PASSWORD", "admin")
+from settings import cfg
 
-TCP_PORT = 10000
-UDP_PORT = 10001
+_arm = cfg.deployment.arm
+DEFAULT_IP = os.environ.get("KINOVA_IP", str(_arm.ip))
+DEFAULT_USERNAME = os.environ.get("KINOVA_USERNAME", str(_arm.username))
+DEFAULT_PASSWORD = os.environ.get("KINOVA_PASSWORD", str(_arm.password))
+
+TCP_PORT = int(_arm.tcp_port)
+UDP_PORT = int(_arm.udp_port)
 
 
 @dataclass
@@ -150,7 +153,7 @@ class KinovaConnection:
 
 @contextmanager
 def kinova_connection(ip: str | None = None, real_time: bool = False, **kwargs):
-    """Convenience wrapper: `with kinova_connection("192.168.2.67") as conn: ...`"""
+    """Convenience wrapper: `with kinova_connection() as conn: ...` (the arm from config/, or pass an IP)."""
     config = ConnectionConfig(**({"ip": ip} if ip else {}), **kwargs)
     conn = KinovaConnection(config, real_time=real_time)
     try:

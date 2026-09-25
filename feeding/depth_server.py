@@ -23,7 +23,8 @@ from urllib.parse import parse_qs, urlparse
 
 import numpy as np
 
-PORT = 8767
+PORT = 8767                            # --port / --topic: `make models` passes them from config/
+TOPIC = "/camera/depth/image_raw"
 BUF = deque(maxlen=60)                 # (arrival time, frame)
 LOCK = threading.Lock()
 
@@ -37,6 +38,10 @@ def median(frames):
 
 
 def main() -> int:
+    global PORT, TOPIC
+    import argparse
+    ap = argparse.ArgumentParser(); ap.add_argument("--port", type=int, default=PORT); ap.add_argument("--topic", default=TOPIC)
+    a = ap.parse_args(); PORT, TOPIC = a.port, a.topic
     import rclpy
     from rclpy.node import Node
     from rclpy.qos import qos_profile_sensor_data
@@ -45,7 +50,7 @@ def main() -> int:
     class Sub(Node):
         def __init__(self):
             super().__init__("depth_server")
-            self.create_subscription(Image, "/camera/depth/image_raw", self.cb, qos_profile_sensor_data)
+            self.create_subscription(Image, TOPIC, self.cb, qos_profile_sensor_data)
 
         def cb(self, msg):
             arr = np.frombuffer(msg.data, dtype=np.uint16).reshape(msg.height, msg.width).copy()

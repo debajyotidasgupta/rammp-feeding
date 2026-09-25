@@ -1,0 +1,129 @@
+# RAMMP -- everything that is tuned, switched on or off, or changes with the deployment.
+#
+# Read by settings.py (python: `from settings import cfg`; shell: `python3 -m settings get <key>`).
+# Layers, later wins:  this file  <  the selected profiles (camera / utensil / bowl)  <  config/local.yaml
+#                      (per machine, not committed)  <  RAMMP_SET="key=value,key=value" (one run).
+# Units are in the key names: _m metres, _mps m/s, _dps deg/s, _dps2 deg/s^2, _nm N.m, _n N, _s s, _px pixels.
+
+profiles:
+  camera: kinova_wrist          # config/camera/<name>.yaml -- intrinsics, extrinsic, depth correction, streams
+  utensil: fork                 # config/utensil/<name>.yaml -- camera-to-tip, tip pixel, aim offset, ...
+  bowl: front                   # config/bowl/<name>.yaml -- the overlook pose over it, where the scoop ends
+
+deployment:
+  arm:
+    ip: 192.168.2.67
+    username: admin             # KINOVA_USERNAME / KINOVA_PASSWORD in the environment win over these
+    password: admin
+    tcp_port: 10000
+    udp_port: 10001
+  containers: {driver: tcp_rec, vision: kinova_vision}
+  venvs: {detector: ~/venvs/la, face: ~/venvs/mp}
+  runs_dir: ~/rammp_runs
+  models:
+    face_landmarker: ~/models/face_landmarker.task
+    depth_anything: depth-anything/DA3METRIC-LARGE
+  servers:                      # resident processes, all on localhost (make models)
+    detector_port: 8765         # LocateAnything + Depth Anything 3
+    face_port: 8766             # MediaPipe
+    depth_port: 8767            # the depth stream, inside the vision container
+
+features:                       # what to switch on and off
+  resident_models: true         # make feed starts the servers and waits until every model is warm
+  wait_for_open_mouth: true     # approach only once the user opens their mouth
+  depth_fallback: true          # fill sensor depth holes from Depth Anything 3
+  detect_from_the_side: true    # after the swing, step to the user's right before looking (food not in the way)
+  bowl_once_per_session: true   # detect the bowl on the first bite, then reuse its box
+  pick_in_one_program: true     # OVER + re-measure + plunge + scoop without restarting the arm program
+  face_detector: mediapipe      # mediapipe (LocateAnything as its fallback) | locateanything
+  food_detector:
+    crop_to_bowl: true
+    generation_mode: fast       # LocateAnything: fast | hybrid | slow
+    stop_on_repeat: true
+    max_new_tokens: 128
+  utensil_cross_check: false    # also detect the utensil, to check its stored image region
+
+motion:
+  joint_accel_cap_dps2: 40.0    # per joint, every trajectory (the controller refuses above 80)
+  joint_limits_deg: {2: 128.9, 4: 147.8, 6: 120.3}   # J2 / J4 / J6; the others are continuous
+  joint_limit_margin_deg: 0.3   # a target this close to a limit is refused (Kortex silently ignores it)
+  plan_min_margin_deg: 3.0      # planned paths keep at least this from every limit
+  max_tilt_deg: 25.0            # the utensil's worst allowed tilt off straight down (except scoop / delivery)
+  no_progress_s: 3.0            # nothing moved by then: the controller ignored the move
+  near_pose_deg: 1.0            # within this of a pose's joints = "at" that pose
+  sequence:                     # make detect / make start
+    lift_z_m: 0.545             # tool z at the top of the lift from feeding_start
+    lift_mps: 0.06
+    swing_dps: 20.0
+
+guards:                         # contact guard: a joint-torque step this big against recent history = stop
+  torque_step_nm:
+    default: 2.5                # every move without its own entry
+    plunge: 2.5                 # contact is the point here: keep it sensitive
+    approach: 4.0               # the user sitting down shakes the wheelchair mount past 2.5
+    scoop: 6.0                  # open air; 2.5 tripped on the arm's own acceleration
+    swing: 6.0
+    retract: 6.0                # empty utensil, moving away
+  scoop_food_off_path_m: 0.015  # the food drifting this far from its planned path stops the scoop
+  scoop_food_drop_m: 0.010      # ... or this far below it
+
+acquisition:
+  over_speed_mps: 0.05
+  over_max_m: 0.10              # OVER is a small correction inside the bowl, never a transit
+  plunge:
+    fast_mps: 0.050
+    slow_mps: 0.008             # through the food
+    slow_above_food_m: 0.020    # the overlook reads the food top 4-7 mm high; this covers it
+    ik_step_m: 0.006
+    sane_range_m: [0.080, 0.250]
+    food_height_range_m: [0.010, 0.060]
+    refuse_if_floor_filled_over: 0.5   # fraction of the floor reading from the depth fallback
+  scoop:
+    speed_dps: 25.0
+    rot_exp: 0.8                # turn angle = 90 * s**rot_exp: <1 starts turning the moment the food lifts
+    waypoints: 40
+    backoff_from: 0.2           # fraction of the scoop before backing off toward the bowl's scoop end
+    max_backoff_m: 0.300
+  stepped:                      # the old route, for aim checks (STOP_AFTER=hover10)
+    approach_stop_m: 0.010
+    descend_max_m: 0.200
+    fast_mps: 0.015
+    slow_mps: 0.005
+
+perception:
+  food_prompt: food pieces
+  min_box_side_px: 25
+  max_box_aspect: 3.0
+  food_inside_bowl_min: 0.8     # fraction of a food box inside the bowl box
+  food_max_frac_of_bowl: 0.15   # a "food" box bigger than this is the bowl, not food
+  inside_utensil_max: 0.5
+  bowl_crop_margin_px: 20
+  depth_frames: 15              # per-pixel median over this many fresh frames
+  food_half_width_m: 0.017      # the floor ring beside the food (half a strawberry)
+
+delivery:
+  lift_m: 0.175                 # above the scoop end, before the swing (60 mm touched the bowl)
+  retract_tries_m: [0.120, 0.100, 0.080, 0.060, 0.040, 0.0]   # retraction along the utensil while swinging
+  swing_dps: 20.0
+  detect_sidestep_m: 0.050      # to the user's right (-Y) before looking
+  stop_m: 0.080                 # utensil tip short of the mouth (safe for any cube-sized piece)
+  stop_extra_if_depth_filled_m: 0.040
+  aim_dz_m: -0.010              # below the detected mouth (it felt nearer the nose)
+  approach_mps: 0.035
+  max_approach_m: 0.350
+  detection_max_age_s: 120.0
+  sidestep_m: 0.050             # occlusion retries: step this far, at most twice, then the nose estimate
+  nose_to_mouth: 0.84           # nose heights below the nose, upright image (0.81-0.87 measured)
+  mouth_behind_nose_m: 0.005
+  open_mouth_ratio: 0.20        # inner-lip gap / mouth width; closed reads <= 0.02
+  open_mouth_hold_s: 0.30
+  open_mouth_timeout_s: 60.0    # no open mouth by then = the user declined: take the food back
+  bite_n: 1.0                   # tool-force estimate against a baseline at rest
+  bite_hold_s: 0.10
+  bite_timeout_s: 60.0
+  retract:
+    back_off_mps: 0.060
+    swing_dps: 25.0
+    down_dps: 20.0
+    home_dps: 20.0
+    min_tip_z_m: 0.300          # the joint move home must keep the utensil tip above this

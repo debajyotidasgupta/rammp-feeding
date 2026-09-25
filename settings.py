@@ -1,0 +1,126 @@
+"""Every tunable number and switch, from config/ -- one loader for all programs and shell scripts.
+
+    from settings import cfg
+    cfg.delivery.stop_m                 # attribute access
+    cfg.get("guards.torque_step_nm.approach")
+    cfg.utensil.camera_to_tip_m         # the selected utensil profile
+    cfg.overlook_pose()                 # the bowl's measured overlook pose (joints + tool pose)
+
+    python3 -m settings get delivery.stop_m     # shell: prints the value (true -> 1, false -> empty)
+    python3 -m settings dump                    # the merged configuration, as YAML
+
+Layers, later wins: config/rammp.yaml < the selected profiles (config/camera|utensil|bowl/<name>.yaml, under
+cfg.camera / cfg.utensil / cfg.bowl) < config/local.yaml (per machine, not committed) < RAMMP_SET="a.b=1,c=2".
+RAMMP_CONFIG points at another config directory. Profiles can be swapped per run: RAMMP_UTENSIL=spoon etc.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+from pathlib import Path
+
+import yaml
+
+ROOT = Path(__file__).resolve().parent
+CONFIG = Path(os.environ.get("RAMMP_CONFIG", ROOT / "config"))
+
+
+class Cfg(dict):
+    """A dict with attribute access and dotted lookup."""
+
+    def __getattr__(self, k):
+        try:
+            v = self[k]
+        except KeyError:
+            raise AttributeError("config has no '%s' (keys: %s)" % (k, ", ".join(self)))
+        return Cfg(v) if isinstance(v, dict) and not isinstance(v, Cfg) else v
+
+    def get(self, dotted, default=KeyError):
+        node = self
+        for part in dotted.split("."):
+            if isinstance(node, dict) and part in node:
+                node = node[part]
+            elif isinstance(node, dict) and part.isdigit() and int(part) in node:
+                node = node[int(part)]
+            elif default is KeyError:
+                raise KeyError("config has no '%s'" % dotted)
+            else:
+                return default
+        return Cfg(node) if isinstance(node, dict) and not isinstance(node, Cfg) else node
+
+    def path(self, dotted):
+        """A path setting: ~ expanded, relative paths taken from the repo root."""
+        p = Path(os.path.expanduser(str(self.get(dotted))))
+        return p if p.is_absolute() else ROOT / p
+
+    def overlook_pose(self):
+        return json.loads(self.path("bowl.overlook_pose").read_text())
+
+
+def _merge(a, b):
+    for k, v in b.items():
+        if isinstance(v, dict) and isinstance(a.get(k), dict):
+            _merge(a[k], v)
+        else:
+            a[k] = v
+    return a
+
+
+def _set(d, dotted, value):
+    parts = dotted.split(".")
+    for p in parts[:-1]:
+        d = d.setdefault(int(p) if p.isdigit() and int(p) in d else p, {})
+    last = parts[-1]
+    d[int(last) if last.isdigit() and int(last) in d else last] = value
+
+
+def _fill(node, subs):
+    if isinstance(node, dict):
+        return {k: _fill(v, subs) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_fill(v, subs) for v in node]
+    if isinstance(node, str) and "{" in node:
+        try:
+            return node.format(**subs)
+        except (KeyError, IndexError):
+            return node
+    return node
+
+
+def load() -> Cfg:
+    c = yaml.safe_load((CONFIG / "rammp.yaml").read_text())
+    for kind in ("camera", "utensil", "bowl"):
+        name = os.environ.get("RAMMP_" + kind.upper(), c["profiles"][kind])
+        c["profiles"][kind] = name
+        c[kind] = yaml.safe_load((CONFIG / kind / (name + ".yaml")).read_text())
+    local = CONFIG / "local.yaml"
+    if local.exists():
+        _merge(c, yaml.safe_load(local.read_text()) or {})
+    for item in filter(None, os.environ.get("RAMMP_SET", "").split(",")):
+        k, _, v = item.partition("=")
+        _set(c, k.strip(), yaml.safe_load(v))
+    return Cfg(_fill(c, dict(arm_ip=c["deployment"]["arm"]["ip"])))
+
+
+cfg = load()
+
+
+def _shell(v):
+    if isinstance(v, bool):
+        return "1" if v else ""
+    if isinstance(v, (list, tuple)):
+        return " ".join(str(x) for x in v)
+    if isinstance(v, str) and v.startswith("~"):
+        return os.path.expanduser(v)
+    return str(v)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) >= 3 and sys.argv[1] == "get":
+        print(_shell(cfg.get(sys.argv[2])))
+    elif len(sys.argv) >= 2 and sys.argv[1] == "dump":
+        print(yaml.safe_dump(json.loads(json.dumps(cfg)), sort_keys=False))
+    else:
+        print(__doc__); sys.exit(2)

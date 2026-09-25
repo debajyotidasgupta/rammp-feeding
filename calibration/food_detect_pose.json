@@ -40,31 +40,7 @@
     ]
   },
   "note": "tool_pose is the CONFIGURED TOOL frame, not the flange: the arm carries a 120 mm z-offset for the 2F-85. The utensil adds more. Measured camera-to-tine-tip is ~105 mm, so the reported point lands within a few cm of the real tip -- good enough to report and to stand off by, NOT good enough for the 4 mm flesh/bowl window, which is terminated on torque instead.",
-  "utensil_px": [
-    640,
-    405,
-    750,
-    719
-  ],
-  "utensil_tip_px": [
-    644,
-    405
-  ],
-  "utensil_note": "The utensil is fixed to the arm and so is the camera, so at this pose it occupies the SAME pixels in every frame: (646-652, 464)-(756, 718-719) across four runs. Stored here instead of detected: a 'spoon' query once returned the whole BOWL box (the spoon sits in the bowl in the image), which then suppressed every berry as 'inside the utensil'. Re-measure if the utensil is changed or re-gripped. tip = top-centre of the box.",
   "pose_note": "2026-09-24, user: the bowl is ALWAYS in front of the user, not to their right, so food_detect_start sits over it. Reached from the old pose by straight slides with the camera orientation held (-5, +261, -30 mm, then 0, -40, +20 mm), so every orientation-only calibration (vertical_vp, principal point, utensil_px, tip pixel, camera-to-tip, aim offset) still holds. 30 mm lower than the old pose less 20: J6 is the constraint at this orientation (-113.5 here, 6.8 deg from its limit); +45 mm has 1.2 deg, +60 mm is unreachable. The whole rim does not fit above the utensil at any reachable height (~110 mm more would be needed); the rim's top touches the image edge, as before.",
-  "utensil": "fork",
-  "camera_to_tip_m": 0.265,
-  "camera_to_tip_note": "FORK, 2026-09-23. Two independent closures agree: ruler tine-tips-to-bare-table 7 in (177.8 mm) against a sensor bare-table depth of 438.8 mm -> 261.0 mm; camera case to tip 10.5 in (266.7 mm) minus the 6.7 mm case-to-depth-frame offset found with the knife -> 260.0 mm. Stored as 265: the knife, closed the same way, proved ~5 mm short in a hover test, and erring long keeps every stop higher. Caution learned here: at food_detect_start the point straight below the tip is the bowl's outer wall (407 mm), not table -- close against bare table, not 'under the tip'. 2026-09-24 after the re-seat: unchanged -- the fork's far end reads the same in depth before and after (and 254 mm raw max + 4.7 mm depth-to-colour = 259 mm, matching the ruler's 260-261).",
-  "approach_stop_m": 0.01,
-  "approach_stop_note": "Real-world rule (user, 2026-09-23): stop 10 mm above any surface being approached. 5 mm was seen in practice and judged too close. The PUNCH into food uses floor + food height / 3 instead.",
-  "utensil_tip_note": "FORK, re-seated by the 2026-09-24 robot restart (the Robotiq re-initialised): it PIVOTED in the gripper. Measured from depth: the fork's far end projects to colour (670, 432) now vs (684, 497)/(683, 495) before, i.e. (-14, -65) px, at the SAME camera distance (246 mm robust far end, both). The old tip pixel (658, 470) -- set by eye at a 10 mm hover: the tool-axis column, the top of the fork's box -- is shifted by the same (-14, -65) to (644, 405). Confirm at a 10 mm hover. Method: depth px 0.12-0.32 m in the lower half = the fork; its far end (within 6 mm of the 99th pct) projected into colour.",
-  "aim_offset_base_m": [
-    0.005,
-    -0.006
-  ],
-  "aim_offset_note": "Base-frame (x, y) aim correction applied in OVER, user-confirmed by eye at a 10 mm hover on 2026-09-24 ('this looks perfect'). X +5 mm: the fork's tines extend forward, so aim into the bulk of the flesh. Y -6 mm (away from the user): the detected centre is right, but the fork head curves, so the tines meet the food ~5-7 mm off the tool axis. Fork-specific: re-check when the utensil changes. Image at food_detect_start: +X = up, +Y = left (user's side).",
-  "punch_floor_margin_m": 0.0,
-  "punch_note": "NOMINAL margin above the measured bowl floor. 2026-09-24: floor + 7 mm shallow; floor + 2 mm picked a berry up; user then asked for 7 mm deeper than floor + 7 -> 0 nominal. The REAL gap is ~5-10 mm: camera_to_tip is stored long (265 vs 260-261 measured) and the user sees the nominal 10 mm hover as 15-20 mm by eye; the floor is also read in a ring BESIDE the food, where the concave bowl is higher. Do not go below 0 nominal without re-measuring camera_to_tip.",
   "previous_pose": {
     "joints_deg": [
       176.973,
@@ -85,34 +61,5 @@
     },
     "note": "food_detect_start until 2026-09-24: bowl to the user's right"
   },
-  "previous_fork_seating": {
-    "utensil_px": [
-      652,
-      470,
-      762,
-      719
-    ],
-    "utensil_tip_px": [
-      658,
-      470
-    ],
-    "until": "2026-09-24 robot restart"
-  },
-  "scoop_end": {
-    "tool_m": [
-      0.2997,
-      -0.0968,
-      0.4038
-    ],
-    "joints_deg": [
-      -102.4,
-      -42.0,
-      -37.2,
-      -97.5,
-      -41.1,
-      -111.2,
-      131.8
-    ],
-    "note": "2026-09-24, user: with the bowl in front of the user, scoop WHILE backing off to where the scoops ended when the bowl was on the right, so the swing / present / bite / retract built there apply unchanged. The utensil's end orientation is the same (0.1 deg); the joints end within ~1 deg of these. The turn to face the user is not reachable from over the bowl in front (the wrist would have to sit beyond the utensil)."
-  }
+  "config_note": "Only the overlook pose lives here. The utensil (camera-to-tip, tip pixel, aim offset, punch margin) is config/utensil/<name>.yaml; the scoop end is config/bowl/<name>.yaml."
 }

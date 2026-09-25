@@ -57,13 +57,15 @@ import numpy as np
 
 from kortex_api.autogen.messages import Base_pb2
 
-MAX_TILT_DEG = 25.0          # how far off straight-down the utensil may ever get
-TORQUE_STEP_NM = 2.5         # a step this big against recent history = contact
-NO_PROGRESS_S = 3.0          # nothing moved by then = the controller ignored it
+from settings import cfg
+
+MAX_TILT_DEG = float(cfg.motion.max_tilt_deg)                # how far off straight-down the utensil may ever get
+TORQUE_STEP_NM = float(cfg.guards.torque_step_nm.default)    # a step this big against recent history = contact
+NO_PROGRESS_S = float(cfg.motion.no_progress_s)              # nothing moved by then = the controller ignored it
 # Gen3 soft limits for the three limited joints (J2, J4, J6; 0-indexed), with a
 # little margin: a target AT the limit is as likely to be refused as one past it.
-LIMITS = {1: 128.9, 3: 147.8, 5: 120.3}
-LIMIT_MARGIN = 0.3
+LIMITS = {int(j) - 1: float(v) for j, v in cfg.motion.joint_limits_deg.items()}
+LIMIT_MARGIN = float(cfg.motion.joint_limit_margin_deg)
 
 
 def fold(d: float) -> float:

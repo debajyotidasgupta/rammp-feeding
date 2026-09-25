@@ -18,7 +18,7 @@ a few seconds and remove the failure outright.
            ~12 px of the rim
   utensil  NOT detected for use. It is fixed to the arm, and so is the camera,
            so at food_detect_start it occupies the same pixels every time; that
-           region is stored in calibration/food_detect_pose.json. A 'spoon'
+           region is stored in config/utensil/<name>.yaml. A 'spoon'
            query once returned the whole bowl box, which then suppressed every
            berry. It is still queried, only to warn if the stored region looks
            stale (utensil changed or re-gripped).
@@ -72,8 +72,11 @@ def draw(img, groups, out_path):
     im.save(out_path, quality=92)
 
 
-MIN_SIDE_PX = 25
-MAX_ASPECT = 3.0
+from settings import cfg
+
+MIN_SIDE_PX = cfg.perception.min_box_side_px
+MAX_ASPECT = float(cfg.perception.max_box_aspect)
+FD = cfg.features.food_detector
 
 
 def plausible(b) -> bool:
@@ -87,13 +90,12 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", required=True)
     ap.add_argument("--out", default="scene_det")
-    ap.add_argument("--food", default="food pieces")
+    ap.add_argument("--food", default=cfg.perception.food_prompt)
     ap.add_argument("--utensil", default="spoon", help="phrase for the cross-check only")
-    ap.add_argument("--check-utensil", action="store_true", help="also detect the utensil, to cross-check its stored region")
+    ap.add_argument("--check-utensil", action="store_true", default=bool(cfg.features.utensil_cross_check),
+                    help="also detect the utensil, to cross-check its stored region")
     ap.add_argument("--bowl-cache", help="reuse / save this session's bowl box here (make feed clears it)")
-    ap.add_argument("--pose", default=str(Path(__file__).resolve().parent.parent
-                                          / "calibration" / "food_detect_pose.json"),
-                    help="pose file carrying the fixed utensil_px region")
+
     a = ap.parse_args()
 
     img = Image.open(a.image).convert("RGB"); img.filename = a.image     # the detector server reads the file
@@ -125,15 +127,16 @@ def main() -> int:
     # 128 tokens, 5.6 s -> 1.0 s. (Past the real pieces the model repeats itself; at 512 tokens, 80 boxes.)
     t0 = time.perf_counter()
     crop_at = (0, 0)
-    if bowl:
-        m = 20; bb = bowl[0]
+    if bowl and FD.crop_to_bowl:
+        m = int(cfg.perception.bowl_crop_margin_px); bb = bowl[0]
         x0, y0 = max(0, int(bb.x1) - m), max(0, int(bb.y1) - m)
         x1, y1 = min(img.width, int(bb.x2) + m), min(img.height, int(bb.y2) + m)
         crop = img.crop((x0, y0, x1, y1)); crop_path = str(Path(a.out).with_name("food_crop.jpg"))
         crop.save(crop_path, quality=95); crop.filename = crop_path; crop_at = (x0, y0)
     else:
         crop = img
-    food_all = la.locate(crop, a.food, max_new_tokens=128, generation_mode="fast")
+    food_all = la.locate(crop, a.food, max_new_tokens=int(FD.max_new_tokens), generation_mode=FD.generation_mode,
+                         stop_on_repeat=bool(FD.stop_on_repeat))
     for b in food_all:
         b.x1 += crop_at[0]; b.x2 += crop_at[0]; b.y1 += crop_at[1]; b.y2 += crop_at[1]
     food = [b for b in food_all if plausible(b)]
@@ -143,8 +146,7 @@ def main() -> int:
     # now only run on request
     seen, t_ute = one(a.utensil) if a.check_utensil else ([], 0.0)
 
-    pose = json.loads(Path(a.pose).read_text())
-    ux1, uy1, ux2, uy2 = pose["utensil_px"]
+    ux1, uy1, ux2, uy2 = cfg.utensil.image_region_px
     ute = [Box(ux1, uy1, ux2, uy2, "utensil")]
     stale = ""
     if seen:
@@ -163,7 +165,7 @@ def main() -> int:
 
     if ute:
         n0 = len(food)
-        food = [b for b in food if inside_frac(b, ute[0]) < 0.5]
+        food = [b for b in food if inside_frac(b, ute[0]) < cfg.perception.inside_utensil_max]
         n_utensil = n0 - len(food)
     else:
         n_utensil = 0
@@ -184,7 +186,8 @@ def main() -> int:
         n0 = len(food)
         # ...and no single piece of food is a large fraction of its bowl: a
         # 599x484 px 'food pieces' box once covered most of a 585x432 bowl.
-        food = [b for b in food if inside_frac(b, bb) > 0.8 and b.area < 0.15 * bb.area]
+        food = [b for b in food if inside_frac(b, bb) > cfg.perception.food_inside_bowl_min
+                and b.area < cfg.perception.food_max_frac_of_bowl * bb.area]
         n_outside = n0 - len(food)
     else:
         n_outside = 0
@@ -209,8 +212,7 @@ def main() -> int:
                              cx=b.centre[0], cy=b.centre[1]) for b in boxes]
         groups.append((name, boxes))
 
-    if "utensil_tip_px" in pose:
-        result["utensil_tip"] = pose["utensil_tip_px"]     # measured; the box centre is not the tip
+    result["utensil_tip"] = list(cfg.utensil.tip_px)      # measured; the box centre is not the tip
     Path(a.out + ".json").write_text(json.dumps(result, indent=2))
     draw(img, groups, a.out + ".jpg")
     print("  wrote %s.json, %s.jpg" % (a.out, a.out))

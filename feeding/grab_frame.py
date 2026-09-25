@@ -12,7 +12,7 @@ import time
 
 import cv2
 
-RTSP = "rtsp://192.168.2.67/color"
+from feeding.camera import COLOUR_RTSP as RTSP
 SKIP = 8
 
 

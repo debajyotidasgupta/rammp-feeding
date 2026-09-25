@@ -7,3 +7,4 @@ captures/
 docker/vendor/kortex_api_*
 presentation/data/
 presentation/out/
+config/local.yaml

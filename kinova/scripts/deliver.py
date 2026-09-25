@@ -46,8 +46,10 @@ import numpy as np
 from kortex_api.autogen.messages import Base_pb2
 
 from kinova.connection import kinova_connection
-from kinova.scripts.acquire import (CAM_IN_TOOL, LIMITS, R_from_kortex, _ik, _timing, _waypoints, cal,
-                                    kortex_from_R, tip_in_tool)
+from settings import cfg
+from feeding.camera import CAM_IN_TOOL, CXC, CYC, FXC, FYC
+from kinova.motion import (LIMITS, R_from_kortex, Rz, _ik, _waypoints, axis, dps_for, fk_tip, homotopy,  # noqa: F401
+                           kortex_from_R, margin, run_path, tip_in_tool)
 from kinova.scripts.safe_move import MoveError, TorqueGuard, _events, fold, goto, goto_cartesian, joints, tool_pose
 
 STATE = Path("/tmp/deliver_state.json")
@@ -65,116 +67,44 @@ def _cached(cache, q_start, tol=1.0):
     if max(abs(fold(x - y)) for x, y in zip(c["q_start"], q_start)) > tol:
         return None
     return c
-LIFT_M = 0.175                 # above the scoop end, before the swing
-RETRACT_TRIES = (0.120, 0.100, 0.080, 0.060, 0.040, 0.0)   # 150 never fit
-SWING_DPS = 20.0               # was 10 (user: faster); the food sits level on the utensil throughout
-DETECT_SIDESTEP_M = 0.050      # after the swing, to the user's right (-Y): the food otherwise sits between
-                               # the camera and the mouth (user, 2026-09-24)
-STOP_M = 0.080                 # utensil tip short of the mouth
-AIM_DZ = -0.010                # below the detected mouth
-APPROACH_MPS = 0.035           # was 20 mm/s; still eases in and out, and stops 80 mm short
-MAX_APPROACH_M = 0.350          # was 0.300; the 50 mm step to the user's right lengthened it (308 mm, 2026-09-24)
-MAX_SHIFT_S = 120.0            # detection must be this fresh
-NOSE_TO_MOUTH = 0.84           # nose heights, upright image (3 clean detections: 0.81-0.87)
-MOUTH_BEHIND_NOSE = 0.005      # m (measured 0-13 mm)
-BITE_N = 1.0
-BITE_HOLD_S = 0.10
-# retract carries no food and moves away from the user: fast (user, 2026-09-24: "it's otherwise too slow")
-RETRACT_MPS = 0.060            # back off along the utensil
-RETRACT_SWING_DPS = 25.0
-RETRACT_DOWN_DPS = 20.0
-RETRACT_HOME_DPS = 20.0
-RETRACT_TORQUE_NM = 6.0
-SWING_TORQUE_NM = 6.0          # lift + swing: open air, food level; 2.5 tripped on acceleration
-APPROACH_TORQUE_NM = 4.0       # toward the face: 2.5 tripped when the user sat down (the chair shakes the mount)        # empty utensil, moving away: J1 starting the fast reverse swing with the arm
-                               # stretched out stepped past 2.5 N.m with nothing touching (2026-09-24 demo)
-MIN_TIP_Z = 0.300              # the return's joint move must keep the utensil tip above this
+DL, G = cfg.delivery, cfg.guards.torque_step_nm
+LIFT_M = float(DL.lift_m)                         # above the scoop end, before the swing (60 mm touched the bowl)
+RETRACT_TRIES = tuple(float(x) for x in DL.retract_tries_m)
+SWING_DPS = float(DL.swing_dps)
+DETECT_SIDESTEP_M = float(DL.detect_sidestep_m) if cfg.features.detect_from_the_side else 0.0
+STOP_M = float(DL.stop_m)                         # utensil tip short of the mouth
+AIM_DZ = float(DL.aim_dz_m)                       # below the detected mouth
+APPROACH_MPS = float(DL.approach_mps)
+MAX_APPROACH_M = float(DL.max_approach_m)
+MAX_SHIFT_S = float(DL.detection_max_age_s)       # detection must be this fresh
+NOSE_TO_MOUTH = float(DL.nose_to_mouth)
+MOUTH_BEHIND_NOSE = float(DL.mouth_behind_nose_m)
+BITE_N = float(DL.bite_n)
+BITE_HOLD_S = float(DL.bite_hold_s)
+# retract carries no food and moves away from the user: fast
+RETRACT_MPS = float(DL.retract.back_off_mps)
+RETRACT_SWING_DPS = float(DL.retract.swing_dps)
+RETRACT_DOWN_DPS = float(DL.retract.down_dps)
+RETRACT_HOME_DPS = float(DL.retract.home_dps)
+RETRACT_TORQUE_NM = float(G.retract)
+SWING_TORQUE_NM = float(G.swing)
+APPROACH_TORQUE_NM = float(G.approach)
+MIN_TIP_Z = float(DL.retract.min_tip_z_m)         # the return's joint move must keep the utensil tip above this
 UP_W, UP_H = 720, 1280         # upright (rotated) image
 
 
-def margin(q):
-    return min(LIMITS[i] - abs(q[i]) for i in LIMITS)
 
 
-def Rz(deg):
-    t = math.radians(deg); c, s = math.cos(t), math.sin(t)
-    return np.array([[c, -s, 0], [s, c, 0], [0, 0, 1.0]])
 
 
-def axis(R):
-    return R @ np.array([0, 0, 1.0])
 
 
-def fk_tip(conn, q):
-    ja = Base_pb2.JointAngles()
-    for i, v in enumerate(q):
-        j = ja.joint_angles.add(); j.joint_identifier = i; j.value = v % 360.0
-    for attempt in range(5):             # has failed once (METHOD_FAILED) right after a trajectory
-        try:
-            p = conn.base.ComputeForwardKinematics(ja)
-            break
-        except Exception:  # noqa: BLE001
-            if attempt == 4:
-                raise MoveError("forward kinematics keeps failing -- stopped")
-            time.sleep(0.3)
-    return np.array([p.x, p.y, p.z]) + R_from_kortex(p.theta_x, p.theta_y, p.theta_z) @ tip_in_tool()
 
 
-def homotopy(conn, q0, at, n, toward=None):
-    """Continuous IK path along at(s) -> (tool xyz, R). The 7th DoF is steered away from J2/J4/J6 limits
-    (without it the swing only fits 60 mm of retraction), or blended `toward` a known arm shape."""
-    prev, path = q0, [q0]
-    for k in range(1, n + 1):
-        s = k / n
-        T, R = at(s)
-        if toward is not None:
-            g = [fold(a + fold(b - a) * s) for a, b in zip(q0, toward)]
-        else:
-            g = list(prev)
-            for j in (1, 3, 5):
-                if abs(prev[j]) > LIMITS[j] - 25:
-                    g[j] = prev[j] - math.copysign(min(3.0, abs(prev[j])), prev[j])
-        q = _ik(conn, T, kortex_from_R(R), g)
-        if q is None:
-            return None, "IK fails at %d%%" % (100 * s)
-        step = max(abs(fold(a - b)) for a, b in zip(q, prev))
-        if step > 8:
-            return None, "joint jump %.0f deg at %d%%" % (step, 100 * s)
-        prev = q; path.append(q)
-    return path, None
 
 
-def run_path(conn, path, dps, label, go, torque_stop=True, ramp=0.25, from_here=True, torque_limit=2.5):
-    """Validate a joint path with the controller; with go, execute it and watch it. A path that starts
-    somewhere the arm is not yet (from_here=False, validate-only) can only be IK-checked: the controller
-    validates relative to the arm's current joints."""
-    if not from_here:
-        print("    %-26s IK-continuous, joint margin >= %.1f deg  (controller validates it just before it runs)"
-              % (label, min(margin(q) for q in path)))
-        return
-    wl, sp = _waypoints(conn, path, dps, ramp, label)
-    total = sum(w.angular_waypoint.duration for w in wl.waypoints)
-    print("    %-26s controller accepted at %.1f deg/s: %.1f s%s" % (label, sp, total, "" if go else "  (validate only)"))
-    if not go:
-        return
-    ev = _events(conn); ev.clear(); guard = TorqueGuard(limit=torque_limit)
-    conn.base.ExecuteWaypointTrajectory(wl)
-    t0 = time.time()
-    while time.time() - t0 < total + 15:
-        time.sleep(0.02)
-        hit = guard.update([x.torque for x in conn.base_cyclic.RefreshFeedback().actuators])
-        if any(e[0] == "ACTION_ABORT" for e in ev):
-            conn.base.Stop(); raise MoveError("%s: controller aborted" % label)
-        if hit and torque_stop:
-            conn.base.Stop(); raise MoveError("%s: stopped, joint %d torque step" % (label, hit[0] + 1))
-        if any(e[0] == "ACTION_END" for e in ev):
-            break
-    print("    %-26s done in %.1f s" % (label, time.time() - t0))
 
 
-def dps_for(path, metres, mps):
-    """Cruise joint speed that moves the tool `metres` at `mps`."""
-    return sum(max(abs(fold(x - y)) for x, y in zip(q, p)) for p, q in zip(path, path[1:])) / (metres / mps)
 
 
 def swing_tip(tipS, axS, rmax, u):
@@ -193,9 +123,10 @@ def swing(conn, a):
     # The swing turns about the BASE axis: it was built and validated for scoops ending on the base's
     # -Y side (y -0.04 .. -0.10). From a bowl in front of the user (+Y) the same turn would sweep the
     # utensil through where the user's face is. Refuse anything outside the validated region.
-    if not -0.15 < p[1] < 0.0:
-        raise MoveError("scoop ended at y %+.3f, outside the region the swing was validated for (-0.15..0.0): "
-                        "from here the swing could sweep into the user -- not moving" % p[1])
+    y_lo, y_hi = cfg.bowl.swing_start_y_range_m
+    if not y_lo < p[1] < y_hi:
+        raise MoveError("scoop ended at y %+.3f, outside the region the swing was validated for (%.2f..%.2f): "
+                        "from here the swing could sweep into the user -- not moving" % (p[1], y_lo, y_hi))
     z0 = p[2]; up = (p[0], p[1], z0 + LIFT_M); T0 = np.array(p[:3])
     c = _cached(SWING_CACHE, q0)
     if c:
@@ -246,7 +177,7 @@ def _swing_go(conn, a, path, rmax, q80, up, p, z0):
 
 def _mouth(f, allow_nose=False):
     """Mouth in camera coordinates: the plausible mouth box, else (allowed) the nose estimate."""
-    c = cal()[1]
+    c = dict(cx=CXC, cy=CYC, fx=FXC, fy=FYC)
     n = f.get("nose")
     if not n:
         raise MoveError("no nose detected")
@@ -295,7 +226,7 @@ def approach(conn, a):
     mouth = T0 + R @ (CAM_IN_TOOL + np.array([-cam[0], -cam[1], cam[2]]))
     stop = STOP_M
     if f.get("mouth", {}).get("depth_filled"):
-        stop += 0.040                              # the fallback's local error can reach ~60 mm: stand further off
+        stop += float(DL.stop_extra_if_depth_filled_m)   # the fallback's local error can reach ~60 mm: stand off
         print("    the mouth's depth is the Depth Anything 3 fallback: stopping %.0f mm short instead of %.0f" % (1000 * stop, 1000 * STOP_M))
     goal_tip = mouth - stop * ax + np.array([0, 0, AIM_DZ])
     Tg = goal_tip - R @ tip_in_tool(); L = np.linalg.norm(Tg - T0)
@@ -408,7 +339,7 @@ def retract(conn, a):
         q2 = joints(conn) if go else path2[-1]
     # 3. down to the scoop end + 80 mm in the scoop's own arm shape, then the proven joint move
     Ta = TS; Td = np.array([TS[0], TS[1], st["scoop_end_z"] + 0.080])
-    qd = cal()[0]["joints_deg"]
+    qd = cfg.overlook_pose()["joints_deg"]
     if rc and not resumed:
         path3, lo = [q2] + rc["path3"][1:], rc["lo"]
     else:
@@ -442,8 +373,8 @@ def main() -> int:
     ap.add_argument("--face", help="approach: detect_mouth.py output, made at the current pose")
     ap.add_argument("--colour", help="approach: the capture that detection was made from")
     ap.add_argument("--allow-nose", action="store_true", help="approach: estimate the mouth from the nose")
-    ap.add_argument("--step", type=float, default=0.05, help="sidestep: metres")
-    ap.add_argument("--timeout", type=float, default=60.0, help="bite: seconds")
+    ap.add_argument("--step", type=float, default=float(DL.sidestep_m), help="sidestep: metres")
+    ap.add_argument("--timeout", type=float, default=float(DL.bite_timeout_s), help="bite: seconds")
     a = ap.parse_args()
     with kinova_connection() as conn:
         try:

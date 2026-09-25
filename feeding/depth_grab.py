@@ -13,12 +13,15 @@ import urllib.request
 
 import numpy as np
 
+from settings import cfg
+
 
 def main() -> int:
-    ap = argparse.ArgumentParser(); ap.add_argument("out"); ap.add_argument("--frames", type=int, default=15)
+    ap = argparse.ArgumentParser(); ap.add_argument("out")
+    ap.add_argument("--frames", type=int, default=int(cfg.perception.depth_frames))
     a = ap.parse_args(); t0 = time.time()
     try:
-        with urllib.request.urlopen("http://127.0.0.1:8767/median?frames=%d" % a.frames, timeout=15) as r:
+        with urllib.request.urlopen("http://127.0.0.1:%d/median?frames=%d" % (int(cfg.deployment.servers.depth_port), a.frames), timeout=15) as r:
             d = np.load(io.BytesIO(r.read()))
     except Exception as e:  # noqa: BLE001
         print("depth server: %s" % e, file=sys.stderr)

@@ -12,21 +12,27 @@
 # measured in exactly that orientation and is wrong in any other.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-OUT="${1:-$HOME/rammp_runs/$(date +%Y%m%d_%H%M%S)}"
-ARM_IP="${ARM_IP:-192.168.2.67}"
-PY="$HOME/venvs/la/bin/python"
+S() { python3 -m settings get "$1"; }     # a value from config/ (settings.py)
+RUNS="$(S deployment.runs_dir)"
+OUT="${1:-$RUNS/$(date +%Y%m%d_%H%M%S)}"
+ARM_IP="${ARM_IP:-$(S deployment.arm.ip)}"
+PY="$(S deployment.venvs.detector)/bin/python"
+MPY="$(S deployment.venvs.face)/bin/python"
+DRIVER="$(S deployment.containers.driver)"; VISION="$(S deployment.containers.vision)"
+FRAMES="$(S perception.depth_frames)"
 mkdir -p "$OUT"
 
 echo "$(date +%T) [1/4] arm must be at food_detect_start"
-TOOL=$(docker exec -e PYTHONDONTWRITEBYTECODE=1 tcp_rec python3 -c "
+TOOL=$(docker exec -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/work -w /work "$DRIVER" python3 -c "
 import json, sys
+from settings import cfg
 from kinova.connection import kinova_connection
 from kinova.scripts.safe_move import joints, tool_pose, fold
-want = json.load(open('/work/calibration/food_detect_pose.json'))['joints_deg']
+want = cfg.overlook_pose()['joints_deg']
 with kinova_connection() as c:
     q = joints(c); p = tool_pose(c)
 off = max(abs(fold(a - b)) for a, b in zip(q, want))
-if off > 1.0:
+if off > cfg.motion.near_pose_deg:
     sys.exit('not at food_detect_start (%.1f deg away) -- run: make detect' % off)
 print('%.4f %.4f %.4f' % tuple(p[:3]))
 " 2>/dev/null)
@@ -34,26 +40,27 @@ echo "      tool at $TOOL"
 
 echo "$(date +%T) [2/4] capture colour + depth"
 # one frame in ~1 s (was: record the stream until a 22 s timeout, keep the last frame)
-if ! PYTHONPATH=. "$HOME/venvs/mp/bin/python" -m feeding.grab_frame "$OUT/colour.jpg" 2>/dev/null; then
+if ! PYTHONPATH=. "$MPY" -m feeding.grab_frame "$OUT/colour.jpg" 2>/dev/null; then
   rm -f /tmp/s1_*.jpg     # fallback: the old way
-  timeout 22 gst-launch-1.0 rtspsrc location=rtsp://$ARM_IP/color protocols=tcp latency=200 \
+  timeout 22 gst-launch-1.0 rtspsrc location="$(S camera.streams.colour_rtsp)" protocols=tcp latency=200 \
     ! rtph264depay ! h264parse ! openh264dec ! videoconvert ! jpegenc \
     ! multifilesink location=/tmp/s1_%03d.jpg >/dev/null 2>&1 || true
   cp "$(ls /tmp/s1_*.jpg | tail -1)" "$OUT/colour.jpg"; rm -f /tmp/s1_*.jpg
 fi
 # the resident depth server (make models): fresh frames in ~0.5 s; else start a probe (~5 s)
-if ! PYTHONPATH=. "$PY" -m feeding.depth_grab "$OUT/depth.npy" | sed 's/^/      /'; then
-  docker cp feeding/depth_probe.py kinova_vision:/tmp/depth_probe.py >/dev/null
-  docker exec kinova_vision bash -lc "source /opt/ros/humble/setup.bash; \
-    source /ros2_ws/install/setup.bash; cd /tmp && python3 depth_probe.py --out /tmp/s1_depth --frames 15" \
+if ! PYTHONPATH=. "$PY" -m feeding.depth_grab "$OUT/depth.npy" --frames "$FRAMES" | sed 's/^/      /'; then
+  docker cp feeding/depth_probe.py "$VISION":/tmp/depth_probe.py >/dev/null
+  docker exec "$VISION" bash -lc "source /opt/ros/humble/setup.bash; \
+    source /ros2_ws/install/setup.bash; cd /tmp && python3 depth_probe.py --out /tmp/s1_depth --frames $FRAMES" \
     | grep -E "valid|p50" | sed 's/^/      /'
-  docker cp kinova_vision:/tmp/s1_depth.npy "$OUT/depth.npy" >/dev/null 2>&1 || echo "      (no depth frame from the sensor)"
+  docker cp "$VISION":/tmp/s1_depth.npy "$OUT/depth.npy" >/dev/null 2>&1 || echo "      (no depth frame from the sensor)"
 fi
 # fallback: fill sensor holes (or a missing depth frame) from the resident Depth Anything 3
 PYTHONPATH=.:$HOME/da3src/src "$PY" -m feeding.depth_fill "$OUT" 2>/dev/null | sed 's/^/      /' || true
 
 echo "$(date +%T) [3/4] detect"
-PYTHONPATH=. "$PY" -m feeding.perceive --image "$OUT/colour.jpg" --out "$OUT/detection" --bowl-cache "$HOME/rammp_runs/session_bowl.json" 2>/dev/null \
+BOWL_CACHE=(); [ -n "$(S features.bowl_once_per_session)" ] && BOWL_CACHE=(--bowl-cache "$RUNS/session_bowl.json")
+PYTHONPATH=. "$PY" -m feeding.perceive --image "$OUT/colour.jpg" --out "$OUT/detection" "${BOWL_CACHE[@]}" 2>/dev/null \
   | grep -E "^  [a-z]|^     [0-9]"
 
 DA3_ARG=()

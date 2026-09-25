@@ -27,16 +27,16 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw
 
-from feeding.measure_under import CXD, CYD, FXD, FYD, T_D2C
+from settings import cfg
+from feeding.camera import COLOUR_RTSP, CXC, CXD, CYC, CYD, FXC, FXD, FYC, FYD, T_D2C, corrected
 
-CAL = Path(__file__).resolve().parent.parent / "calibration"
-MODEL = Path.home() / "models" / "face_landmarker.task"
-RTSP = "rtsp://192.168.2.67/color"
+MODEL = cfg.path("deployment.models.face_landmarker")
+RTSP = COLOUR_RTSP
 NOSE = [1, 2, 4, 5, 6, 19, 94, 98, 168, 195, 197, 327]
 LIPS = [0, 13, 14, 17, 37, 61, 78, 84, 267, 291, 308, 314]
 FACE_PTS = list(range(0, 468, 6))
-OPEN_RATIO = 0.20              # mouth_open above this counts as open (closed <= 0.02 measured)
-OPEN_HOLD_S = 0.30
+OPEN_RATIO = float(cfg.delivery.open_mouth_ratio)      # closed reads <= 0.02 on every saved frame
+OPEN_HOLD_S = float(cfg.delivery.open_mouth_hold_s)
 NO_FACE = 5
 
 
@@ -99,11 +99,10 @@ def _wait(det, cap, D, timeout):
 
 
 def detect(D: Path, det=None) -> int:
-    c = json.loads((CAL / "colour_intrinsics.json").read_text())
-    cx, cy, fx, fy = c["cx"], c["cy"], c["fx"], c["fy"]
+    cx, cy, fx, fy = CXC, CYC, FXC, FYC
     img = Image.open(D / "colour.jpg").convert("RGB"); H = img.size[1]
     up = img.transpose(Image.ROTATE_270)
-    dep = np.load(D / "depth.npy").astype(float); yy, xx = np.mgrid[0:dep.shape[0], 0:dep.shape[1]]
+    dep = corrected(np.load(D / "depth.npy")); yy, xx = np.mgrid[0:dep.shape[0], 0:dep.shape[1]]
     mp_ = D / "depth_filled_mask.npy"
     filled = np.load(mp_) if mp_.exists() else np.zeros(dep.shape, bool)
     sensor_dep = np.where(filled, 0.0, dep)                  # prefer what the sensor itself measured
@@ -197,7 +196,7 @@ def main() -> int:
     return detect(D)
 
 
-FACE_PORT = 8766
+FACE_PORT = int(cfg.deployment.servers.face_port)
 
 
 def _via_server(D: Path, wait: float):

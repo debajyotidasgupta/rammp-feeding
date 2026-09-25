@@ -9,11 +9,12 @@
 # Every stage keeps its own checks; this only chains them without waiting between them.
 set -uo pipefail
 cd "$(dirname "$0")/.."
+S() { python3 -m settings get "$1"; }     # a value from config/ (settings.py)
 BITES="${BITES:-99}"
 home() { echo; echo "== back to feeding_start"; make -s start; }
 # every model loaded and warm BEFORE the first bite, and kept loaded throughout
-make -s models || { echo "models not up -- not starting"; exit 1; }
-rm -f "$HOME/rammp_runs/session_bowl.json"      # a new session: detect the bowl once, on the first bite
+if [ -n "$(S features.resident_models)" ]; then make -s models || { echo "models not up -- not starting"; exit 1; }; fi
+rm -f "$(S deployment.runs_dir)/session_bowl.json"      # a new session: detect the bowl once, on the first bite
 if [ -z "${FROM_DETECT:-}" ]; then make -s detect || { echo "could not reach food_detect_start"; exit 1; }; fi
 n=0
 while [ "$n" -lt "$BITES" ]; do
@@ -22,7 +23,7 @@ while [ "$n" -lt "$BITES" ]; do
   [ $rc = 3 ] && { echo "the bowl is empty"; home; exit 0; }
   [ $rc != 0 ] && { echo "perceive failed (exit $rc) -- stopping at food_detect_start"; exit 1; }
   STOP_AFTER= START_AT=over feeding/acquire.sh || { echo "acquire stopped -- arm left where it stopped; check it"; exit 1; }
-  STOP_AFTER= START_AT=swing WAIT_OPEN=1 feeding/deliver.sh; rc=$?
+  STOP_AFTER= START_AT=swing feeding/deliver.sh; rc=$?          # WAIT_OPEN: from config/ unless set
   [ $rc = 7 ] && { echo "no open mouth: the user declined -- stopping"; home; exit 0; }
   [ $rc != 0 ] && { echo "deliver stopped (exit $rc) -- arm left where it stopped; check it"; exit 1; }
   n=$((n + 1)); echo "== bite $n done in $(( $(date +%s) - t0 )) s"

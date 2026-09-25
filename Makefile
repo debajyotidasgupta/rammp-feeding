@@ -16,7 +16,18 @@
 #   make capture   re-measure feeding_start from the parked arm (rarely: see README)
 #   make sdk / images / depth   build and run the containers
 SHELL      := /bin/bash
-ARM_IP     ?= 192.168.2.67
+# deployment values come from config/ (settings.py); ARM_IP=... on the command line still wins
+SET        := python3 -m settings get
+ARM_IP     ?= $(shell $(SET) deployment.arm.ip)
+DRIVER     := $(shell $(SET) deployment.containers.driver)
+VISION     := $(shell $(SET) deployment.containers.vision)
+DETECT_PY  := $(shell $(SET) deployment.venvs.detector)/bin/python
+FACE_PY    := $(shell $(SET) deployment.venvs.face)/bin/python
+RUNS       := $(shell $(SET) deployment.runs_dir)
+DET_PORT   := $(shell $(SET) deployment.servers.detector_port)
+FACE_PORT  := $(shell $(SET) deployment.servers.face_port)
+DEPTH_PORT := $(shell $(SET) deployment.servers.depth_port)
+DEPTH_TOPIC:= $(shell $(SET) camera.streams.depth_topic)
 # RTSP transport for the depth stream. The session drops periodically either way
 # (an upstream timeout, not a network fault -- the link measures 0% loss), but
 # measured over ~250s: udp drops every ~62s with a fixed 6s recovery; tcp drops
@@ -33,7 +44,7 @@ SDK        := $(HOME)/kortex_api_2.8.0_$(ARCHTAG)
 # PYTHONDONTWRITEBYTECODE because the container runs as root: without it every
 # invocation leaves root-owned __pycache__ in the synced tree, which then blocks
 # sync.sh --delete and needs sudo to clear.
-INARM      := docker exec -e PYTHONDONTWRITEBYTECODE=1 tcp_rec python3 -u -m
+INARM      := docker exec -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/work -w /work $(DRIVER) python3 -u -m
 
 .PHONY: sdk kortex vision images depth clean-depth status state start detect perceive over acquire deliver retract feed detector models models-stop capture
 
@@ -61,24 +72,24 @@ perceive:
 # server, 8.5 GB) and the MediaPipe face landmarker (CPU, its own venv). Each runs a warm-up inference before
 # it answers; this returns once both do. make feed runs it first.
 models:
-	@if curl -s -m 2 http://127.0.0.1:8765/ping | grep -q ok; then echo "detector + depth server already up"; \
-	else PYTHONPATH=.:$$HOME/da3src/src nohup $$HOME/venvs/la/bin/python -m feeding.detector_server > $$HOME/rammp_runs/detector.log 2>&1 & \
-	  echo "starting detector + depth server (log: ~/rammp_runs/detector.log)"; fi
-	@if curl -s -m 2 http://127.0.0.1:8766/ping | grep -q ok; then echo "face server already up"; \
-	else PYTHONPATH=. nohup $$HOME/venvs/mp/bin/python -m feeding.detect_mouth_mp --serve > $$HOME/rammp_runs/face_server.log 2>&1 & \
-	  echo "starting face server (log: ~/rammp_runs/face_server.log)"; fi
-	@if curl -s -m 2 http://127.0.0.1:8767/ping | grep -q ok; then echo "depth server already up"; \
-	else docker cp feeding/depth_server.py kinova_vision:/tmp/depth_server.py >/dev/null && \
-	  docker exec -d kinova_vision bash -lc "source /opt/ros/humble/setup.bash; source /ros2_ws/install/setup.bash; cd /tmp && python3 depth_server.py > /tmp/depth_server.log 2>&1" && \
-	  echo "starting depth server (in kinova_vision)"; fi
-	@for i in $$(seq 1 120); do curl -s -m 2 http://127.0.0.1:8765/ping | grep -q ok && curl -s -m 2 http://127.0.0.1:8766/ping | grep -q ok && curl -s -m 2 http://127.0.0.1:8767/ping | grep -q ok && { echo "all models loaded and warm, depth streaming ($${i} s)"; exit 0; }; sleep 1; done; echo "models did not come up -- see ~/rammp_runs/*.log"; exit 1
+	@if curl -s -m 2 http://127.0.0.1:$(DET_PORT)/ping | grep -q ok; then echo "detector + depth server already up"; \
+	else PYTHONPATH=.:$$HOME/da3src/src nohup $(DETECT_PY) -m feeding.detector_server > $(RUNS)/detector.log 2>&1 & \
+	  echo "starting detector + depth server (log: $(RUNS)/detector.log)"; fi
+	@if curl -s -m 2 http://127.0.0.1:$(FACE_PORT)/ping | grep -q ok; then echo "face server already up"; \
+	else PYTHONPATH=. nohup $(FACE_PY) -m feeding.detect_mouth_mp --serve > $(RUNS)/face_server.log 2>&1 & \
+	  echo "starting face server (log: $(RUNS)/face_server.log)"; fi
+	@if curl -s -m 2 http://127.0.0.1:$(DEPTH_PORT)/ping | grep -q ok; then echo "depth server already up"; \
+	else docker cp feeding/depth_server.py $(VISION):/tmp/depth_server.py >/dev/null && \
+	  docker exec -d $(VISION) bash -lc "source /opt/ros/humble/setup.bash; source /ros2_ws/install/setup.bash; cd /tmp && python3 depth_server.py --port $(DEPTH_PORT) --topic $(DEPTH_TOPIC) > /tmp/depth_server.log 2>&1" && \
+	  echo "starting depth server (in $(VISION))"; fi
+	@for i in $$(seq 1 120); do curl -s -m 2 http://127.0.0.1:$(DET_PORT)/ping | grep -q ok && curl -s -m 2 http://127.0.0.1:$(FACE_PORT)/ping | grep -q ok && curl -s -m 2 http://127.0.0.1:$(DEPTH_PORT)/ping | grep -q ok && { echo "all models loaded and warm, depth streaming ($${i} s)"; exit 0; }; sleep 1; done; echo "models did not come up -- see $(RUNS)/*.log"; exit 1
 
 detector: models
 
 models-stop:
 	@pkill -f "[f]eeding.detector_server" && echo "detector + depth server stopped" || true
 	@pkill -f "[d]etect_mouth_mp --serve" && echo "face server stopped" || true
-	@docker exec kinova_vision pkill -f "[d]epth_server.py" && echo "depth server stopped" || true
+	@docker exec $(VISION) pkill -f "[d]epth_server.py" && echo "depth server stopped" || true
 
 # Acquisition, one verified step at a time. Uses the latest make perceive run.
 over:
@@ -94,7 +105,7 @@ acquire:
 # Food delivery, from the end of the scoop: lift and swing to the user (retracting the utensil as it
 # turns), present 80 mm short of the mouth, wait for the bite (1 N), retract to food_detect_start.
 deliver:
-	@STOP_AFTER=$(STOP_AFTER) START_AT=$(or $(START_AT),swing) VALIDATE=$(VALIDATE) WAIT_OPEN=$(if $(filter undefined,$(origin WAIT_OPEN)),1,$(WAIT_OPEN)) feeding/deliver.sh
+	@STOP_AFTER=$(STOP_AFTER) START_AT=$(or $(START_AT),swing) VALIDATE=$(VALIDATE) $(if $(filter undefined,$(origin WAIT_OPEN)),,WAIT_OPEN=$(WAIT_OPEN)) feeding/deliver.sh
 
 retract:
 	@START_AT=retract feeding/deliver.sh

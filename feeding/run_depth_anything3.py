@@ -35,9 +35,10 @@ import time
 import numpy as np
 from PIL import Image
 
-MODEL = "depth-anything/DA3METRIC-LARGE"
-FX_COLOUR = 1297.673      # device-reported, 1280x720 profile
-FY_COLOUR = 1298.631
+from settings import cfg
+from feeding.camera import FXC as FX_COLOUR, FYC as FY_COLOUR
+
+MODEL = cfg.deployment.models.depth_anything
 
 
 def main() -> int:

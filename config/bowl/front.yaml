@@ -1,0 +1,9 @@
+# The bowl in front of the user (2026-09-24). A different bowl or place: copy this file, capture its overlook
+# pose (make capture) and its scoop end, and select it in rammp.yaml (profiles.bowl).
+
+name: front
+overlook_pose: calibration/food_detect_pose.json   # food_detect_start: joints + tool pose (written by the capture tool)
+scoop_end:                      # where the scoop carries the food to -- the pose delivery's swing was built from
+  tool_m: [0.2997, -0.0968, 0.4038]
+  joints_deg: [-102.4, -42.0, -37.2, -97.5, -41.1, -111.2, 131.8]
+swing_start_y_range_m: [-0.15, 0.0]   # the swing refuses scoop ends outside this (it was validated there)

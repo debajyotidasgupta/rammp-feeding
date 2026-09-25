@@ -26,10 +26,10 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from feeding.measure_under import CXD, CYD, FXD, FYD, T_D2C
+from settings import cfg
+from feeding.camera import CXC, CXD, CYC, CYD, DEPTH_SHAPE, FXC, FXD, FYC, FYD, T_D2C
 
-CAL = Path(__file__).resolve().parent.parent / "calibration"
-SHAPE = (270, 480)               # the depth sensor's frame
+SHAPE = DEPTH_SHAPE              # the depth sensor's frame
 MIN_FIT_PX = 500
 
 
@@ -41,6 +41,8 @@ def main() -> int:
     a = ap.parse_args()
     D_dir = Path(a.run_dir); cpath = D_dir / a.colour; dpath = D_dir / a.depth
     stem = dpath.stem
+    if not cfg.features.depth_fallback:
+        print("depth: fallback switched off (features.depth_fallback) -- sensor only"); return 0
     D = np.load(dpath).astype(np.float64) if dpath.exists() else np.zeros(SHAPE)
     D[~np.isfinite(D)] = 0
     holes = D <= 0
@@ -56,8 +58,7 @@ def main() -> int:
         print("depth: %.0f%% no return, NOT filled -- the models server is not up (make models)" % (100 * holes.mean()))
         return 0
     A = np.load(tmp).astype(np.float64)                     # colour-frame z, metres
-    c = json.loads((CAL / "colour_intrinsics.json").read_text())
-    cx, cy, fx, fy = c["cx"], c["cy"], c["fx"], c["fy"]
+    cx, cy, fx, fy = CXC, CYC, FXC, FYC
     Hc, Wc = A.shape
     vd, ud = np.mgrid[0:SHAPE[0], 0:SHAPE[1]].astype(np.float64)
     zd = np.full(SHAPE, float(np.median(A)) - T_D2C[2])     # depth-frame z, iterated to consistency

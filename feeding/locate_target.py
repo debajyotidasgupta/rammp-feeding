@@ -46,10 +46,9 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw
 
-FXD = FYD = 334.810; CXD = 238.536; CYD = 139.694          # depth, device
-FXC, FYC = 1297.673, 1298.631                              # colour, device
-T_D2C = np.array([-0.02706, -0.00997, -0.00471])            # factory extrinsic
-FACTORY_PP = (620.914, 238.280)                             # colour, device-reported
+from settings import cfg
+from feeding.camera import CXD, CYD, FXC, FXD, FYC, FYD, T_D2C, VP, corrected
+FACTORY_PP = (620.914, 238.280)                             # colour, device-reported (for the registration report)
 MIN_FOOD_MM, MAX_FOOD_MM = 12.0, 60.0                       # food height above the floor
 
 
@@ -77,17 +76,14 @@ def main() -> int:
                          "scored against physical checks it overstated berry relief 2-3x "
                          "raw and flattened it to 9-14 mm fused; the sensor got 31-32 mm")
     ap.add_argument("--image", default=None)
-    ap.add_argument("--intrinsics", default=str(Path(__file__).resolve().parent.parent
-                                                / "calibration" / "colour_intrinsics.json"))
     ap.add_argument("--tool", type=float, nargs=3, required=True, help="current tool xyz, m")
-    ap.add_argument("--z-tip", type=float, default=0.265,
-                    help="camera -> utensil tip along the axis, m. KNIFE 260 mm, ruler-closed "
-                         "the fork; NOT yet measured for the spoon")
+    ap.add_argument("--z-tip", type=float, default=float(cfg.utensil.camera_to_tip_m),
+                    help="camera -> utensil tip along the axis, m (default: the utensil profile)")
     ap.add_argument("--out", default="target")
     a = ap.parse_args()
 
     det = json.loads(open(a.det).read())
-    D = np.load(a.depth).astype(np.float64)
+    D = corrected(np.load(a.depth))
     A = np.load(a.da3).astype(np.float64) if a.da3 else None
 
     # 1+2. DEPTH PER DETECTION, and a registration check that falls out of it.
@@ -102,8 +98,7 @@ def main() -> int:
     #   floor  = far end of a ~45 mm window around it (the bowl just beside it)
     # The offset between where that nearest surface actually is and where the
     # mapping predicted it is the per-run registration residual.
-    cal = json.loads(open(a.intrinsics).read())
-    cx, cy = cal["cx"], cal["cy"]
+    cx, cy = float(cfg.camera.colour.cx), float(cfg.camera.colour.cy)
     H, W = D.shape
     col = list(det["food"])
     areas = [(f["x2"] - f["x1"]) * (f["y2"] - f["y1"]) for f in col]
@@ -200,8 +195,8 @@ def main() -> int:
     pick = min(visible or rows, key=lambda r: r[6])   # most central visible: most rim clearance
     i, f, zb, _, _, _, _ = pick
     # The tip's vertical line projects through the image of TRUE VERTICAL, not
-    # through the optical centre -- measured, see colour_intrinsics.json.
-    pp = np.array(cal.get("vertical_vp", [cx, cy]))
+    # through the optical centre -- measured, see config/camera/<name>.yaml (colour.vertical_vp).
+    pp = VP
     p_star = pp + (p_tip - pp) * (a.z_tip / zb)
     du, dv = p_star[0] - f["cx"], p_star[1] - f["cy"]
     dX, dY = dv * zb / FYC, du * zb / FXC

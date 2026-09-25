@@ -69,6 +69,13 @@ Why each piece is the way it is:
   calibration only: Kinova's camera position on the wrist + camera-to-tip + the tip's
   pixel. For the fork, (0, 9, 142) mm.
 
+## The demo (2026-09-24, recorded)
+
+`make feed` from feeding_start, bowl in front of the user: **3 bites, 126–130 s each, no stops, no retries**;
+the loop saw the bowl empty and went home. Per bite: perceive ~12 s (resident detector), plunge + scoop
+flowing together, one-trajectory swing, open-mouth wait, approach to 80 mm, bite at 1.0–1.7 s (2.5–3.2 N),
+fast retract.
+
 ## Delivery (`make deliver` -> `feeding/deliver.sh` -> `kinova/scripts/deliver.py`, `feeding/detect_mouth.py`)
 
 Built 2026-09-24, leg by leg, with the user at the arm; ran end to end once (swing, present, one bite, retract)

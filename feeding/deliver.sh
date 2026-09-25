@@ -37,7 +37,9 @@ capture_depth() {    # $1 = run dir: 20-frame median depth
   docker cp feeding/depth_probe.py kinova_vision:/tmp/depth_probe.py >/dev/null
   docker exec kinova_vision bash -lc "source /opt/ros/humble/setup.bash; source /ros2_ws/install/setup.bash; \
     cd /tmp && python3 depth_probe.py --out /tmp/dl_depth --frames 15" >/dev/null 2>&1
-  docker cp kinova_vision:/tmp/dl_depth.npy "$1/depth.npy" >/dev/null
+  docker cp kinova_vision:/tmp/dl_depth.npy "$1/depth.npy" >/dev/null 2>&1 || true
+  # fallback: fill sensor holes (the food hiding the face from the depth camera) from Depth Anything 3
+  PYTHONPATH=.:$HOME/da3src/src "$PY" -m feeding.depth_fill "$1" 2>/dev/null | sed 's/^/    /' || true
 }
 detect_face() {      # $1 = run dir: MediaPipe, else LocateAnything
   set +e; PYTHONPATH=. "$MPY" -m feeding.detect_mouth_mp "$1" 2>/dev/null | grep -E "^(nose|mouth|mediapipe)" | sed 's/^/    /'

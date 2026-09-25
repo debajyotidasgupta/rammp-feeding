@@ -293,11 +293,15 @@ def approach(conn, a):
     if abs(ax[2]) > 0.1:
         raise MoveError("utensil is not level -- run the swing first")
     mouth = T0 + R @ (CAM_IN_TOOL + np.array([-cam[0], -cam[1], cam[2]]))
-    goal_tip = mouth - STOP_M * ax + np.array([0, 0, AIM_DZ])
+    stop = STOP_M
+    if f.get("mouth", {}).get("depth_filled"):
+        stop += 0.040                              # the fallback's local error can reach ~60 mm: stand further off
+        print("    the mouth's depth is the Depth Anything 3 fallback: stopping %.0f mm short instead of %.0f" % (1000 * stop, 1000 * STOP_M))
+    goal_tip = mouth - stop * ax + np.array([0, 0, AIM_DZ])
     Tg = goal_tip - R @ tip_in_tool(); L = np.linalg.norm(Tg - T0)
     print("    mouth (%.3f %.3f %.3f) from the %s" % (*mouth, source))
     print("    stop: utensil tip (%.3f %.3f %.3f), %.0f mm short and %.0f mm below; %.0f mm to go"
-          % (*goal_tip, 1000 * STOP_M, -1000 * AIM_DZ, 1000 * L))
+          % (*goal_tip, 1000 * stop, -1000 * AIM_DZ, 1000 * L))
     if L > MAX_APPROACH_M:
         raise MoveError("an approach of %.0f mm is too long -- not moving" % (1000 * L))
     if L < 0.003:

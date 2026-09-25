@@ -190,6 +190,29 @@ image→motion mapping was measured in exactly that orientation.
    `p* = pp + (p_tip − pp)·Z_tip/Z_berry`, and the tool translates until the
    berry sits there. No hand–eye calibration needed.
 
+### Depth fallback: Depth Anything 3 fills what the sensor misses
+
+`feeding/depth_fill.py` runs after every depth capture (perceive, the plunge's floor reading, the face). Sensor
+pixels are kept as measured; holes -- or a whole missing frame (an RGB-only camera) -- are filled from DA3,
+projected into the sensor's frame, fitted to the sensor (global scale/offset, then the fit's own error around
+each hole spread into it), with `depth_filled_mask.npy` marking what was filled.
+
+Measured on 4 saved frames with two 40x40 px holes cut out and compared with the sensor's own values: median
+error -0.6 to -1.9 mm, but 90% within 23-29 mm and up to ~60 mm -- the LEVEL is right, the local SHAPE is not.
+So: fine for finding and ranking food; the plunge REFUSES if more than half its floor reading is filled, or if
+the depth is raw DA3 (no sensor at all: ~300 mm off); the approach stands 40 mm further off (120 mm) if the
+mouth's depth is filled.
+
+**Models stay resident** (`make models`, run by `make feed` first; `make models-stop`): LocateAnything-3B and
+Depth Anything 3 in one GPU server (8.5 GB of 61 GB), the MediaPipe face landmarker in its own; each runs a
+warm-up inference before it answers -- all up and warm in ~21 s.
+
+| model | size | resident memory | warm inference |
+|---|---|---|---|
+| LocateAnything-3B | 7.2 GB | ~7.2 GB | berries 4.5-6 s, bowl 1.8 s |
+| Depth Anything 3 (DA3METRIC-LARGE) | 0.33 B params, 1.3 GB | 1.25 GB | ~0.1 s |
+| MediaPipe face landmarker | 3.7 MB | CPU | ~25 ms |
+
 ### Which depth source
 
 Scored against checks independent of all of them (a flat table; a strawberry is
@@ -239,8 +262,7 @@ measured: commanding −90.000000 lands at −89.998138 every time. If you ever
 - **No self-collision model.** Torque is the only contact detector.
 - **Disk is at 93%** on the jetson (3.8 GB free, 2026-09-24, after removing the Depth Anything V2 weights and
   the pip/apt caches). The rest is the OS/JetPack (~9 GB), LocateAnything-3B (7.2 GB), `~/venvs/la` (5.7 GB)
-  and the Docker images (3.3 GB), all in use. Depth Anything 3 (1.3 GB) serves only the optional
-  `STAGE1_DA3=1` cross-check -- the next thing to delete if space runs short.
+  and the Docker images (3.3 GB), all in use. Depth Anything 3 (1.3 GB) is the depth fallback (see Depth fallback) -- keep it.
 - The tool frame is the **configured** one (120 mm, 0.831 kg), not the flange.
 - The user-facing camera can **abort** motion but never drive it: ~100 mm error,
   and on the armrest its extrinsic to the arm isn't fixed.

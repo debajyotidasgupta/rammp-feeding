@@ -16,6 +16,7 @@ cd "$(dirname "$0")/.."
 RUN="${RUN:-$(ls -d "$HOME"/rammp_runs/2*/ | tail -1)}"
 [ -f "$RUN/target.json" ] || { echo "the latest perceive run ($RUN) has no target -- $( [ -f "$RUN/no_food" ] && echo 'the bowl is empty' || echo 'run make perceive')"; exit 3; }
 PY="$HOME/venvs/la/bin/python"
+MPY="$HOME/venvs/mp/bin/python"
 STOP_AFTER="${STOP_AFTER:-}"
 START_AT="${START_AT:-over}"
 ARM="docker exec -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/work -w /work tcp_rec python3 -u -m kinova.scripts.acquire"
@@ -24,8 +25,14 @@ measure() {   # $1 = label; depth from the vision container, analysed on the hos
   docker cp feeding/depth_probe.py kinova_vision:/tmp/depth_probe.py >/dev/null
   docker exec kinova_vision bash -lc "source /opt/ros/humble/setup.bash; source /ros2_ws/install/setup.bash; \
     cd /tmp && python3 depth_probe.py --out /tmp/acq_$1 --frames 15" >/dev/null 2>&1
-  docker cp kinova_vision:/tmp/acq_$1.npy "$RUN/acq_$1.npy" >/dev/null
-  PYTHONPATH=. "$PY" -m feeding.measure_under --depth "$RUN/acq_$1.npy" --out "$RUN/under_$1.json" --guess "${2:-0.30}"
+  docker cp kinova_vision:/tmp/acq_$1.npy "$RUN/acq_$1.npy" >/dev/null 2>&1 || true
+  if ! PYTHONPATH=. "$PY" -m feeding.measure_under --depth "$RUN/acq_$1.npy" --out "$RUN/under_$1.json" --guess "${2:-0.30}" 2>/tmp/mu_err; then
+    # no depth under the tip: fill from Depth Anything 3 (needs a colour frame from here) and measure again
+    echo "  $(cat /tmp/mu_err | tail -1) -- trying the Depth Anything 3 fallback"
+    PYTHONPATH=. "$MPY" -m feeding.grab_frame "$RUN/acq_$1_colour.jpg" >/dev/null 2>&1
+    PYTHONPATH=.:$HOME/da3src/src "$PY" -m feeding.depth_fill "$RUN" --colour "acq_$1_colour.jpg" --depth "acq_$1.npy" | sed 's/^/  /'
+    PYTHONPATH=. "$PY" -m feeding.measure_under --depth "$RUN/acq_$1.npy" --out "$RUN/under_$1.json" --guess "${2:-0.30}"
+  fi
   docker cp "$RUN/under_$1.json" tcp_rec:/tmp/under.json >/dev/null
 }
 STAGES="over hover30 hover10 punch plunge scoop"

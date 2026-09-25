@@ -35,7 +35,7 @@ SDK        := $(HOME)/kortex_api_2.8.0_$(ARCHTAG)
 # sync.sh --delete and needs sudo to clear.
 INARM      := docker exec -e PYTHONDONTWRITEBYTECODE=1 tcp_rec python3 -u -m
 
-.PHONY: sdk kortex vision images depth clean-depth status state start detect perceive over acquire deliver retract feed detector capture
+.PHONY: sdk kortex vision images depth clean-depth status state start detect perceive over acquire deliver retract feed detector models models-stop capture
 
 # --- the arm ----------------------------------------------------------------
 # Every motion goes through kinova/scripts/safe_move.py: utensil kept pointing
@@ -57,12 +57,23 @@ detect:
 perceive:
 	@feeding/stage1.sh
 
-# Keep the detection model loaded between bites (loading it costs 13.6 s). Runs in the background;
-# perceive uses it when it is up and loads the model itself when it is not.
-detector:
-	@if curl -s -m 2 http://127.0.0.1:8765/ping | grep -q ok; then echo "detector already running"; \
-	else PYTHONPATH=. nohup $$HOME/venvs/la/bin/python -m feeding.detector_server > $$HOME/rammp_runs/detector.log 2>&1 & \
-	  echo "detector starting (log: ~/rammp_runs/detector.log)"; fi
+# Keep every model loaded and warm for the whole session: LocateAnything + Depth Anything 3 (GPU, one
+# server, 8.5 GB) and the MediaPipe face landmarker (CPU, its own venv). Each runs a warm-up inference before
+# it answers; this returns once both do. make feed runs it first.
+models:
+	@if curl -s -m 2 http://127.0.0.1:8765/ping | grep -q ok; then echo "detector + depth server already up"; \
+	else PYTHONPATH=.:$$HOME/da3src/src nohup $$HOME/venvs/la/bin/python -m feeding.detector_server > $$HOME/rammp_runs/detector.log 2>&1 & \
+	  echo "starting detector + depth server (log: ~/rammp_runs/detector.log)"; fi
+	@if curl -s -m 2 http://127.0.0.1:8766/ping | grep -q ok; then echo "face server already up"; \
+	else PYTHONPATH=. nohup $$HOME/venvs/mp/bin/python -m feeding.detect_mouth_mp --serve > $$HOME/rammp_runs/face_server.log 2>&1 & \
+	  echo "starting face server (log: ~/rammp_runs/face_server.log)"; fi
+	@for i in $$(seq 1 120); do curl -s -m 2 http://127.0.0.1:8765/ping | grep -q ok && curl -s -m 2 http://127.0.0.1:8766/ping | grep -q ok && { echo "all models loaded and warm ($${i} s)"; exit 0; }; sleep 1; done; echo "models did not come up -- see ~/rammp_runs/*.log"; exit 1
+
+detector: models
+
+models-stop:
+	@pkill -f "[f]eeding.detector_server" && echo "detector + depth server stopped" || true
+	@pkill -f "[d]etect_mouth_mp --serve" && echo "face server stopped" || true
 
 # Acquisition, one verified step at a time. Uses the latest make perceive run.
 over:

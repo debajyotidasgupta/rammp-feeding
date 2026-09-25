@@ -11,9 +11,8 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 BITES="${BITES:-99}"
 home() { echo; echo "== back to feeding_start"; make -s start; }
-# the detection model stays loaded between bites (loading it costs 13.6 s a time)
-make -s detector
-for i in $(seq 1 60); do curl -s -m 2 http://127.0.0.1:8765/ping | grep -q ok && break; sleep 1; done
+# every model loaded and warm BEFORE the first bite, and kept loaded throughout
+make -s models || { echo "models not up -- not starting"; exit 1; }
 if [ -z "${FROM_DETECT:-}" ]; then make -s detect || { echo "could not reach food_detect_start"; exit 1; }; fi
 n=0
 while [ "$n" -lt "$BITES" ]; do

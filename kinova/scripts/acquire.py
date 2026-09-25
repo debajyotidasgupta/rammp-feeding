@@ -172,7 +172,16 @@ def plunge(conn, a):
     u = json.loads(Path(a.under).read_text())
     if "floor" not in u:
         raise MoveError("no floor reading under the tip -- cannot punch safely")
-    down = u["gap_floor"] - a.floor_m
+    floor_m = a.floor_m
+    if u.get("depth_source") == "da3-raw" and (u.get("filled_floor", 0) > 0 or u.get("filled_top", 0) > 0):
+        raise MoveError("the floor under the tip was measured on RAW Depth Anything 3 (no sensor depth to fit it to) "
+                        "-- not accurate enough to stop at the bowl floor; nothing moved")
+    if u.get("filled_floor", 0) > 0.5:
+        # the fallback gets the level right (median ~1 mm) but its local shape can be 25-60 mm off: never stop
+        # a plunge on it
+        raise MoveError("%.0f%% of the floor reading under the tip is the Depth Anything 3 fallback -- its local "
+                        "error (up to ~60 mm) is too large to stop at the bowl floor; nothing moved" % (100 * u["filled_floor"]))
+    down = u["gap_floor"] - floor_m
     if not 0.080 < down < 0.250:
         raise MoveError("plunge of %.0f mm is outside the sane range (80-250) -- re-measure" % (1000 * down))
     if not 0.010 < u["height"] < 0.060:
@@ -208,12 +217,12 @@ def plunge(conn, a):
     else:
         raise MoveError("controller refused the plunge -- nothing moved")
     print("    food %.1f mm tall: %.0f mm down to the floor + %.0f mm, slow from %.0f mm; %.1f s"
-          % (1000 * u["height"], 1000 * down, 1000 * a.floor_m, 1000 * slow_at, total))
+          % (1000 * u["height"], 1000 * down, 1000 * floor_m, 1000 * slow_at, total))
     scoop_plan = None
     if a.then_scoop:                                          # plan the scoop NOW, from where the plunge will end
         Te = np.array([T0[0], T0[1], T0[2] - down])
         scoop_plan = plan_scoop(conn, a, path[-1], Te, R_from_kortex(*p[3:]),
-                                dict(height=u["height"], floor_m=a.floor_m))
+                                dict(height=u["height"], floor_m=floor_m))
     print("    plunge%s planned in %.1f s" % (" + scoop" if scoop_plan else "", time.time() - t_plan))
     if a.validate_only:
         print("    validate-only: controller accepted it, nothing moved")
@@ -229,7 +238,7 @@ def plunge(conn, a):
         if any(e[0] == "ACTION_END" for e in ev):
             break
     print("    plunge done in %.1f s" % (time.time() - t0))
-    Path("/tmp/punch_done.json").write_text(json.dumps(dict(height=u["height"], floor_m=a.floor_m)))
+    Path("/tmp/punch_done.json").write_text(json.dumps(dict(height=u["height"], floor_m=floor_m)))
     if scoop_plan is not None:
         run_scoop(conn, a, scoop_plan)                        # no pause at the bottom: already planned
 

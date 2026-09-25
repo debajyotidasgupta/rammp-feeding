@@ -61,14 +61,17 @@ def opening(L) -> float:
     return float(np.linalg.norm(L[13] - L[14]) / max(1e-6, np.linalg.norm(L[61] - L[291])))
 
 
-def wait_open(D: Path, timeout: float) -> int:
+def wait_open(D: Path, timeout: float, det=None) -> int:
     """Watch the colour stream; save the first frame after the mouth has been open OPEN_HOLD_S."""
     import cv2
-    det = landmarker(); cap = cv2.VideoCapture(RTSP)
+    own = det is None
+    det = det or landmarker(); cap = cv2.VideoCapture(RTSP)
     try:
         return _wait(det, cap, D, timeout)
     finally:
-        det.close(); cap.release()
+        cap.release()
+        if own:
+            det.close()
 
 
 def _wait(det, cap, D, timeout):
@@ -95,17 +98,22 @@ def _wait(det, cap, D, timeout):
     return 4
 
 
-def detect(D: Path) -> int:
+def detect(D: Path, det=None) -> int:
     c = json.loads((CAL / "colour_intrinsics.json").read_text())
     cx, cy, fx, fy = c["cx"], c["cy"], c["fx"], c["fy"]
     img = Image.open(D / "colour.jpg").convert("RGB"); H = img.size[1]
     up = img.transpose(Image.ROTATE_270)
     dep = np.load(D / "depth.npy").astype(float); yy, xx = np.mgrid[0:dep.shape[0], 0:dep.shape[1]]
-    det = landmarker()
+    mp_ = D / "depth_filled_mask.npy"
+    filled = np.load(mp_) if mp_.exists() else np.zeros(dep.shape, bool)
+    sensor_dep = np.where(filled, 0.0, dep)                  # prefer what the sensor itself measured
+    own = det is None
+    det = det or landmarker()
     try:
         t0 = time.time(); L, jaw = landmarks(det, np.asarray(up)); dt = time.time() - t0
     finally:
-        det.close()
+        if own:
+            det.close()
     if L is None:
         print("mediapipe: no face (%.0f ms)" % (1000 * dt))
         return NO_FACE
@@ -113,7 +121,7 @@ def detect(D: Path) -> int:
     def to_orig(x, y):
         return y, H - 1 - x
 
-    def depth_at(u, v, z=0.55):
+    def depth_at(u, v, z=0.55, dep=dep):
         for _ in range(6):
             X = (u - cx) * z / fx - T_D2C[0]; Y = (v - cy) * z / fy - T_D2C[1]; Zd = z - T_D2C[2]
             ud, vd = FXD * X / Zd + CXD, FYD * Y / Zd + CYD
@@ -124,7 +132,13 @@ def detect(D: Path) -> int:
         return z
 
     def zs(idx):
-        return {i: depth_at(*to_orig(*L[i])) for i in idx}
+        """Sensor depth at each landmark; the filled (Depth Anything 3) value only where the sensor has none."""
+        out = {}
+        for i in idx:
+            z = depth_at(*to_orig(*L[i]), dep=sensor_dep)
+            out[i] = z if z is not None else depth_at(*to_orig(*L[i]))
+        return out
+    lip_sensor = sum(depth_at(*to_orig(*L[i]), dep=sensor_dep) is not None for i in LIPS)
 
     fz = [z for z in zs(FACE_PTS).values() if z]
     if len(fz) < 5:
@@ -151,7 +165,8 @@ def detect(D: Path) -> int:
     mouth_c = L[[13, 14]].mean(0)
     out = dict(face=entry(list(range(468)), L.mean(0), face_z, "mediapipe"),
                nose=entry(NOSE, L[1], nose_depth, "mediapipe"),
-               mouth=entry(LIPS, mouth_c, mouth_depth, "mediapipe, depth from %s" % how),
+               mouth=dict(entry(LIPS, mouth_c, mouth_depth, "mediapipe, depth from %s" % how),
+                          depth_filled=bool(filled.any() and lip_sensor < 3)),
                mouth_open=opening(L), jaw_open=jaw, detector="mediapipe", ms=1000 * dt)
     (D / "face.json").write_text(json.dumps(out, indent=1))
     d = ImageDraw.Draw(up)
@@ -170,11 +185,66 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("run_dir")
     ap.add_argument("--wait-open", type=float, default=0.0, help="seconds to watch for an open mouth first (0: don't)")
+    if sys.argv[1:] == ["--serve"]:
+        return serve()
     a = ap.parse_args()
     D = Path(a.run_dir)
+    rc = _via_server(D, a.wait_open)           # the resident landmarker (make models), if it is up
+    if rc is not None:
+        return rc
     if a.wait_open:
         return wait_open(D, a.wait_open)
     return detect(D)
+
+
+FACE_PORT = 8766
+
+
+def _via_server(D: Path, wait: float):
+    import urllib.request
+    try:
+        req = urllib.request.Request("http://127.0.0.1:%d/%s" % (FACE_PORT, "wait_open" if wait else "detect"),
+                                     method="POST", data=json.dumps(dict(run_dir=str(D), timeout=wait)).encode())
+        with urllib.request.urlopen(req, timeout=wait + 30) as r:
+            out = json.loads(r.read())
+    except OSError:
+        return None
+    sys.stdout.write(out.get("log", "")); sys.stdout.flush()
+    return out["rc"]
+
+
+def serve() -> int:
+    """Keep the face landmarker loaded (make models): /detect and /wait_open, as the CLI does."""
+    import contextlib, io
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    det = landmarker()
+    shots = sorted(Path.home().glob("rammp_runs/deliver_*/colour.jpg"))
+    if shots:                                  # warm-up
+        t = time.time(); landmarks(det, np.asarray(Image.open(shots[-1]).convert("RGB").transpose(Image.ROTATE_270)))
+        print("face landmarker warm-up %.0f ms" % (1000 * (time.time() - t)), flush=True)
+    print("serving on 127.0.0.1:%d" % FACE_PORT, flush=True)
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            self.send_response(200); self.end_headers(); self.wfile.write(b"ok")
+
+        def do_POST(self):
+            q = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                try:
+                    rc = wait_open(Path(q["run_dir"]), q["timeout"], det) if self.path == "/wait_open" \
+                        else detect(Path(q["run_dir"]), det)
+                except Exception as e:  # noqa: BLE001
+                    print("face server error: %s" % e); rc = 1
+            body = json.dumps(dict(rc=rc, log=buf.getvalue())).encode()
+            self.send_response(200); self.end_headers(); self.wfile.write(body)
+
+    HTTPServer(("127.0.0.1", FACE_PORT), H).serve_forever()
+    return 0
 
 
 if __name__ == "__main__":

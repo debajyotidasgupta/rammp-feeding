@@ -32,7 +32,7 @@ T_D2C = np.array([-0.02706, -0.00997, -0.00471])            # factory extrinsic
 FOOD_HALF_M = 0.017                                         # half a strawberry, for the floor ring
 
 
-def measure(depth_mm: np.ndarray, guess: float = 0.30) -> dict:
+def measure(depth_mm: np.ndarray, guess: float = 0.30, filled: np.ndarray | None = None) -> dict:
     cal = json.loads((CAL / "colour_intrinsics.json").read_text())
     pose = json.loads((CAL / "food_detect_pose.json").read_text())
     cx, cy, fx, fy = cal["cx"], cal["cy"], cal["fx"], cal["fy"]
@@ -62,6 +62,10 @@ def measure(depth_mm: np.ndarray, guess: float = 0.30) -> dict:
     floor = np.percentile(ring, 85) / 1000.0 + T_D2C[2] if ring.size > 10 else None
     out = dict(camera_to_tip=zt, top=float(top), gap_top=float(top - zt),
                depth_px=[float(ud), float(vd)])
+    if filled is not None:                   # how much of each reading came from the DA3 fallback
+        m_in = (rr <= 7) & (D > 0); m_ring = (rr > 1.3 * r_b) & (rr < 2.6 * r_b) & (D > 0)
+        out["filled_top"] = float(filled[m_in].mean()) if m_in.any() else 0.0
+        out["filled_floor"] = float(filled[m_ring].mean()) if m_ring.any() else 0.0
     if floor is not None:
         out.update(floor=float(floor), gap_floor=float(floor - zt), height=float(floor - top))
     return out
@@ -73,9 +77,16 @@ def main() -> int:
     ap.add_argument("--out", required=True)
     ap.add_argument("--guess", type=float, default=0.30, help="rough depth, m, to start from")
     a = ap.parse_args()
-    m = measure(np.load(a.depth), a.guess)
+    dp = Path(a.depth)
+    mask_p = dp.with_name(dp.stem + "_filled_mask.npy"); fill_p = dp.with_name(dp.stem + "_fill.json")
+    m = measure(np.load(a.depth), a.guess, np.load(mask_p) if mask_p.exists() else None)
+    if fill_p.exists():
+        m["depth_source"] = json.loads(fill_p.read_text()).get("source", "sensor")
     Path(a.out).write_text(json.dumps(m, indent=2))
     s = "  under the tip: top %.1f mm (tip %.1f mm above it)" % (1000 * m["top"], 1000 * m["gap_top"])
+    if m.get("filled_floor") or m.get("filled_top"):
+        s += " [%.0f%% of the top, %.0f%% of the floor from Depth Anything 3: %s]" % (
+            100 * m.get("filled_top", 0), 100 * m.get("filled_floor", 0), m.get("depth_source", "?"))
     if "floor" in m:
         s += ", floor %.1f mm (tip %.1f mm above it), food %.1f mm tall" % (
             1000 * m["floor"], 1000 * m["gap_floor"], 1000 * m["height"])

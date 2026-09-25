@@ -97,7 +97,12 @@ def _wait(det, read, D, timeout, open_s=0.0, source=""):
     opening, whether a face was found; and how long the stream took to open. read() -> (ok, BGR, stamp): the
     stamp is the frame's age when read (resident stream) or the stream's own timestamp. wait_frames/ -- a small upright
     snapshot every 0.5 s, its opening in the name. open_wait_last.jpg -- the last frame, if never opened."""
-    t0 = time.time(); since = None; last = -1.0; trace = []; rgb = None; snap_t = -1.0
+    t0 = time.time(); since = None; last = -1.0; trace = []; rgb = None; snap_t = -1.0; live_t = -1.0
+    live = Path(str(cfg.deployment.runs_dir)).expanduser() / "open_wait_live.txt"   # followed live (tail -F)
+    try:
+        live.write_text("== wait started %s (%s)\n" % (time.strftime("%H:%M:%S"), D))
+    except OSError:
+        live = None
     frames_dir = D / "wait_frames"
     frames_dir.mkdir(exist_ok=True)
 
@@ -123,6 +128,14 @@ def _wait(det, read, D, timeout, open_s=0.0, source=""):
         o = opening(L) if L is not None else 0.0
         now = time.time() - t0
         trace.append((round(now, 3), round(o, 4), L is not None, stamp))
+        if live is not None and now - live_t >= 0.25:
+            live_t = now
+            try:
+                with open(live, "a") as f:
+                    f.write("%s.%03d  +%5.2f s  opening %.2f  face %s\n" % (time.strftime("%H:%M:%S"), int(time.time() * 1000) % 1000,
+                                                                       now, o, "yes" if L is not None else "NO"))
+            except OSError:
+                pass
         if now - snap_t >= 0.5:
             snap_t = now
             try:

@@ -37,6 +37,8 @@ from __future__ import annotations
 import argparse
 import json
 import time
+
+import numpy as np
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -77,6 +79,20 @@ from settings import cfg
 MIN_SIDE_PX = cfg.perception.min_box_side_px
 MAX_ASPECT = float(cfg.perception.max_box_aspect)
 FD = cfg.features.food_detector
+
+
+def excluded_colour(img, b) -> bool:
+    """A box whose centre is not food we pick (food profile exclude_grapes): red / purple with little green -- a
+    grape, which rolls off a fork -- or blue -- the mat or the bowl's wall. Melon (G ~170) and pineapple (G ~200)
+    are not. 2026-09-25: a brightness test let a lit red grape through; the green channel does not."""
+    if not cfg.food.get("exclude_grapes", False):
+        return False
+    w, h = b.x2 - b.x1, b.y2 - b.y1
+    c = img.crop((int(b.x1 + 0.3 * w), int(b.y1 + 0.3 * h), int(b.x2 - 0.3 * w), int(b.y2 - 0.3 * h))).convert("RGB")
+    r, g, bl = (float(np.mean(np.asarray(c)[..., k])) for k in range(3))
+    grape = g < 110 and r > 1.5 * g
+    background = bl > r and bl > g
+    return grape or background
 
 
 def plausible(b) -> bool:
@@ -135,12 +151,16 @@ def main() -> int:
         crop.save(crop_path, quality=95); crop.filename = crop_path; crop_at = (x0, y0)
     else:
         crop = img
-    food_all = la.locate(crop, a.food, max_new_tokens=int(FD.max_new_tokens), generation_mode=FD.generation_mode,
-                         stop_on_repeat=bool(FD.stop_on_repeat))
-    for b in food_all:
-        b.x1 += crop_at[0]; b.x2 += crop_at[0]; b.y1 += crop_at[1]; b.y2 += crop_at[1]
-    food = [b for b in food_all if plausible(b)]
+    def ask(phrase):
+        boxes = la.locate(crop, phrase, max_new_tokens=int(FD.max_new_tokens), generation_mode=FD.generation_mode,
+                          stop_on_repeat=bool(FD.stop_on_repeat))
+        for b in boxes:
+            b.x1 += crop_at[0]; b.x2 += crop_at[0]; b.y1 += crop_at[1]; b.y2 += crop_at[1]
+        return boxes
+    food_all = ask(a.food)
+    food = [b for b in food_all if plausible(b) and not excluded_colour(img, b)]
     t_food = time.perf_counter() - t0
+    used_prompt = a.food
 
     # the utensil is not detected (its region is stored); the cross-check query cost ~2 s a bite and is
     # now only run on request
@@ -186,9 +206,20 @@ def main() -> int:
         n0 = len(food)
         # ...and no single piece of food is a large fraction of its bowl: a
         # 599x484 px 'food pieces' box once covered most of a 585x432 bowl.
-        food = [b for b in food if inside_frac(b, bb) > cfg.perception.food_inside_bowl_min
-                and b.area < cfg.perception.food_max_frac_of_bowl * bb.area]
+        in_bowl = lambda b: (inside_frac(b, bb) > cfg.perception.food_inside_bowl_min      # noqa: E731
+                             and b.area < cfg.perception.food_max_frac_of_bowl * bb.area)
+        food = [b for b in food if in_bowl(b)]
         n_outside = n0 - len(food)
+        # Nothing usable (a pile drawn as one bowl-sized box, 2026-09-25): ask again in the food profile's other
+        # words, keeping the same checks -- plausible shape, not the utensil, inside the bowl, not a grape.
+        for phrase in ([] if food else list(cfg.food.get("fallback_prompts", []))):
+            more = [b for b in ask(phrase) if plausible(b) and not excluded_colour(img, b) and in_bowl(b)
+                    and (not ute or inside_frac(b, ute[0]) < cfg.perception.inside_utensil_max)]
+            print("  (no usable box for %r: asked %r -> %d)" % (a.food, phrase, len(more)))
+            if more:
+                food, used_prompt = more, phrase
+                break
+        t_food = time.perf_counter() - t0
     else:
         n_outside = 0
 
@@ -213,6 +244,7 @@ def main() -> int:
         groups.append((name, boxes))
 
     result["utensil_tip"] = list(cfg.utensil.tip_px)      # measured; the box centre is not the tip
+    result["food_prompt"] = used_prompt                     # which words found the food (a fallback, or the prompt)
     Path(a.out + ".json").write_text(json.dumps(result, indent=2))
     draw(img, groups, a.out + ".jpg")
     print("  wrote %s.json, %s.jpg" % (a.out, a.out))

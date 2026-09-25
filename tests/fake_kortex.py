@@ -136,6 +136,8 @@ class FakeArm:
         self.torque = lambda t: [0.0] * 7          # scenario hooks: f(clock time) -> values
         self.force = lambda t: [0.0, 0.0, 0.0]
         self.refuse_above_dps = None     # ValidateWaypointList refuses any segment faster than this
+        self.joint_limit_dps = None      # ExecuteAction refuses a joint move shorter than travel / this (as the arm)
+        self.errors = []                 # what GetTrajectoryErrorReport returns next
         self.ik_unreachable = lambda pose: False
 
     # --- scenario setup
@@ -323,6 +325,13 @@ class _Base:
         if act.HasField("reach_joint_angles"):
             rj = act.reach_joint_angles
             q = [fold(j.value) for j in rj.joint_angles.joint_angles]
+            if a.joint_limit_dps:
+                need = max(abs(fold(x - y)) for x, y in zip(q, a.q)) / a.joint_limit_dps
+                if rj.constraint.value < need:
+                    a.errors = [SimpleNamespace(error_type=Base_pb2.TRAJECTORY_ERROR_TYPE_INVALID_DURATION, index=0,
+                                                error_value=float(rj.constraint.value), min_value=need, max_value=100.0)]
+                    a._notify(Base_pb2.ACTION_ABORT, Base_pb2.METHOD_FAILED)
+                    return
             a._start([(q, a.fk_pose(q))], [float(rj.constraint.value)])
         else:
             t = act.reach_pose.target_pose
@@ -345,7 +354,8 @@ class _Base:
 
     def GetTrajectoryErrorReport(self):
         self.arm.log("GetTrajectoryErrorReport")
-        return SimpleNamespace(trajectory_error_elements=[])
+        errs, self.arm.errors = self.arm.errors, []
+        return SimpleNamespace(trajectory_error_elements=errs)
 
 
 class _Cyclic:

@@ -49,6 +49,7 @@ because its absence cost something on this arm:
 from __future__ import annotations
 
 import math
+import re
 import statistics
 import time
 from collections import deque
@@ -376,10 +377,23 @@ def goto(conn: KinovaConnection, target: Sequence[float], speed: float = 10.0, t
     # short-travel joint finishes early and the sum wanders.
     rj.constraint.type = Base_pb2.JOINT_CONSTRAINT_DURATION
     rj.constraint.value = max(float(cfg.motion.goto_min_s), travel / speed + float(cfg.motion.goto_pad_s))
-    conn.base.ExecuteAction(a)
-    worst, dt = _watch(conn, label,
-                       lambda fb, q: all(abs(fold(a - b)) < tol for a, b in zip(target, q)),
-                       q0, max_tilt, torque_limit, max(20.0, 6.0 * travel / speed), ev)
+    for attempt in (1, 2):
+        conn.base.ExecuteAction(a)
+        try:
+            worst, dt = _watch(conn, label,
+                               lambda fb, q: all(abs(fold(a - b)) < tol for a, b in zip(target, q)),
+                               q0, max_tilt, torque_limit, max(20.0, 6.0 * travel / speed), ev)
+            break
+        except MoveError as e:
+            # Faster than the arm's configured joint limits allow: the controller refuses the duration BEFORE any
+            # motion and says its minimum -- run at that (the fastest this arm permits), once
+            m = re.search(r"INVALID_DURATION on index \d+ \(value [\d.]+, allowed ([\d.]+)\.\.", str(e))
+            if attempt == 2 or not m or max(abs(fold(t - c)) for t, c in zip(q0, joints(conn))) > 0.05:
+                raise
+            rj.constraint.value = 1.02 * float(m.group(1))
+            if verbose:
+                log.info("    %-24s (the arm's minimum for this move: %.2f s)", label, float(m.group(1)))
+            ev.clear()
     runlog.event("goto", label=label, target=target, travel_deg=travel, seconds=dt, worst_tilt_deg=worst)
     if verbose:
         log.info("    %-24s ok  %6.1f deg in %4.1f s, worst tilt %.1f deg", label, travel, dt, worst)

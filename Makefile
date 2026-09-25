@@ -67,13 +67,18 @@ models:
 	@if curl -s -m 2 http://127.0.0.1:8766/ping | grep -q ok; then echo "face server already up"; \
 	else PYTHONPATH=. nohup $$HOME/venvs/mp/bin/python -m feeding.detect_mouth_mp --serve > $$HOME/rammp_runs/face_server.log 2>&1 & \
 	  echo "starting face server (log: ~/rammp_runs/face_server.log)"; fi
-	@for i in $$(seq 1 120); do curl -s -m 2 http://127.0.0.1:8765/ping | grep -q ok && curl -s -m 2 http://127.0.0.1:8766/ping | grep -q ok && { echo "all models loaded and warm ($${i} s)"; exit 0; }; sleep 1; done; echo "models did not come up -- see ~/rammp_runs/*.log"; exit 1
+	@if curl -s -m 2 http://127.0.0.1:8767/ping | grep -q ok; then echo "depth server already up"; \
+	else docker cp feeding/depth_server.py kinova_vision:/tmp/depth_server.py >/dev/null && \
+	  docker exec -d kinova_vision bash -lc "source /opt/ros/humble/setup.bash; source /ros2_ws/install/setup.bash; cd /tmp && python3 depth_server.py > /tmp/depth_server.log 2>&1" && \
+	  echo "starting depth server (in kinova_vision)"; fi
+	@for i in $$(seq 1 120); do curl -s -m 2 http://127.0.0.1:8765/ping | grep -q ok && curl -s -m 2 http://127.0.0.1:8766/ping | grep -q ok && curl -s -m 2 http://127.0.0.1:8767/ping | grep -q ok && { echo "all models loaded and warm, depth streaming ($${i} s)"; exit 0; }; sleep 1; done; echo "models did not come up -- see ~/rammp_runs/*.log"; exit 1
 
 detector: models
 
 models-stop:
 	@pkill -f "[f]eeding.detector_server" && echo "detector + depth server stopped" || true
 	@pkill -f "[d]etect_mouth_mp --serve" && echo "face server stopped" || true
+	@docker exec kinova_vision pkill -f "[d]epth_server.py" && echo "depth server stopped" || true
 
 # Acquisition, one verified step at a time. Uses the latest make perceive run.
 over:

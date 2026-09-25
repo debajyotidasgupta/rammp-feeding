@@ -243,6 +243,43 @@ def plunge(conn, a):
         run_scoop(conn, a, scoop_plan)                        # no pause at the bottom: already planned
 
 
+class DepthUnavailable(Exception):
+    """No usable sensor depth under the tip after OVER: the shell falls back to the filled measurement."""
+
+
+def pick(conn, a):
+    """OVER -> fresh depth from the resident depth server -> plan plunge + scoop -> plunge -> scoop, all in
+    THIS process: no program restarts, no reconnection, so the arm does not stand still between them
+    (user, 2026-09-25). The floor is still re-measured from above the berry after OVER: read from the overlook
+    frame instead it disagreed by up to 11 mm on 2 of 17 runs."""
+    import io
+    import urllib.request
+    from feeding.measure_under import measure
+    over(conn, a)
+    t = time.time()
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:8767/median?frames=15", timeout=15) as r:
+            d = np.load(io.BytesIO(r.read()))
+    except Exception as e:  # noqa: BLE001
+        raise DepthUnavailable("depth server: %s" % e)
+    try:
+        u = measure(d, 0.41)
+    except SystemExit as e:                    # measure_under's own "no depth return under the tip"
+        raise DepthUnavailable(str(e))
+    if "floor" not in u:
+        raise DepthUnavailable("no floor reading beside the food")
+    print("  under the tip: top %.1f mm (tip %.1f mm above it), floor %.1f mm (tip %.1f mm above it), food %.1f mm tall"
+          "   [fresh depth in %.1f s]" % (1000 * u["top"], 1000 * u["gap_top"], 1000 * u["floor"], 1000 * u["gap_floor"],
+                                           1000 * u["height"], time.time() - t))
+    Path(a.under).write_text(json.dumps(u))
+    try:
+        Path("/work_out/under_over.json").write_text(json.dumps(u))      # for the run's record (host /tmp/demo_state)
+    except OSError:
+        pass
+    a.then_scoop = True
+    plunge(conn, a)
+
+
 def _ik(conn, T, rpy, g):
     d = Base_pb2.IKData(); p = d.cartesian_pose
     p.x, p.y, p.z = map(float, T); p.theta_x, p.theta_y, p.theta_z = map(float, rpy)
@@ -446,7 +483,7 @@ def run_scoop(conn, a, plan):
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("step", choices=["over", "descend", "punch", "plunge", "scoop"])
+    ap.add_argument("step", choices=["over", "descend", "punch", "plunge", "scoop", "pick"])
     ap.add_argument("--target", default="/tmp/target.json")
     ap.add_argument("--under", default="/tmp/under.json", help="measure_under.py output")
     ap.add_argument("--to-above", type=float, default=0.010, help="descend: stop this far above the food top")
@@ -463,10 +500,13 @@ def main() -> int:
     a = ap.parse_args()
     with kinova_connection() as conn:
         try:
-            dict(over=over, descend=descend, punch=punch, plunge=plunge, scoop=scoop)[a.step](conn, a)
+            dict(over=over, descend=descend, punch=punch, plunge=plunge, scoop=scoop, pick=pick)[a.step](conn, a)
             p = tool_pose(conn)
             print("  %s done: tool (%.4f %.4f %.4f), utensil %.1f deg off vertical"
                   % (a.step, p[0], p[1], p[2], tilt_deg(conn)))
+        except DepthUnavailable as e:
+            print("\n  no sensor depth under the tip (%s) -- the shell falls back to the filled measurement" % e, file=sys.stderr)
+            return 6
         except MoveError as e:
             print("\n  STOPPED: %s" % e, file=sys.stderr)
             return 1

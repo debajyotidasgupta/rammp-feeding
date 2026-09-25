@@ -90,6 +90,7 @@ def main() -> int:
     ap.add_argument("--food", default="food pieces")
     ap.add_argument("--utensil", default="spoon", help="phrase for the cross-check only")
     ap.add_argument("--check-utensil", action="store_true", help="also detect the utensil, to cross-check its stored region")
+    ap.add_argument("--bowl-cache", help="reuse / save this session's bowl box here (make feed clears it)")
     ap.add_argument("--pose", default=str(Path(__file__).resolve().parent.parent
                                           / "calibration" / "food_detect_pose.json"),
                     help="pose file carrying the fixed utensil_px region")
@@ -100,24 +101,48 @@ def main() -> int:
     la = connect()                                  # the resident model if `make detector` is up, else load here
 
     result, groups = {"image": a.image, "width": img.width, "height": img.height}, []
-    t0 = time.perf_counter()
-    # 128, not 512: past the real pieces the model repeats itself (80 boxes for 4 berries, 14 s); 128 tokens
-    # is ~20 boxes, more than a bowl holds, in ~5 s
-    food_all = la.locate(img, a.food, max_new_tokens=128)
-    food = [b for b in food_all if plausible(b)]
-    t_food = time.perf_counter() - t0
 
     def one(phrase):
         t = time.perf_counter()
         b = la.locate_one(img, phrase)
         return ([b] if b and plausible(b) else []), time.perf_counter() - t
 
-    bowl, t_bowl = one("bowl")
+    # The bowl does not move between bites: detect it once per session (make feed clears the cache) and reuse
+    # its box -- 1.8 s a bite saved. Its uses: food outside it is not food; the most central berry has the
+    # most rim clearance; and the berry query can be run on it alone.
+    from feeding.locate_anything import Box
+    cache = Path(a.bowl_cache) if a.bowl_cache else None
+    if cache and cache.exists():
+        c = json.loads(cache.read_text()); bowl, t_bowl = [Box(*c["box"], "bowl")], 0.0
+        print("  bowl     (this session's box, not re-detected)")
+    else:
+        bowl, t_bowl = one("bowl")
+        if cache and bowl:
+            cache.write_text(json.dumps(dict(box=[bowl[0].x1, bowl[0].y1, bowl[0].x2, bowl[0].y2], image=a.image)))
+
+    # Berries: on the BOWL only (half the image-reading time), in the model's "fast" mode, ending at the first
+    # repeated or sliver box. Measured on 8 saved frames: the same berries as the full frame in hybrid mode at
+    # 128 tokens, 5.6 s -> 1.0 s. (Past the real pieces the model repeats itself; at 512 tokens, 80 boxes.)
+    t0 = time.perf_counter()
+    crop_at = (0, 0)
+    if bowl:
+        m = 20; bb = bowl[0]
+        x0, y0 = max(0, int(bb.x1) - m), max(0, int(bb.y1) - m)
+        x1, y1 = min(img.width, int(bb.x2) + m), min(img.height, int(bb.y2) + m)
+        crop = img.crop((x0, y0, x1, y1)); crop_path = str(Path(a.out).with_name("food_crop.jpg"))
+        crop.save(crop_path, quality=95); crop.filename = crop_path; crop_at = (x0, y0)
+    else:
+        crop = img
+    food_all = la.locate(crop, a.food, max_new_tokens=128, generation_mode="fast")
+    for b in food_all:
+        b.x1 += crop_at[0]; b.x2 += crop_at[0]; b.y1 += crop_at[1]; b.y2 += crop_at[1]
+    food = [b for b in food_all if plausible(b)]
+    t_food = time.perf_counter() - t0
+
     # the utensil is not detected (its region is stored); the cross-check query cost ~2 s a bite and is
     # now only run on request
     seen, t_ute = one(a.utensil) if a.check_utensil else ([], 0.0)
 
-    from feeding.locate_anything import Box
     pose = json.loads(Path(a.pose).read_text())
     ux1, uy1, ux2, uy2 = pose["utensil_px"]
     ute = [Box(ux1, uy1, ux2, uy2, "utensil")]

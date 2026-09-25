@@ -13,6 +13,7 @@ BITES="${BITES:-99}"
 home() { echo; echo "== back to feeding_start"; make -s start; }
 # every model loaded and warm BEFORE the first bite, and kept loaded throughout
 make -s models || { echo "models not up -- not starting"; exit 1; }
+rm -f "$HOME/rammp_runs/session_bowl.json"      # a new session: detect the bowl once, on the first bite
 if [ -z "${FROM_DETECT:-}" ]; then make -s detect || { echo "could not reach food_detect_start"; exit 1; }; fi
 n=0
 while [ "$n" -lt "$BITES" ]; do

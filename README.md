@@ -190,6 +190,20 @@ image→motion mapping was measured in exactly that orientation.
    `p* = pp + (p_tip − pp)·Z_tip/Z_berry`, and the tool translates until the
    berry sits there. No hand–eye calibration needed.
 
+### Speed of perception (2026-09-25, offline on saved frames; the robot was off)
+
+| step | before | now | how |
+|---|---|---|---|
+| colour frame | 22 s | 1.5 s | `grab_frame.py` reads the stream; gst recorded until a timeout |
+| depth frame | ~5 s | ~0.5 s (expected) | `depth_server.py` keeps the stream open in kinova_vision; median of fresh frames |
+| berry query | 5.6 s | **~1.0 s** | on the bowl crop only (0.5x image-reading), the model's `fast` mode, stop at the first repeated / sliver box -- same berries on 8/8 frames after the filters |
+| bowl query | 1.8 s / bite | once per session | the bowl does not move; `make feed` clears the cache |
+| OVER -> plunge | ~15 s standing still | ~3 s | `acquire pick`: OVER, fresh depth, plan, plunge, scoop in one arm program |
+
+Tried and NOT used: re-using the overlook depth for the plunge (off by 11 and 5 mm on 2 of 17 runs); int8 weight-only
+quantization (1.79 s vs 1.17 s, different boxes -- no fused kernels); int4 (torchao's kernels unsupported with this
+PyTorch). The PyTorch build warns it is not built for the Orin (sm 8.7) but runs bf16 GEMM at 34 TFLOPS, near peak.
+
 ### Depth fallback: Depth Anything 3 fills what the sensor misses
 
 `feeding/depth_fill.py` runs after every depth capture (perceive, the plunge's floor reading, the face). Sensor

@@ -41,16 +41,19 @@ if ! PYTHONPATH=. "$HOME/venvs/mp/bin/python" -m feeding.grab_frame "$OUT/colour
     ! multifilesink location=/tmp/s1_%03d.jpg >/dev/null 2>&1 || true
   cp "$(ls /tmp/s1_*.jpg | tail -1)" "$OUT/colour.jpg"; rm -f /tmp/s1_*.jpg
 fi
-docker cp feeding/depth_probe.py kinova_vision:/tmp/depth_probe.py >/dev/null
-docker exec kinova_vision bash -lc "source /opt/ros/humble/setup.bash; \
-  source /ros2_ws/install/setup.bash; cd /tmp && python3 depth_probe.py --out /tmp/s1_depth --frames 15" \
-  | grep -E "valid|p50" | sed 's/^/      /'
-docker cp kinova_vision:/tmp/s1_depth.npy "$OUT/depth.npy" >/dev/null 2>&1 || echo "      (no depth frame from the sensor)"
+# the resident depth server (make models): fresh frames in ~0.5 s; else start a probe (~5 s)
+if ! PYTHONPATH=. "$PY" -m feeding.depth_grab "$OUT/depth.npy" | sed 's/^/      /'; then
+  docker cp feeding/depth_probe.py kinova_vision:/tmp/depth_probe.py >/dev/null
+  docker exec kinova_vision bash -lc "source /opt/ros/humble/setup.bash; \
+    source /ros2_ws/install/setup.bash; cd /tmp && python3 depth_probe.py --out /tmp/s1_depth --frames 15" \
+    | grep -E "valid|p50" | sed 's/^/      /'
+  docker cp kinova_vision:/tmp/s1_depth.npy "$OUT/depth.npy" >/dev/null 2>&1 || echo "      (no depth frame from the sensor)"
+fi
 # fallback: fill sensor holes (or a missing depth frame) from the resident Depth Anything 3
 PYTHONPATH=.:$HOME/da3src/src "$PY" -m feeding.depth_fill "$OUT" 2>/dev/null | sed 's/^/      /' || true
 
 echo "$(date +%T) [3/4] detect"
-PYTHONPATH=. "$PY" -m feeding.perceive --image "$OUT/colour.jpg" --out "$OUT/detection" 2>/dev/null \
+PYTHONPATH=. "$PY" -m feeding.perceive --image "$OUT/colour.jpg" --out "$OUT/detection" --bowl-cache "$HOME/rammp_runs/session_bowl.json" 2>/dev/null \
   | grep -E "^  [a-z]|^     [0-9]"
 
 DA3_ARG=()

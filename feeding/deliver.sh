@@ -34,10 +34,12 @@ capture_colour() {   # $1 = run dir: one colour frame, ~1 s
   cp "$(ls /tmp/dl_*.jpg | tail -1)" "$1/colour.jpg"; rm -f /tmp/dl_*.jpg
 }
 capture_depth() {    # $1 = run dir: 20-frame median depth
-  docker cp feeding/depth_probe.py kinova_vision:/tmp/depth_probe.py >/dev/null
-  docker exec kinova_vision bash -lc "source /opt/ros/humble/setup.bash; source /ros2_ws/install/setup.bash; \
-    cd /tmp && python3 depth_probe.py --out /tmp/dl_depth --frames 15" >/dev/null 2>&1
-  docker cp kinova_vision:/tmp/dl_depth.npy "$1/depth.npy" >/dev/null 2>&1 || true
+  if ! PYTHONPATH=. "$PY" -m feeding.depth_grab "$1/depth.npy" >/dev/null 2>&1; then     # resident: ~0.5 s
+    docker cp feeding/depth_probe.py kinova_vision:/tmp/depth_probe.py >/dev/null
+    docker exec kinova_vision bash -lc "source /opt/ros/humble/setup.bash; source /ros2_ws/install/setup.bash; \
+      cd /tmp && python3 depth_probe.py --out /tmp/dl_depth --frames 15" >/dev/null 2>&1
+    docker cp kinova_vision:/tmp/dl_depth.npy "$1/depth.npy" >/dev/null 2>&1 || true
+  fi
   # fallback: fill sensor holes (the food hiding the face from the depth camera) from Depth Anything 3
   PYTHONPATH=.:$HOME/da3src/src "$PY" -m feeding.depth_fill "$1" 2>/dev/null | sed 's/^/    /' || true
 }

@@ -32,7 +32,8 @@ T_D2C = np.array([-0.02706, -0.00997, -0.00471])            # factory extrinsic
 FOOD_HALF_M = 0.017                                         # half a strawberry, for the floor ring
 
 
-def measure(depth_mm: np.ndarray, guess: float = 0.30, filled: np.ndarray | None = None) -> dict:
+def measure(depth_mm: np.ndarray, guess: float = 0.30, filled: np.ndarray | None = None,
+            target: tuple | None = None) -> dict:
     cal = json.loads((CAL / "colour_intrinsics.json").read_text())
     pose = json.loads((CAL / "food_detect_pose.json").read_text())
     cx, cy, fx, fy = cal["cx"], cal["cy"], cal["fx"], cal["fy"]
@@ -44,9 +45,11 @@ def measure(depth_mm: np.ndarray, guess: float = 0.30, filled: np.ndarray | None
     D = depth_mm.astype(float)
     H, W = D.shape
     yy, xx = np.mgrid[0:H, 0:W]
-    z = guess
+    # target = (u, v, z): read along the vertical line through that scene point instead of the tip's -- i.e.
+    # from the overlook frame, what will be under the tip once OVER has put it there (a pure horizontal slide)
+    z = target[2] if target else guess
     for _ in range(8):
-        p = vp + (tip - vp) * zt / z
+        p = (vp + (np.array(target[:2]) - vp) * target[2] / z) if target else (vp + (tip - vp) * zt / z)
         X = (p[0] - cx) * z / fx - T_D2C[0]
         Y = (p[1] - cy) * z / fy - T_D2C[1]
         Zd = z - T_D2C[2]
@@ -76,10 +79,19 @@ def main() -> int:
     ap.add_argument("--depth", required=True, help="depth_probe .npy (mm, 480x270)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--guess", type=float, default=0.30, help="rough depth, m, to start from")
+    ap.add_argument("--target", help="perceive's target.json: measure what OVER will put under the tip, from this frame")
     a = ap.parse_args()
     dp = Path(a.depth)
     mask_p = dp.with_name(dp.stem + "_filled_mask.npy"); fill_p = dp.with_name(dp.stem + "_fill.json")
-    m = measure(np.load(a.depth), a.guess, np.load(mask_p) if mask_p.exists() else None)
+    tgt = None
+    if a.target:
+        t = json.loads(Path(a.target).read_text()); pose = json.loads((CAL / "food_detect_pose.json").read_text())
+        c = json.loads((CAL / "colour_intrinsics.json").read_text())
+        u, v = t["berry_bbox_centre"]; zb = t["berry_depth_m"]; dx, dy = pose.get("aim_offset_base_m", [0.0, 0.0])
+        # the aim offset moves the tool by (dx, dy): the point under the tip is that far from the berry centre.
+        # At the overlook orientation a scene point further +X appears higher (-v), further +Y further left (-u).
+        tgt = (u - dy * c["fx"] / zb, v - dx * c["fy"] / zb, zb)
+    m = measure(np.load(a.depth), a.guess, np.load(mask_p) if mask_p.exists() else None, target=tgt)
     if fill_p.exists():
         m["depth_source"] = json.loads(fill_p.read_text()).get("source", "sensor")
     Path(a.out).write_text(json.dumps(m, indent=2))

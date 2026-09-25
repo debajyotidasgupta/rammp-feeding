@@ -168,11 +168,59 @@ class LocateAnything:
             )
         return resp[0] if isinstance(resp, tuple) else resp
 
+    # ------------------------------------------------------------------ stop on repeats
+    def _stop_on_repeat(self, iou_thresh: float = 0.3, width: int = 1280, height: int = 720):
+        """While active, end generation at the first box that repeats an earlier one.
+
+        Past the real instances the model keeps emitting near-copies of one box until max_new_tokens (80
+        boxes for 4 berries; ~4 of 5.6 s spent that way). Its loop has no stopping hook, but every
+        multi-token step goes through the module-level handle_pattern(); returning its own 'im_end' there
+        ends generation exactly as the model would. Restored on exit."""
+        import contextlib
+        import sys as _sys
+        mod = _sys.modules[type(self.model).__module__]
+        orig = mod.handle_pattern
+        tid = self.model.token_ids
+        c0, c1 = tid["coord_start_token_id"], tid["coord_end_token_id"]
+        seen: list[tuple] = []
+
+        def iou(a, b):
+            ix = max(0, min(a[2], b[2]) - max(a[0], b[0])); iy = max(0, min(a[3], b[3]) - max(a[1], b[1]))
+            u = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - ix * iy
+            return ix * iy / u if u > 0 else 0.0
+
+        def patched(x0, token_ids, generation_mode="hybrid"):
+            out = orig(x0, token_ids, generation_mode)
+            toks = out.get("tokens", [])
+            coords = [t - c0 for t in toks if c0 <= t <= c1]
+            if len(coords) == 4:
+                box = tuple(coords)
+                bw, bh = (box[2] - box[0]) * width / 1000.0, (box[3] - box[1]) * height / 1000.0
+                sliver = min(bw, bh) < 20 or max(bw, bh) > 3 * max(1e-6, min(bw, bh))
+                if sliver or any(iou(box, b) > iou_thresh for b in seen):
+                    return {"type": "im_end", "tokens": [tid["im_end_token_id"]], "need_switch_to_ar": False,
+                            "is_terminal": True}
+                seen.append(box)
+            return out
+
+        @contextlib.contextmanager
+        def ctx():
+            mod.handle_pattern = patched
+            try:
+                yield
+            finally:
+                mod.handle_pattern = orig
+        return ctx()
+
     # ------------------------------------------------------------------ tasks
-    def locate(self, image, phrase: str, **kw) -> list[Box]:
+    def locate(self, image, phrase: str, stop_on_repeat: bool = True, **kw) -> list[Box]:
         """All instances matching a phrase, as pixel boxes."""
-        answer = self.predict(
-            image, "Locate all the instances that match the following description: %s." % phrase, **kw)
+        q = "Locate all the instances that match the following description: %s." % phrase
+        if stop_on_repeat:
+            with self._stop_on_repeat(width=image.width, height=image.height):
+                answer = self.predict(image, q, **kw)
+        else:
+            answer = self.predict(image, q, **kw)
         return parse_boxes(answer, image.width, image.height, phrase)
 
     def locate_one(self, image, phrase: str, **kw) -> Box | None:

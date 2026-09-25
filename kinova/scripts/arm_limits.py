@@ -63,14 +63,16 @@ def show(lim: dict) -> None:
 def apply(conn) -> None:
     from kortex_api.autogen.messages import ControlConfig_pb2 as CC
     want = cfg.deployment.arm.soft_limits
-    v = float(want.joint_speed_dps)
+    js = want.joint_speed_dps                                   # one value for every joint, or one per joint
+    per = [float(x) for x in js] if isinstance(js, (list, tuple)) else None
+    v = per if per else float(js)
     before = read(conn)
     runlog.save_json("soft_limits_before", before)
     hard = before["hard"]["joint_speed_dps"]
     cc = _client(conn)
     for mode in want.modes:
         n = len(before["soft"].get(mode, {}).get("joint_speed_dps", [])) or len(hard)
-        speeds = [min(v, hard[i]) for i in range(n)]            # never above a joint's hard limit
+        speeds = [min(per[i] if per else v, hard[i]) for i in range(n)]   # never above a joint's hard limit
         msg = CC.JointSpeedSoftLimits()
         msg.control_mode = CC.ControlMode.Value(mode)
         msg.joint_speed_soft_limits.extend(speeds)

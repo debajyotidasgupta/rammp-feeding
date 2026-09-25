@@ -17,7 +17,7 @@ for i in $(seq 1 60); do curl -s -m 2 http://127.0.0.1:8765/ping | grep -q ok &&
 if [ -z "${FROM_DETECT:-}" ]; then make -s detect || { echo "could not reach food_detect_start"; exit 1; }; fi
 n=0
 while [ "$n" -lt "$BITES" ]; do
-  echo; echo "== bite $((n + 1))"; t0=$(date +%s)
+  echo; echo "== bite $((n + 1))  $(date +%T)"; t0=$(date +%s)
   feeding/stage1.sh; rc=$?                       # scripts, not make: make turns every exit code into 2
   [ $rc = 3 ] && { echo "the bowl is empty"; home; exit 0; }
   [ $rc != 0 ] && { echo "perceive failed (exit $rc) -- stopping at food_detect_start"; exit 1; }

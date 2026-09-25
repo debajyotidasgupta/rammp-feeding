@@ -25,8 +25,9 @@ run() { [ "$1" = "$START_AT" ] && started=1; [ "$started" = 1 ]; }
 stop_here() { [ "$STOP_AFTER" = "$1" ] && { echo; echo "stopped after $1 (STOP_AFTER)"; exit 0; } || true; }
 arm() { $ARM "$@" 2>&1 | { grep -v Deprecation || true; }; return "${PIPESTATUS[0]}"; }
 
-capture_colour() {   # $1 = run dir: one colour frame (RTSP)
-  rm -f /tmp/dl_*.jpg
+capture_colour() {   # $1 = run dir: one colour frame, ~1 s
+  PYTHONPATH=. "$MPY" -m feeding.grab_frame "$1/colour.jpg" >/dev/null 2>&1 && return 0
+  rm -f /tmp/dl_*.jpg     # fallback: the old way (records until the 22 s timeout)
   timeout 22 gst-launch-1.0 rtspsrc location=rtsp://192.168.2.67/color protocols=tcp latency=200 \
     ! rtph264depay ! h264parse ! openh264dec ! videoconvert ! jpegenc \
     ! multifilesink location=/tmp/dl_%03d.jpg >/dev/null 2>&1 || true
@@ -35,7 +36,7 @@ capture_colour() {   # $1 = run dir: one colour frame (RTSP)
 capture_depth() {    # $1 = run dir: 20-frame median depth
   docker cp feeding/depth_probe.py kinova_vision:/tmp/depth_probe.py >/dev/null
   docker exec kinova_vision bash -lc "source /opt/ros/humble/setup.bash; source /ros2_ws/install/setup.bash; \
-    cd /tmp && python3 depth_probe.py --out /tmp/dl_depth --frames 20" >/dev/null 2>&1
+    cd /tmp && python3 depth_probe.py --out /tmp/dl_depth --frames 15" >/dev/null 2>&1
   docker cp kinova_vision:/tmp/dl_depth.npy "$1/depth.npy" >/dev/null
 }
 detect_face() {      # $1 = run dir: MediaPipe, else LocateAnything
@@ -48,12 +49,12 @@ detect_face() {      # $1 = run dir: MediaPipe, else LocateAnything
 }
 
 if run swing; then
-  echo "[1/4] SWING to the user"; arm swing $VO
+  echo "$(date +%T) [1/4] SWING to the user"; arm swing $VO
   [ -n "$VALIDATE" ] && { echo; echo "validate-only: the swing was checked; present needs the arm there"; exit 0; }
   stop_here swing
 fi
 if run present; then
-  echo "[2/4] PRESENT"
+  echo "$(date +%T) [2/4] PRESENT"
   for SHIFT in 0 50 100; do
     D="$HOME/rammp_runs/deliver_$(date +%Y%m%d_%H%M%S)"; mkdir -p "$D"
     if [ -n "$WAIT_OPEN" ] && [ "$SHIFT" = 0 ]; then
@@ -82,12 +83,12 @@ if run present; then
   stop_here present
 fi
 if run bite; then
-  echo "[3/4] BITE -- take it when ready"
+  echo "$(date +%T) [3/4] BITE -- take it when ready"
   set +e; arm bite --timeout 60; rc=$?; set -e
   [ $rc = 4 ] && echo "    no bite: retracting anyway"
   [ $rc != 0 ] && [ $rc != 4 ] && exit 1
   stop_here bite
 fi
 if run retract; then
-  echo "[4/4] RETRACT to food_detect_start"; arm retract $VO
+  echo "$(date +%T) [4/4] RETRACT to food_detect_start"; arm retract $VO
 fi

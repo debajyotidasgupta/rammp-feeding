@@ -168,6 +168,7 @@ def plunge(conn, a):
     on every run (the food TOP read 4-7 mm high -- why the stepped route re-measured; the slow zone
     starts SLOW_ABOVE the top to cover that). One joint trajectory along the vertical, fast then easing
     to 5 mm/s through the food, validated by the controller, watched for torque."""
+    t_plan = time.time()
     u = json.loads(Path(a.under).read_text())
     if "floor" not in u:
         raise MoveError("no floor reading under the tip -- cannot punch safely")
@@ -178,7 +179,7 @@ def plunge(conn, a):
         raise MoveError("food %.0f mm tall is implausible -- re-measure" % (1000 * u["height"]))
     slow_at = max(0.0, u["gap_top"] - SLOW_ABOVE)          # distance travelled when the slow zone starts
     p = tool_pose(conn); q0 = joints(conn); T0 = np.array(p[:3])
-    n = int(math.ceil(down / 0.004)); path = [q0]; prev = q0; d = [0.0]
+    n = int(math.ceil(down / 0.006)); path = [q0]; prev = q0; d = [0.0]     # fewer IK calls: planning is dead time
     for k in range(1, n + 1):
         dk = down * k / n
         q = _ik(conn, (T0[0], T0[1], T0[2] - dk), tuple(p[3:]), prev)
@@ -213,6 +214,7 @@ def plunge(conn, a):
         Te = np.array([T0[0], T0[1], T0[2] - down])
         scoop_plan = plan_scoop(conn, a, path[-1], Te, R_from_kortex(*p[3:]),
                                 dict(height=u["height"], floor_m=a.floor_m))
+    print("    plunge%s planned in %.1f s" % (" + scoop" if scoop_plan else "", time.time() - t_plan))
     if a.validate_only:
         print("    validate-only: controller accepted it, nothing moved")
         return

@@ -237,8 +237,10 @@ measured: commanding −90.000000 lands at −89.998138 every time. If you ever
   does its lateral offset from the tool axis — the quantity that swept the fork
   into joint 6.
 - **No self-collision model.** Torque is the only contact detector.
-- **Disk is at 95%** on the jetson. The unused Depth Anything V2 weights
-  (~390 MB) can go.
+- **Disk is at 93%** on the jetson (3.8 GB free, 2026-09-24, after removing the Depth Anything V2 weights and
+  the pip/apt caches). The rest is the OS/JetPack (~9 GB), LocateAnything-3B (7.2 GB), `~/venvs/la` (5.7 GB)
+  and the Docker images (3.3 GB), all in use. Depth Anything 3 (1.3 GB) serves only the optional
+  `STAGE1_DA3=1` cross-check -- the next thing to delete if space runs short.
 - The tool frame is the **configured** one (120 mm, 0.831 kg), not the flange.
 - The user-facing camera can **abort** motion but never drive it: ~100 mm error,
   and on the armrest its extrinsic to the arm isn't fixed.

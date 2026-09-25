@@ -80,4 +80,4 @@ rc=$?; set -e
 ev perceived ", \"rc\": $rc, \"target\": $([ -f "$OUT/target.json" ] && echo true || echo false)"   # 3 = no food
 echo
 echo "results: $OUT"
-exit $rc                         # 3 = no food in the bowl
+exit $rc                         # 3 = no food in the bowl, 5 = food left but no pickable piece detected

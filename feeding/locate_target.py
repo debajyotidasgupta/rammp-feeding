@@ -67,6 +67,34 @@ def to_colour(u, v, z_m, cx, cy):
     return FXC * X / Z + cx, FYC * Y / Z + cy, Z
 
 
+def food_left(D, bowls, cx, cy):
+    """Fraction of the bowl's inner area (depth) standing more than perception.food_left_above_floor_mm above
+    its floor, or None without a bowl / depth. The floor: the far end of the bowl's depth."""
+    if not bowls:
+        return None
+    b = bowls[0]
+    H, W = D.shape
+    m = 0.15                                        # the inner part: keep off the rim and walls
+    x1, x2 = b["x1"] + m * (b["x2"] - b["x1"]), b["x2"] - m * (b["x2"] - b["x1"])
+    y1, y2 = b["y1"] + m * (b["y2"] - b["y1"]), b["y2"] - m * (b["y2"] - b["y1"])
+    a0, a1 = colour_to_depth(x1, y1, 0.42, cx, cy), colour_to_depth(x2, y2, 0.42, cx, cy)
+    u0, u1 = sorted((int(a0[0]), int(a1[0]))); v0, v1 = sorted((int(a0[1]), int(a1[1])))
+    win = D[max(0, v0):min(H, v1), max(0, u0):min(W, u1)]
+    vv, uu = np.nonzero(win > 0)
+    if vv.size < 50:
+        return None
+    z = win[vv, uu].astype(float)
+    # the bowl's own surface (floor and walls, flat or curved): a quadratic fitted to the far envelope of the
+    # depth -- refit to the points not standing up toward the camera, a few times. What stands clear is food.
+    uu, vv = uu / max(1, win.shape[1]), vv / max(1, win.shape[0])
+    A = np.stack([np.ones_like(uu), uu, vv, uu * uu, vv * vv, uu * vv], 1)
+    keep = np.ones(z.size, bool)
+    for _ in range(6):
+        c, *_ = np.linalg.lstsq(A[keep], z[keep], rcond=None)
+        keep = z > A @ c - 3.0
+    return float((A @ c - z > float(cfg.perception.food_left_above_floor_mm)).mean())
+
+
 def top_surface_aim(D, f, cx, cy):
     """The centre of the uppermost piece's top inside a food box: the depth pixels within
     perception.top_band_mm of the box's nearest point, their largest connected patch -- a box that spans two
@@ -214,9 +242,17 @@ def main() -> int:
               % (i + 1, f["cx"], f["cy"], 1000 * zb_s, 1000 * zb_f, 1000 * Xc, 1000 * Yc, d_rim))
 
     if not rows:
-        # an empty bowl must be SAID, not crash: acquire refuses unless the newest perceive run has a target
+        # No usable box is not an empty bowl: on 2026-09-25 a pile of grapes and slices came back as one
+        # bowl-sized box (rightly dropped) and the loop ended "empty" with food left. Empty = nothing stands
+        # above the bowl floor in the depth; else say food is left (acquire refuses either way: no target).
+        left = food_left(D, det.get("bowl") or [], cx, cy)
+        if left is not None and left > float(cfg.perception.food_left_min_frac):
+            Path(a.out + ".json").with_name("food_left").write_text("food left, no pickable piece detected\n")
+            print("\nFOOD LEFT in the bowl (%.0f%% of it stands above its floor) but no pickable piece was detected"
+                  % (100 * left))
+            return 5
         Path(a.out + ".json").with_name("no_food").write_text("no food detected\n")
-        print("\nNO FOOD in the bowl")
+        print("\nNO FOOD in the bowl" + ("" if left is None else " (%.1f%% above its floor)" % (100 * left)))
         return 3
     visible = [r for r in rows if not r[1].get("_occluded")]
     pick = min(visible or rows, key=lambda r: r[6])   # most central visible: most rim clearance

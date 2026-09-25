@@ -175,6 +175,8 @@ perception:
   food_half_width_m: 0.017      # the floor ring beside the food (half a strawberry)
   aim_top_surface: true         # aim at the uppermost piece's top inside the chosen box, not the box centre
   top_band_mm: 6.0              # its top = depth pixels within this of the box's nearest point
+  food_left_above_floor_mm: 15  # no food box: the bowl is empty only if under food_left_min_frac of its inner area
+  food_left_min_frac: 0.05      # stands this far above its floor -- else "food left, none pickable" (exit 5)
 
 delivery:
   lift_m: 0.175                 # above the scoop end, before the swing (60 mm touched the bowl)

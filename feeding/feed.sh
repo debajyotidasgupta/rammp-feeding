@@ -36,6 +36,8 @@ while [ "$n" -lt "$BITES" ]; do
   echo; echo "== bite $((n + 1))  $(date +%T)   ($RAMMP_BITE)"; t0=$(date +%s); ev bite_start ", \"bite\": $((n + 1))"
   feeding/stage1.sh; rc=$?                       # scripts, not make: make turns every exit code into 2
   [ $rc = 3 ] && { echo "the bowl is empty"; ev bite_end ", \"result\": \"bowl empty\""; home; finish "bowl empty"; exit 0; }
+  [ $rc = 5 ] && { echo "food is LEFT in the bowl but no pickable piece was detected -- stopping (see $RAMMP_BITE/perceive)"
+                   ev bite_end ", \"result\": \"food left, none pickable\""; home; finish "food left, none pickable"; exit 5; }
   [ $rc != 0 ] && { echo "perceive failed (exit $rc) -- stopping at food_detect_start"; ev bite_end ", \"result\": \"perceive failed\", \"rc\": $rc"; finish "perceive failed"; exit 1; }
   STOP_AFTER= START_AT=over feeding/acquire.sh || { echo "acquire stopped -- arm left where it stopped; check it"; ev bite_end ", \"result\": \"acquire stopped\""; finish "acquire stopped"; exit 1; }
   STOP_AFTER= START_AT=swing feeding/deliver.sh; rc=$?          # WAIT_OPEN: from config/ unless set

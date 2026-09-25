@@ -12,4 +12,5 @@ camera_to_tip_m: 0.265          # measured 260-261 (ruler to bare table + depth;
 tip_px: [644, 405]              # where the utensil meets the food in the overlook image (not its box centre)
 image_region_px: [640, 405, 750, 719]   # its pixels at the overlook -- never detected, never mistaken for food
 # the aim offset depends on the food as much as the fork: config/food/<name>.yaml
+tine_offset_base_m: [0.0, 0.0]  # then inside the strawberry aim offset (+5, -6)
 punch_floor_margin_m: 0.0       # nominal margin above the measured bowl floor; really ~5-10 mm (see camera_to_tip)

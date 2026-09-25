@@ -4,6 +4,7 @@
 
 name: cubes
 prompt: food pieces             # what the detector is asked for
-aim_offset_base_m: [0.0, 0.0]   # (x, y) base frame, added to the detected centre in OVER. A cube is about as wide
+aim_offset_base_m: [0.0, 0.0]   # (x, y) base frame, added (with the utensil's tine offset) to the detected centre
+                                # in OVER. A cube is about as wide
                                 # as the fork head (~22 mm): aim at its centre (2026-09-25: the strawberry offset
                                 # put one side of the fork past a cube's corner)

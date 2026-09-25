@@ -159,7 +159,7 @@ def over(conn: KinovaConnection, target_path: str) -> None:
     if off > float(cfg.motion.near_pose_deg):
         raise MoveError("not at food_detect_start (%.1f deg away) -- run: make detect" % off)
     goal = list(json.loads(Path(target_path).read_text())["tool_goal"])
-    aim = cfg.food.aim_offset_base_m             # the food profile's aim correction, base frame
+    aim = cfg.aim_offset()                       # the utensil's tine offset + the food's, base frame
     goal[0] += aim[0]
     goal[1] += aim[1]
     p = tool_pose(conn)
@@ -167,7 +167,8 @@ def over(conn: KinovaConnection, target_path: str) -> None:
     if abs(goal[2] - p[2]) > float(A_.over_level_tol_m) or d > MAX_OVER_M:
         raise MoveError("target is not a small level move (%.0f mm across) -- re-run make perceive"
                         % (1000 * d))
-    runlog.event("over", goal=goal, aim_offset_m=list(aim), across_m=d)
+    runlog.event("over", goal=goal, aim_offset_m=list(aim), tine_offset_m=cfg.get("utensil.tine_offset_base_m", None),
+                 food_offset_m=cfg.get("food.aim_offset_base_m", None), across_m=d)
     goto_cartesian(conn, goal, tuple(p[3:]), speed=float(A_.over_speed_mps), label="OVER")
 
 

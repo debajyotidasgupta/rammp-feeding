@@ -11,6 +11,9 @@ tip_px: [685, 476]              # the tine tips in the colour image (the fork is
                                 # (644, 405), 34.5 mm off: a cube plunge landed ~15 mm -X, ~12 mm -Y of centre,
                                 # which the correction accounts for (fork_20260924.yaml keeps the old values)
 image_region_px: [640, 460, 760, 719]   # its pixels at the overlook -- never detected, never mistaken for food
+tine_offset_base_m: [0.0, -0.005]   # (x, y) base frame, added to every aim: the fork head curves, so the tines meet
+                                    # the food off the tool axis (user, at a 10 mm hover on a cube, 2026-09-25: x
+                                    # centred, y needs the -5 mm; 2026-09-24's -6 mm was the same effect)
 head_width_m: 0.023             # the fork head, across the tines (user, ruler, 2026-09-25). Cross-check: it spans
                                 # ~110 px in the image (x 640..750) = 22.5 mm at camera_to_tip
 # the aim offset depends on the food as much as the fork: config/food/<name>.yaml

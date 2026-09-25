@@ -223,7 +223,9 @@ as scratch scripts before being moved here. **Not yet run from these files.**
 | `image_region_px` | fork's image region | so detection never calls the utensil food |
 | `punch_floor_margin_m` | 0.0 | how far above the bowl floor the plunge stops |
 
-The **aim offset** is per food (`config/food/<name>.yaml`, `profiles.food` or `RAMMP_FOOD`): `strawberry`
+OVER aims at the detected centre + the utensil's **tine offset** (`tine_offset_base_m`: the fork head curves, so
+its tines meet the food off the tool axis; fork: (0, −5) mm, 2026-09-25) + the food's **aim offset**. The aim
+offset is per food (`config/food/<name>.yaml`, `profiles.food` or `RAMMP_FOOD`): `strawberry`
 (+5, −6) mm, set by eye at a 10 mm hover -- into the berry's bulk past the tines, and the fork head's curve;
 `cubes` (0, 0): a cube is about as wide as the fork head, and the strawberry offset put one side of the fork past
 a cube's corner (2026-09-25). Check a new food at a 10 mm hover (`make acquire STOP_AFTER=hover10`).

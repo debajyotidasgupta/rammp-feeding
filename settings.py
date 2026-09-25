@@ -57,6 +57,12 @@ class Cfg(dict):
         p = Path(os.path.expanduser(str(self.get(dotted))))
         return p if p.is_absolute() else ROOT / p
 
+    def aim_offset(self):
+        """(x, y) m added to a detected food centre in OVER: the utensil's tine offset + the food's aim offset."""
+        u = self.get("utensil.tine_offset_base_m", [0.0, 0.0])
+        f = self.get("food.aim_offset_base_m", [0.0, 0.0])
+        return [float(u[0]) + float(f[0]), float(u[1]) + float(f[1])]
+
     def overlook_pose(self):
         return json.loads(self.path("bowl.overlook_pose").read_text())
 

@@ -22,6 +22,9 @@ ACQ="$STAGE_DIR"
 STOP_AFTER="${STOP_AFTER:-}"
 START_AT="${START_AT:-over}"
 ARM="$(arm_cmd acquire)"
+G_OVER="$(S acquisition.over_depth_guess_m)"          # the floor measurement's starting depth, per position
+G30="$(S acquisition.stepped.depth_guess_m.hover30)"; G10="$(S acquisition.stepped.depth_guess_m.hover10)"
+H30="$(S acquisition.stepped.hover_m.hover30)"; H10="$(S acquisition.stepped.hover_m.hover10)"
 
 measure() {   # $1 = label; depth from the vision container, analysed on the host
   if ! PYTHONPATH=. "$PY" -m feeding.depth_grab "$ACQ/acq_$1.npy" >/dev/null 2>&1; then    # resident: ~0.5 s
@@ -59,21 +62,21 @@ if [ -z "$STEPPED" ] && [ -z "$STOP_AFTER" ] && [ -n "$(S features.pick_in_one_p
   set +e; $ARM pick 2>&1 | grep --line-buffered -v Deprecation; rc=${PIPESTATUS[0]}; set -e
   docker cp "$DRIVER":/tmp/under_over.json "$ACQ/under_over.json" >/dev/null 2>&1 || true
   if [ "$rc" = 6 ]; then           # no sensor depth under the tip: measure with the DA3 fill, then plunge
-    echo "$(date +%T) [2/3] PLUNGE + SCOOP (depth fallback)"; measure over 0.41; $ARM plunge --then-scoop 2>&1 | grep --line-buffered -v Deprecation
+    echo "$(date +%T) [2/3] PLUNGE + SCOOP (depth fallback)"; measure over "$G_OVER"; $ARM plunge --then-scoop 2>&1 | grep --line-buffered -v Deprecation
   elif [ "$rc" != 0 ]; then exit "$rc"; fi
   PICKED=1; SCOOPED=1
 fi
 if [ -z "$PICKED" ] && run over; then echo "$(date +%T) [1/3] OVER"; $ARM over 2>&1 | grep --line-buffered -v Deprecation; stop_here over; fi
 if [ -n "$PICKED" ]; then :
 elif [ -n "$STEPPED" ]; then
-  if run hover30; then echo "  down to 30 mm";   measure over 0.41;  $ARM descend --to-above 0.030 2>&1 | grep --line-buffered -v Deprecation; stop_here hover30; fi
-  if run hover10; then echo "  down to 10 mm";   measure hover30 0.29; $ARM descend --to-above 0.010 2>&1 | grep --line-buffered -v Deprecation; stop_here hover10; fi
-  if run punch;   then echo "  PUNCH";           measure hover10 0.275; $ARM punch 2>&1 | grep --line-buffered -v Deprecation; stop_here punch; fi
+  if run hover30; then echo "  down to 30 mm";   measure over "$G_OVER";  $ARM descend --to-above "$H30" 2>&1 | grep --line-buffered -v Deprecation; stop_here hover30; fi
+  if run hover10; then echo "  down to 10 mm";   measure hover30 "$G30"; $ARM descend --to-above "$H10" 2>&1 | grep --line-buffered -v Deprecation; stop_here hover10; fi
+  if run punch;   then echo "  PUNCH";           measure hover10 "$G10"; $ARM punch 2>&1 | grep --line-buffered -v Deprecation; stop_here punch; fi
 elif run plunge; then
   if [ "$STOP_AFTER" = plunge ]; then
-    echo "$(date +%T) [2/3] PLUNGE";  measure over 0.41; $ARM plunge 2>&1 | grep --line-buffered -v Deprecation; stop_here plunge
+    echo "$(date +%T) [2/3] PLUNGE";  measure over "$G_OVER"; $ARM plunge 2>&1 | grep --line-buffered -v Deprecation; stop_here plunge
   else                    # plunge and scoop as one planned sequence: no pause at the bottom
-    echo "$(date +%T) [2/3] PLUNGE + SCOOP"; measure over 0.41; $ARM plunge --then-scoop 2>&1 | grep --line-buffered -v Deprecation
+    echo "$(date +%T) [2/3] PLUNGE + SCOOP"; measure over "$G_OVER"; $ARM plunge --then-scoop 2>&1 | grep --line-buffered -v Deprecation
     SCOOPED=1
   fi
 fi

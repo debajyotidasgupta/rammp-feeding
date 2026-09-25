@@ -27,6 +27,7 @@ deployment:
     detector_port: 8765         # LocateAnything + Depth Anything 3
     face_port: 8766             # MediaPipe
     depth_port: 8767            # the depth stream, inside the vision container
+    startup_timeout_s: 300      # make models waits this long for all three (2026-09-25: the detector took > 120 s)
 
 workspace:                      # where the table and the bowl are in THIS deployment (arm base frame, m).
   # The bowl profile's poses were captured at its `captured_at`; every bowl-dependent pose is shifted by the
@@ -34,6 +35,8 @@ workspace:                      # where the table and the bowl are in THIS deplo
   # change matters. Moving the bowl or raising the table = edit these two lines (or config/local.yaml).
   table_height_m: 0.2140        # the table surface beside the bowl (2026-09-24 runs: 0.213-0.215; the bowl floor 0.221)
   bowl_centre_m: [0.2692, 0.2765]   # the bowl's centre on the table (x, y) (the same runs: +-2 mm)
+  max_shape_change_deg: 30      # a shifted food_detect_start may differ this much on any joint from the captured
+                                # one; more = the arm would take a different shape there: re-capture instead
 
 features:                       # what to switch on and off
   resident_models: true         # make feed starts the servers and waits until every model is warm
@@ -58,6 +61,17 @@ motion:
   max_tilt_deg: 25.0            # the utensil's worst allowed tilt off straight down (except scoop / delivery)
   no_progress_s: 3.0            # nothing moved by then: the controller ignored the move
   near_pose_deg: 1.0            # within this of a pose's joints = "at" that pose
+  known_pose_deg: 5.0           # `make start`: within this of food_detect_start / the lift top = a pose it retraces from
+  settle_dps: 5.0               # the final settle / snap onto a measured pose
+  max_joint_step_deg: 8         # a continuous IK path: a bigger step on any joint is a jump, not a path
+  steer_within_deg: 25          # paths steer J2 / J4 / J6 away from a limit once within this of it ...
+  steer_step_deg: 3.0           # ... by this much of IK guess per step
+  speed_fallbacks: [1.0, 0.75, 0.5, 0.35]   # the controller refused a trajectory: retry at these fractions of its speed
+  watch_extra_s: 15             # a trajectory not ended this long after its planned time: stop watching
+  moved_deg: 0.05               # any joint this far from the start = the move began
+  settle_speed_dps: 0.2         # after arriving, wait (at most settle_max_s) until every joint is slower than this
+  settle_max_s: 2.0
+  cartesian_orientation_dps: 10.0   # orientation speed limit of straight-line tool moves
   sequence:                     # make detect / make start
     lift_z_m: 0.545             # tool z at the top of the lift from feeding_start (the arm's reach sets it)
     min_lift_above_table_m: 0.25   # the swing to the bowl crosses the table: refuse a lift top lower than this
@@ -65,6 +79,7 @@ motion:
     swing_dps: 20.0
 
 guards:                         # contact guard: a joint-torque step this big against recent history = stop
+  torque_window: {span: 12, gap: 5}   # samples: the baseline window, and the gap before the sample compared to it
   torque_step_nm:
     default: 2.5                # every move without its own entry
     plunge: 2.5                 # contact is the point here: keep it sensitive
@@ -78,11 +93,17 @@ guards:                         # contact guard: a joint-torque step this big ag
 acquisition:
   over_speed_mps: 0.05
   over_max_m: 0.10              # OVER is a small correction inside the bowl, never a transit
+  over_level_tol_m: 0.002       # OVER's goal must be at the overlook height, within this
+  over_depth_guess_m: 0.41      # where the floor measurement starts looking, from OVER (camera to food, m)
   plunge:
     fast_mps: 0.050
     slow_mps: 0.008             # through the food
     slow_above_food_m: 0.020    # the overlook reads the food top 4-7 mm high; this covers it
     ik_step_m: 0.006
+    speed_fallbacks: [1.0, 0.75, 0.5]   # the controller refused the plunge: retry at these fractions
+    ramp_start_frac: 0.25       # the speed profile: starts at this fraction of fast_mps, full speed after ramp_m,
+    ramp_m: 0.015               # and eases (smoothstep) to slow_mps over ease_m before the slow zone
+    ease_m: 0.015
     sane_range_m: [0.080, 0.250]
     food_height_range_m: [0.010, 0.060]
     refuse_if_floor_filled_over: 0.5   # fraction of the floor reading from the depth fallback
@@ -91,14 +112,23 @@ acquisition:
       enabled: true
       depth_below_top_m: 0.025  # plunge this far below the target's top instead (user, 2026-09-25: 25-30 mm)
       min_tip_above_table_m: 0.010   # never deeper than this above the table (workspace.table_height_m), whatever
-                                     # the depth says; shorter than 10 mm into the food after that = refused
+                                     # the depth says ...
+      min_into_food_m: 0.010         # ... and refused if that leaves less than this into the food
+      refuse_if_top_filled_over: 0.5 # the top reading mostly from the Depth Anything 3 fallback: refused
   scoop:
     speed_dps: 25.0
     rot_exp: 0.8                # turn angle = 90 * s**rot_exp: <1 starts turning the moment the food lifts
     waypoints: 40
     backoff_from: 0.2           # fraction of the scoop before backing off toward the bowl's scoop end
     max_backoff_m: 0.300
+    max_joint_step_deg: 12      # the scoop's continuous IK path: a bigger step on any joint is a jump
+    default_food_height_m: 0.030   # a scoop run on its own with no record of the piece
+    ramp: 0.25                  # (kept for the callers; the time scaling bounds acceleration itself)
   stepped:                      # the old route, for aim checks (STOP_AFTER=hover10)
+    hover_m: {hover30: 0.030, hover10: 0.010}          # the two hovers above the food top
+    depth_guess_m: {hover30: 0.29, hover10: 0.275}     # the floor measurement's starting depth at each hover
+    slow_zone_m: 0.020          # descend / punch: the last this-many mm at slow_mps
+    punch_range_m: [0.010, 0.060]
     approach_stop_m: 0.010
     descend_max_m: 0.200
     fast_mps: 0.015
@@ -129,6 +159,18 @@ delivery:
   sidestep_m: 0.050             # occlusion retries: step this far, at most twice, then the nose estimate
   nose_to_mouth: 0.84           # nose heights below the nose, upright image (0.81-0.87 measured)
   mouth_behind_nose_m: 0.005
+  mouth_check:                  # a detected mouth box is used only if it is anatomically plausible against the nose
+    max_box_frac: 0.03          # of the (upright) frame -- bigger = junk (also for the nose box)
+    below_nose_heights: [0.4, 1.5]   # its centre this many nose heights below the nose's
+    max_sideways_nose_widths: 1.0
+    max_depth_diff_m: 0.030     # from the nose's depth
+  level_tol: 0.1                # |utensil axis z| below this = level (at the user)
+  pointing_tol_cos: 0.99        # the utensil points at the user (+Y) / back along the swing: cos of the angle
+  arrived_m: 0.003              # closer than this to a goal = already there
+  sidestep_mps: 0.02
+  plan_cache_tol_deg: {swing: 1.0, retract: 1.5}   # a cached plan is reused from within this of its start
+  bite_baseline_samples: 40     # force samples at rest before the wait (~1 s)
+  bite_settle_s: 10.0           # after the bite: watch at most this long for the force to settle
   open_mouth_ratio: 0.20        # inner-lip gap / mouth width; closed reads <= 0.02
   open_mouth_hold_s: 0.30
   open_mouth_timeout_s: 60.0    # no open mouth by then = the user declined: take the food back
@@ -140,5 +182,9 @@ delivery:
     swing_dps: 25.0
     down_dps: 20.0
     home_dps: 20.0
+    max_from_swing_end_m: 0.400 # further than this from where the swing ended = not retracing from here
+    resume_tol_m: 0.020         # within this of the swing's start (utensil turned back) = legs 1-2 already done
+    descend_to_above_scoop_end_m: 0.080   # the descent's end; the lift's arm shape at this height steers it
+    home_arrived_deg: 0.2       # the move home tripped on braking: arrived if within this
     min_tip_above_table_m: 0.086   # the joint move home keeps the utensil tip this far above the table (0.300 m
                                    # absolute; unsteered, that move dipped the tip to the bowl floor, 0.222)

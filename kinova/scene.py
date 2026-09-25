@@ -76,7 +76,7 @@ def overlook_joints(conn: KinovaConnection) -> Joints:
     where = "the bowl moved (%+.0f, %+.0f) mm and the table %+.0f mm from where food_detect_start was captured" % tuple(d)
     if q is None:
         raise MoveError("food_detect_start is not reachable: %s -- re-capture it there" % where)
-    if max_step(q, seed) > 30:
+    if max_step(q, seed) > float(cfg.workspace.max_shape_change_deg):
         raise MoveError("food_detect_start needs a different arm shape (%.0f deg on one joint): %s -- re-capture it"
                         % (max_step(q, seed), where))
     if margin(q) < float(cfg.motion.plan_min_margin_deg):

@@ -31,6 +31,11 @@ log = runlog.get("motion")
 # J2 / J4 / J6 limits, keyed by 0-based joint index
 LIMITS = {int(j) - 1: float(v) for j, v in cfg.motion.joint_limits_deg.items()}
 A_MAX = float(cfg.motion.joint_accel_cap_dps2)        # deg/s^2 per joint (the controller refuses above 80)
+MAX_STEP_DEG = float(cfg.motion.max_joint_step_deg)   # a bigger IK step on any joint is a jump, not a path
+STEER_WITHIN = float(cfg.motion.steer_within_deg)     # steer J2/J4/J6 off a limit once within this of it
+STEER_STEP = float(cfg.motion.steer_step_deg)
+SPEED_FALLBACKS = [float(f) for f in cfg.motion.speed_fallbacks]   # refused: retry at these fractions
+WATCH_EXTRA_S = float(cfg.motion.watch_extra_s)       # stop watching this long after the planned end
 
 PoseAt = Callable[[float], "tuple[np.ndarray, np.ndarray]"]   # s in [0, 1] -> (tool xyz, R)
 
@@ -134,7 +139,7 @@ def homotopy(conn: KinovaConnection, q0: Joints, at: PoseAt, n: int,
     """Continuous IK path along at(s) -> (tool xyz, R), s = 1/n .. 1: (path including q0, None), or (None, why).
 
     The 7th DoF is steered away from J2/J4/J6 limits (without it the swing only fits 60 mm of retraction), or
-    the IK guess is blended `toward` a known arm shape. A step over 8 deg on any joint is a jump, not a path.
+    the IK guess is blended `toward` a known arm shape. A step over MAX_STEP_DEG on any joint is a jump.
     """
     prev, path = q0, [q0]
     for k in range(1, n + 1):
@@ -145,13 +150,13 @@ def homotopy(conn: KinovaConnection, q0: Joints, at: PoseAt, n: int,
         else:
             g = list(prev)
             for j in (1, 3, 5):
-                if abs(prev[j]) > LIMITS[j] - 25:
-                    g[j] = prev[j] - math.copysign(min(3.0, abs(prev[j])), prev[j])
+                if abs(prev[j]) > LIMITS[j] - STEER_WITHIN:
+                    g[j] = prev[j] - math.copysign(min(STEER_STEP, abs(prev[j])), prev[j])
         q = _ik(conn, T, kortex_from_R(R), g)
         if q is None:
             return None, "IK fails at %d%%" % (100 * s)
         step = max_step(q, prev)
-        if step > 8:
+        if step > MAX_STEP_DEG:
             return None, "joint jump %.0f deg at %d%%" % (step, 100 * s)
         prev = q
         path.append(q)
@@ -223,14 +228,14 @@ def _waypoints(conn: KinovaConnection, path: Sequence[Sequence[float]], top_spee
     """The joint path as one WaypointList the controller has validated, and the speed it took; slower if
     refused. (`ramp` is kept for the callers; the time scaling now bounds acceleration itself.)"""
     raw = [x.position for x in conn.base_cyclic.RefreshFeedback().actuators]
-    for speed in (top_speed, top_speed * 0.75, top_speed * 0.5, top_speed * 0.35):
+    for speed in [top_speed * f for f in SPEED_FALLBACKS]:
         wl = waypoint_list(raw, path, _time_scale(path, speed, A_MAX * (speed / top_speed)))
         errs = validate(conn, wl)
         if not errs:
             record_plan(what, wl, speed_dps=speed, top_speed_dps=top_speed)
             return wl, speed
         log.info("    %.0f deg/s refused by the controller: %s", speed, " ".join(str(errs[0]).split()))
-    raise MoveError("controller refused the %s even at %.0f deg/s -- nothing moved" % (what, top_speed * 0.35))
+    raise MoveError("controller refused the %s even at %.0f deg/s -- nothing moved" % (what, top_speed * SPEED_FALLBACKS[-1]))
 
 
 def run_path(conn: KinovaConnection, path: Sequence[Sequence[float]], dps: float, label: str, go: bool,
@@ -259,7 +264,7 @@ def run_path(conn: KinovaConnection, path: Sequence[Sequence[float]], dps: float
     conn.base.ExecuteWaypointTrajectory(wl)
     t0 = time.time()
     try:
-        while time.time() - t0 < total + 15:
+        while time.time() - t0 < total + WATCH_EXTRA_S:
             time.sleep(0.02)
             fb = conn.base_cyclic.RefreshFeedback()
             tel.add(fb)

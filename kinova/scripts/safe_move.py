@@ -130,7 +130,8 @@ class TorqueGuard:
     against.
     """
 
-    def __init__(self, n: int = 7, span: int = 12, gap: int = 5, limit: float = TORQUE_STEP_NM):
+    def __init__(self, n: int = 7, span: int = int(cfg.guards.torque_window.span),
+                 gap: int = int(cfg.guards.torque_window.gap), limit: float = TORQUE_STEP_NM):
         self.hist = [deque(maxlen=span + gap) for _ in range(n)]
         self.span, self.gap, self.limit = span, gap, limit
 
@@ -309,16 +310,16 @@ def _watch_loop(conn, label, arrived, start_q, max_tilt, torque_limit, timeout, 
         if why:
             raise MoveError("%s ABORTED by the controller: %s%s" % (label, why, _report(conn)))
         q = [fold(a.position) for a in fb.actuators]
-        if not moved and max(abs(fold(a - b)) for a, b in zip(q, start_q)) > 0.05:
+        if not moved and max(abs(fold(a - b)) for a, b in zip(q, start_q)) > float(cfg.motion.moved_deg):
             moved = True
         if arrived(fb, q):
             # Let it actually stop. A new trajectory sent while the last is
             # still decelerating can be dropped -- that is the other way a
             # command gets silently ignored.
             t_settle = time.time()
-            while time.time() - t_settle < 2.0:
+            while time.time() - t_settle < float(cfg.motion.settle_max_s):
                 vel = conn.base_cyclic.RefreshFeedback().actuators
-                if max(abs(a.velocity) for a in vel) < 0.2:
+                if max(abs(a.velocity) for a in vel) < float(cfg.motion.settle_speed_dps):
                     break
                 time.sleep(0.05)
             return worst, time.time() - t0
@@ -403,7 +404,7 @@ def goto_cartesian(conn: KinovaConnection, xyz: Sequence[float], rpy: Sequence[f
     t.x, t.y, t.z = xyz
     t.theta_x, t.theta_y, t.theta_z = rpy
     cp.constraint.speed.translation = speed
-    cp.constraint.speed.orientation = 10.0
+    cp.constraint.speed.orientation = float(cfg.motion.cartesian_orientation_dps)
     conn.base.ExecuteAction(a)
 
     def arrived(fb: Any, q: Joints) -> bool:

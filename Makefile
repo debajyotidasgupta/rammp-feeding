@@ -31,6 +31,7 @@ DET_PORT   := $(shell $(SET) deployment.servers.detector_port)
 FACE_PORT  := $(shell $(SET) deployment.servers.face_port)
 DEPTH_PORT := $(shell $(SET) deployment.servers.depth_port)
 DEPTH_TOPIC:= $(shell $(SET) camera.streams.depth_topic)
+MODELS_WAIT:= $(shell $(SET) deployment.servers.startup_timeout_s)
 # RTSP transport for the depth stream. The session drops periodically either way
 # (an upstream timeout, not a network fault -- the link measures 0% loss), but
 # measured over ~250s: udp drops every ~62s with a fixed 6s recovery; tcp drops
@@ -85,7 +86,7 @@ models:
 	else docker cp feeding/depth_server.py $(VISION):/tmp/depth_server.py >/dev/null && \
 	  docker exec -d $(VISION) bash -lc "source /opt/ros/humble/setup.bash; source /ros2_ws/install/setup.bash; cd /tmp && python3 depth_server.py --port $(DEPTH_PORT) --topic $(DEPTH_TOPIC) > /tmp/depth_server.log 2>&1" && \
 	  echo "starting depth server (in $(VISION))"; fi
-	@for i in $$(seq 1 120); do curl -s -m 2 http://127.0.0.1:$(DET_PORT)/ping | grep -q ok && curl -s -m 2 http://127.0.0.1:$(FACE_PORT)/ping | grep -q ok && curl -s -m 2 http://127.0.0.1:$(DEPTH_PORT)/ping | grep -q ok && { echo "all models loaded and warm, depth streaming ($${i} s)"; exit 0; }; sleep 1; done; echo "models did not come up -- see $(RUNS)/*.log"; exit 1
+	@for i in $$(seq 1 $(MODELS_WAIT)); do curl -s -m 2 http://127.0.0.1:$(DET_PORT)/ping | grep -q ok && curl -s -m 2 http://127.0.0.1:$(FACE_PORT)/ping | grep -q ok && curl -s -m 2 http://127.0.0.1:$(DEPTH_PORT)/ping | grep -q ok && { echo "all models loaded and warm, depth streaming ($${i} s)"; exit 0; }; sleep 1; done; echo "models did not come up -- see $(RUNS)/*.log"; exit 1
 
 detector: models
 

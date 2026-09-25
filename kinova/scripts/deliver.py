@@ -51,7 +51,7 @@ import runlog
 from kinova import scene
 from kinova.connection import kinova_connection
 from settings import cfg
-from feeding.camera import CAM_IN_TOOL, CXC, CYC, FXC, FYC
+from feeding.camera import CAM_IN_TOOL, COLOUR_SIZE, CXC, CYC, FXC, FYC
 from kinova.motion import (R_from_kortex, Rz, _ik, axis, dps_for, fk_tip, homotopy, margin, max_step, run_path,
                            tip_in_tool)
 from kinova.scripts.safe_move import Joints, MoveError, fold, goto, goto_cartesian, joints, tool_pose
@@ -84,7 +84,14 @@ RETRACT_TORQUE_NM = float(G.retract)
 SWING_TORQUE_NM = float(G.swing)
 APPROACH_TORQUE_NM = float(G.approach)
 MIN_TIP_Z = scene.min_tip_z()                     # the return's joint move keeps the utensil tip above this (table-relative)
-UP_W, UP_H = 720, 1280         # upright (rotated) image
+UP_W, UP_H = COLOUR_SIZE[1], COLOUR_SIZE[0]      # the upright (rotated) image the face detector sees
+MC = DL.mouth_check
+LEVEL_TOL = float(DL.level_tol)                   # |utensil axis z| below this = level
+POINTING_COS = float(DL.pointing_tol_cos)         # the utensil points along a direction: cos of the angle off it
+ARRIVED_M = float(DL.arrived_m)                   # closer than this to a goal = already there
+DESCEND_ABOVE_M = float(DL.retract.descend_to_above_scoop_end_m)   # the retract's descent ends this far above the
+                                                                   # scoop end; the lift's arm shape there steers it
+BITE_BASELINE_N = int(DL.bite_baseline_samples)
 
 STATE_DIR = Path(os.environ.get("RAMMP_STATE_DIR", "/tmp"))   # what the steps hand each other, across bites
 STATE = STATE_DIR / "deliver_state.json"
@@ -116,7 +123,7 @@ class DeliveryState:
         return cls(**json.loads(STATE.read_text()))
 
 
-def _cached(cache: Path, q_start: Sequence[float], tol: float = 1.0) -> dict | None:
+def _cached(cache: Path, q_start: Sequence[float], tol: float) -> dict | None:
     """A cached plan, if it was planned from (within tol deg of) q_start."""
     try:
         c = json.loads(cache.read_text())
@@ -140,7 +147,7 @@ class SwingPlan:
 
     @classmethod
     def cached(cls, q_start: Joints) -> "SwingPlan | None":
-        c = _cached(SWING_CACHE, q_start)
+        c = _cached(SWING_CACHE, q_start, tol=float(DL.plan_cache_tol_deg.swing))
         return cls(**c) if c else None
 
 
@@ -157,7 +164,7 @@ class RetractPlan:
 
     @classmethod
     def cached(cls, q_start: Joints) -> "RetractPlan | None":
-        c = _cached(RETRACT_CACHE, q_start, tol=1.5)
+        c = _cached(RETRACT_CACHE, q_start, tol=float(DL.plan_cache_tol_deg.retract))
         return cls(**c) if c else None
 
 
@@ -174,7 +181,7 @@ def swing(conn: KinovaConnection, validate_only: bool = False) -> None:
     p = tool_pose(conn)
     q0 = joints(conn)
     R0 = R_from_kortex(*p[3:])
-    if axis(R0)[1] < 0.99:
+    if axis(R0)[1] < POINTING_COS:
         raise MoveError("utensil is not pointing at the user (+Y) -- run from the end of the scoop")
     # The swing turns about the BASE axis: it was built and validated for scoops ending on the base's
     # -Y side (y -0.04 .. -0.10). From a bowl in front of the user (+Y) the same turn would sweep the
@@ -201,7 +208,7 @@ def _plan_swing(conn: KinovaConnection, q0: Joints, T0: np.ndarray, R0: np.ndarr
     lift, err = homotopy(conn, q0, lambda s: (T0 + np.array([0, 0, LIFT_M * s]), R0), n_lift)
     if lift is None:
         raise MoveError("the %.0f mm lift is not reachable (%s) -- nothing moved" % (1000 * LIFT_M, err))
-    q80 = lift[round(n_lift * 0.080 / LIFT_M)]                  # the return's arm shape, for retract
+    q80 = lift[round(n_lift * DESCEND_ABOVE_M / LIFT_M)]        # the return's arm shape, for retract
     # 2. swing toward the user while retracting along the utensil, as far as the joints allow
     tip0 = T0 + np.array([0, 0, LIFT_M]) + R0 @ tip_in_tool()
     ax0 = axis(R0)
@@ -256,7 +263,7 @@ def _mouth(f: dict, allow_nose: bool = False) -> tuple[list[float] | None, str]:
     # sensor, which sits 27 mm beside the colour camera) -- then only the nose-based fallback is unavailable
     x1, y1, x2, y2 = n["box_upright"]
     ncx, ncy, nw, nh = (x1 + x2) / 2, (y1 + y2) / 2, x2 - x1, y2 - y1
-    if nw * nh > 0.03 * UP_W * UP_H:
+    if nw * nh > float(MC.max_box_frac) * UP_W * UP_H:
         raise MoveError("nose box is %.0f%% of the frame -- junk" % (100 * nw * nh / (UP_W * UP_H)))
     why = _mouth_box_problem(f.get("mouth"), n, ncx, ncy, nw, nh)
     if why is None:
@@ -277,13 +284,14 @@ def _mouth_box_problem(m: dict | None, n: dict, ncx: float, ncy: float, nw: floa
         return "no mouth box"
     a1, b1, a2, b2 = m["box_upright"]
     mcx, mcy = (a1 + a2) / 2, (b1 + b2) / 2
-    if (a2 - a1) * (b2 - b1) > 0.03 * UP_W * UP_H:
+    lo, hi = MC.below_nose_heights
+    if (a2 - a1) * (b2 - b1) > float(MC.max_box_frac) * UP_W * UP_H:
         return "mouth box covers %.0f%% of the frame" % (100 * (a2 - a1) * (b2 - b1) / (UP_W * UP_H))
-    if not 0.4 * nh < mcy - ncy < 1.5 * nh:
+    if not float(lo) * nh < mcy - ncy < float(hi) * nh:
         return "mouth box %.2f nose heights below the nose" % ((mcy - ncy) / nh)
-    if abs(mcx - ncx) > nw:
+    if abs(mcx - ncx) > float(MC.max_sideways_nose_widths) * nw:
         return "mouth box %.2f nose widths sideways" % (abs(mcx - ncx) / nw)
-    if n.get("depth_m") and abs(m["depth_m"] - n["depth_m"]) > 0.030:
+    if n.get("depth_m") and abs(m["depth_m"] - n["depth_m"]) > float(MC.max_depth_diff_m):
         return "mouth depth %.0f mm off the nose's" % (1000 * abs(m["depth_m"] - n["depth_m"]))
     return None
 
@@ -306,7 +314,7 @@ def approach(conn: KinovaConnection, face_path: str, colour_path: str, allow_nos
     T0 = np.array(p[:3])
     R = R_from_kortex(*p[3:])
     ax = axis(R)
-    if abs(ax[2]) > 0.1:
+    if abs(ax[2]) > LEVEL_TOL:
         raise MoveError("utensil is not level -- run the swing first")
     mouth = T0 + R @ (CAM_IN_TOOL + np.array([-cam[0], -cam[1], cam[2]]))
     stop = STOP_M
@@ -324,7 +332,7 @@ def approach(conn: KinovaConnection, face_path: str, colour_path: str, allow_nos
                  distance_m=float(L), face=face_path)
     if L > MAX_APPROACH_M:
         raise MoveError("an approach of %.0f mm is too long -- not moving" % (1000 * L))
-    if L < 0.003:
+    if L < ARRIVED_M:
         log.info("    already there")
         return 0
     path, err = homotopy(conn, q0, lambda s: (T0 + (Tg - T0) * s, R), 40)
@@ -345,7 +353,7 @@ def sidestep(conn: KinovaConnection, step_m: float) -> None:
     q0 = joints(conn)
     if not all(_ik(conn, (p[0], p[1] - step_m * k / 5, p[2]), tuple(p[3:]), q0) for k in range(1, 6)):
         raise MoveError("the sidestep is not reachable -- not moving")
-    goto_cartesian(conn, (p[0], p[1] - step_m, p[2]), tuple(p[3:]), speed=0.02,
+    goto_cartesian(conn, (p[0], p[1] - step_m, p[2]), tuple(p[3:]), speed=float(DL.sidestep_mps),
                    label="sidestep -Y %.0f mm" % (1000 * step_m), max_tilt=95.0)
 
 
@@ -360,7 +368,7 @@ def bite(conn: KinovaConnection, timeout_s: float) -> int:
         tel.add(fb)
         b = fb.base
         return np.array([b.tool_external_wrench_force_x, b.tool_external_wrench_force_y, b.tool_external_wrench_force_z])
-    base = np.median([F() for _ in range(40)], 0)                    # ~1 s at rest
+    base = np.median([F() for _ in range(BITE_BASELINE_N)], 0)      # ~1 s at rest
     log.info("    waiting up to %.0f s for the bite (> %.1f N for %.2f s)", timeout_s, BITE_N, BITE_HOLD_S)
     t0 = time.time()
     above = None
@@ -383,11 +391,12 @@ def bite(conn: KinovaConnection, timeout_s: float) -> int:
     log.info("    BITE at %.1f s (%.1f N)", above, peak)
     tail = []
     ts = time.time()
-    while time.time() - ts < 10:
+    n = BITE_BASELINE_N
+    while time.time() - ts < float(DL.bite_settle_s):
         tail.append(F() - base)
-        if len(tail) > 40 and max(np.linalg.norm(x) for x in tail[-40:]) < BITE_N:
+        if len(tail) > n and max(np.linalg.norm(x) for x in tail[-n:]) < BITE_N:
             break
-    rest = np.linalg.norm(np.median(tail[-40:], 0))
+    rest = np.linalg.norm(np.median(tail[-n:], 0))
     log.info("    settled; resting shift %.2f N (the food's weight gone: ~0.2-0.4 N)", rest)
     tel.save(outcome="bite", baseline_n=base, threshold_n=BITE_N, peak_n=peak, bite_at_s=above, resting_shift_n=rest)
     runlog.event("bite", at_s=above, peak_n=peak, resting_shift_n=rest)
@@ -404,19 +413,19 @@ def retract(conn: KinovaConnection, validate_only: bool = False) -> None:
     q0 = joints(conn)
     T0 = np.array(p[:3])
     R0 = R_from_kortex(*p[3:])
-    if abs(axis(R0)[2]) > 0.1:
+    if abs(axis(R0)[2]) > LEVEL_TOL:
         raise MoveError("utensil is not level -- not at the user")
     RS = R_from_kortex(*st.start_rpy)
     axS = axis(RS)
     TS = np.array(st.start_tool)
     # resuming after legs 1-2 (utensil already turned back, at the swing's start): straight to leg 3.
     # Leg 1 from here would "back off" toward the swing's END, i.e. toward the user.
-    resumed = axis(R0) @ axS > 0.99 and np.linalg.norm(T0 - TS) < 0.020
+    resumed = axis(R0) @ axS > POINTING_COS and np.linalg.norm(T0 - TS) < float(DL.retract.resume_tol_m)
     if not resumed and axis(R0) @ axS > 0.5:
         raise MoveError("utensil is neither at the user nor back at the swing's start -- not guessing a path")
     Te = np.array(st.end_tool)
     L = 0.0 if resumed else np.linalg.norm(Te - T0)
-    if L > 0.400:
+    if L > float(DL.retract.max_from_swing_end_m):
         raise MoveError("%.0f mm from the swing's end -- not retracing from here" % (1000 * L))
     # 1. back off along the utensil, to where the swing ended
     if resumed:
@@ -437,7 +446,7 @@ def retract(conn: KinovaConnection, validate_only: bool = False) -> None:
 def _back_off(conn: KinovaConnection, q0: Joints, T0: np.ndarray, R0: np.ndarray, Te: np.ndarray, L: float,
               go: bool) -> Joints:
     """Leg 1: straight back along the utensil to the swing's end. Never stops on torque (moving away)."""
-    if L <= 0.003:
+    if L <= ARRIVED_M:
         return q0
     path, err = homotopy(conn, q0, lambda s: (T0 + (Te - T0) * s, R0), 40)
     if path is None:
@@ -457,7 +466,7 @@ def _reverse_swing(conn: KinovaConnection, st: DeliveryState, q1: Joints, T0: np
     ax1 = axis(R1)
     th = math.degrees(math.atan2(np.cross(axS, ax1)[2], axS @ ax1))
     u0 = th / 90.0
-    tip1 = (Te if L > 0.003 else T0) + R1 @ tipv_t
+    tip1 = (Te if L > ARRIVED_M else T0) + R1 @ tipv_t
     e = tip1 - swing_tip(tipS, axS, st.retract_m, u0)
 
     def at2(s: float) -> tuple[np.ndarray, np.ndarray]:
@@ -467,13 +476,13 @@ def _reverse_swing(conn: KinovaConnection, st: DeliveryState, q1: Joints, T0: np
     if rc:
         path2 = [q1] + rc.path2[1:]
         log.info("    reverse swing + descent: planned before, reused")
-        run_path(conn, path2, RETRACT_SWING_DPS, "reverse swing", go, from_here=go or L <= 0.003,
+        run_path(conn, path2, RETRACT_SWING_DPS, "reverse swing", go, from_here=go or L <= ARRIVED_M,
                  torque_limit=RETRACT_TORQUE_NM)
     else:
         path2, err = homotopy(conn, q1, at2, 60)
         if path2 is None:
             raise MoveError("reverse swing " + err)
-        run_path(conn, path2, RETRACT_SWING_DPS, "reverse swing %.0f deg" % th, go, from_here=go or L <= 0.003,
+        run_path(conn, path2, RETRACT_SWING_DPS, "reverse swing %.0f deg" % th, go, from_here=go or L <= ARRIVED_M,
                  torque_limit=RETRACT_TORQUE_NM)
     return (joints(conn) if go else path2[-1]), path2
 
@@ -483,7 +492,7 @@ def _down_and_home(conn: KinovaConnection, st: DeliveryState, q1: Joints, q2: Jo
     """Leg 3: down to the scoop end + 80 mm steering into the lift's arm shape, then the joint move home --
     refused if that joint move would take the utensil tip below MIN_TIP_Z."""
     Ta = TS
-    Td = np.array([TS[0], TS[1], st.scoop_end_z + 0.080])
+    Td = np.array([TS[0], TS[1], st.scoop_end_z + DESCEND_ABOVE_M])
     qd = scene.overlook_joints(conn)
     if rc and not resumed:
         path3, lo = [q2] + rc.path3[1:], rc.lo
@@ -507,7 +516,7 @@ def _down_and_home(conn: KinovaConnection, st: DeliveryState, q1: Joints, q2: Jo
         # braking at the end of this faster move reads as a torque step (J2 -7.8 -> -4.8 N.m on
         # 2026-09-24, nothing touched): if the arm is already there, it arrived
         off = max_step(joints(conn), qd)
-        if "torque" not in str(e) or off > 0.2:
+        if "torque" not in str(e) or off > float(DL.retract.home_arrived_deg):
             raise
         log.info("    -> food_detect_start: arrived (%.2f deg off); the torque step was the braking", off)
     STATE.unlink()

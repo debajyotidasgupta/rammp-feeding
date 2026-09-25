@@ -69,6 +69,8 @@ LIFT_Z = float(cfg.motion.sequence.lift_z_m)      # m, tool z at the top of the 
 NEAR_DEG = float(cfg.motion.near_pose_deg)        # within this of a pose's joints = "at" that pose
 LIFT_SPEED = float(cfg.motion.sequence.lift_mps)
 SWING_SPEED = float(cfg.motion.sequence.swing_dps)
+SETTLE_DPS = float(cfg.motion.settle_dps)         # the final settle / snap onto a measured pose
+KNOWN_DEG = float(cfg.motion.known_pose_deg)      # within this of a pose = one `home` knows how to retrace from
 
 
 def load(p: Path) -> dict:
@@ -147,18 +149,18 @@ def home_(conn: KinovaConnection) -> None:
     qd = scene.overlook_joints(conn)
     q = joints(conn)
     if dist_deg(q, home["joints_deg"]) <= NEAR_DEG:
-        goto(conn, home["joints_deg"], speed=5.0, label="settle on feeding_start")
+        goto(conn, home["joints_deg"], speed=SETTLE_DPS, label="settle on feeding_start")
         report(conn, "at feeding_start")
         return
     d_det = dist_deg(q, qd)
     d_lift = dist_deg(q, lift["joints_deg"])
-    if min(d_det, d_lift) > 5.0:
+    if min(d_det, d_lift) > KNOWN_DEG:
         raise MoveError("the arm is %.1f deg from food_detect_start and %.1f deg from the "
                         "top of the lift -- not a pose this sequence knows how to retrace "
                         "from. Bring it near one of them by hand." % (d_det, d_lift))
     report(conn, "start")
     if d_det < d_lift:
-        goto(conn, qd, speed=5.0, label="settle on food_detect")
+        goto(conn, qd, speed=SETTLE_DPS, label="settle on food_detect")
         mid = midpoint(qd, lift["joints_deg"])
         goto(conn, mid, speed=SWING_SPEED, label="swing back, first half")
     goto(conn, lift["joints_deg"], speed=SWING_SPEED, label="swing back, second half")
@@ -166,7 +168,7 @@ def home_(conn: KinovaConnection) -> None:
     goto_cartesian(conn, (h["x_m"], h["y_m"], h["z_m"]),
                    (h["theta_x_deg"], h["theta_y_deg"], h["theta_z_deg"]),
                    speed=LIFT_SPEED, label="descend (smooth)")
-    goto(conn, home["joints_deg"], speed=5.0, label="snap onto feeding_start")
+    goto(conn, home["joints_deg"], speed=SETTLE_DPS, label="snap onto feeding_start")
     report(conn, "at feeding_start")
 
 

@@ -87,7 +87,7 @@ if run present; then
     [ $rc != 3 ] && { echo "present refused -- nothing further moved ($D)"; exit 1; }
     [ -n "$VALIDATE" ] && { echo "    validate-only: would sidestep -Y 50 mm and look again"; exit 0; }
     [ "$SHIFT" = 100 ] && { echo "mouth not found after sidestepping 100 mm"; exit 1; }
-    arm sidestep --step 0.05
+    arm sidestep                    # delivery.sidestep_m
   done
   echo "    detection: $D"
   [ -n "$VALIDATE" ] && exit 0

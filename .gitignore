@@ -8,3 +8,8 @@ docker/vendor/kortex_api_*
 presentation/data/
 presentation/out/
 config/local.yaml
+# SMPL-X is licensed: the body model and the meshes posed from it stay local (sim/pose_human.py makes them)
+sim/assets/smplx/
+sim/assets/human/
+sim/out/
+MUJOCO_LOG.TXT

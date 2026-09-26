@@ -51,7 +51,7 @@ SDK        := $(HOME)/kortex_api_2.8.0_$(ARCHTAG)
 # sync.sh --delete and needs sudo to clear.
 INARM      := docker exec -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/work -w /work $(DRIVER) python3 -u -m
 
-.PHONY: sdk kortex vision images depth clean-depth status state start detect perceive over acquire deliver retract feed detector models models-stop capture review locate-bowl limits
+.PHONY: sdk kortex vision images depth clean-depth status state start detect perceive over acquire deliver retract feed detector models models-stop capture review locate-bowl limits twin twin-poses
 
 # --- the arm ----------------------------------------------------------------
 # Every motion goes through kinova/scripts/safe_move.py: utensil kept pointing
@@ -131,6 +131,17 @@ review:
 
 locate-bowl:
 	@PYTHONPATH=. $(DETECT_PY) -m feeding.locate_bowl "$(or $(RUN),$$(readlink -f $(RUNS)/latest)/perceive)"
+
+# The digital twin (sim/, on the Mac): replay a recorded bite in MuJoCo -> sim/out/*.mp4. SESSION defaults to the
+# newest feed session under runs_dir (rsync it from the Jetson first); BITE=all for the whole session; STILL=<s>
+# for one frame; SPEED=1.5 to play faster. The person's meshes: once, `.venv/bin/python sim/pose_human.py`.
+TWIN_PY ?= .venv/bin/python
+twin:
+	@PYTHONPATH=. $(TWIN_PY) -m sim.twin render --bite $(or $(BITE),1) $(if $(SESSION),--session $(SESSION),) \
+	   $(if $(SPEED),--speed $(SPEED),) $(if $(STILL),--still $(STILL),)
+
+twin-poses:
+	@PYTHONPATH=. $(TWIN_PY) -m sim.twin poses
 
 capture:
 	@$(INARM) kinova.scripts.capture_home --out /work/calibration/home_pose.json

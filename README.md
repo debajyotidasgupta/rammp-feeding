@@ -27,6 +27,9 @@ make feed        the whole loop from feeding_start: bite after bite until the bo
 make review      the latest session: timeline, key numbers, contact sheet per bite (RUN=<session|bite>)
 make locate-bowl where the bowl and the table are, from the latest perceive (to set `workspace:`)
 
+make twin        the digital twin: replay a recorded bite in MuJoCo -> sim/out/*.mp4 (on the Mac; BITE=3|all,
+                 SESSION=<run dir>, STILL=<s> for one frame, SPEED=1.5); make twin-poses: the calibrated poses
+
 make models      every model loaded and warm (detector + DA3, face + colour stream, depth); make feed runs it
 make depth       the vision node: two depth sessions, 31 s apart (the arm ends each every ~62 s)
 make limits      the arm's own speed limits (APPLY=1: set them from config deployment.arm.soft_limits)
@@ -128,6 +131,7 @@ python tests/arm_trace.py /tmp/t.json --compare tests/golden/arm_trace.json.gz  
 bash tests/regress.sh check          # (jetson) perception / measurement / face outputs on saved runs
 python3 tests/arm_values.py          # (driver container) every arm-side constant and CLI default
 bash tests/record_smoke.sh           # (jetson) the run record end to end, into a scratch directory
+.venv/bin/python tests/twin_check.py # (mac) the twin's arm vs the controller's tool pose on a recorded session
 ```
 
 `tests/fake_kortex.py` stands in for the controller (IK / FK / validation / execution on a simulated clock), so
@@ -488,7 +492,8 @@ measured: commanding −90.000000 lands at −89.998138 every time. If you ever
 settings.py                  loads config/ (python: `from settings import cfg`; shell: `python3 -m settings get`)
 runlog.py                    logging and the run record (events, plans, telemetry)
 config/                      every tunable, switch and deployment value (above)
-tests/                       fake_kortex + arm_trace (the arm stages), regress.sh, arm_values.py, record_smoke.sh
+tests/                       fake_kortex + arm_trace (the arm stages), regress.sh, arm_values.py, record_smoke.sh,
+                             twin_check.py
 kinova/
   connection.py              session, routers, teardown
   motion.py                  shared: IK, time scaling, homotopy, guarded trajectories
@@ -521,12 +526,43 @@ feeding/
   deliver.sh                 make deliver
   detect_mouth.py            face / nose / mouth at the delivery pose
   run_depth_anything3.py     optional DA3 cross-check
+sim/                         the digital twin (above): scene.py, record.py, twin.py, procedural.py, pose_human.py
 calibration/                 measured poses and intrinsics (above)
 docker/                      driver and vision images
 third_party/                 kinova-gen3-ros2 (submodule)
 ```
 
 The gripper is **never commanded** anywhere in this tree.
+
+## The digital twin (`sim/`, `make twin`)
+
+A replay, not a simulation: the arm moves exactly as a recorded bite's telemetry says, in a scene built from the
+same calibration the stack uses, with the camera frames the stack saw beside it.
+
+```
+rsync -a jetson:rammp_runs/<date>_feed ~/rammp_runs/     # a feed session, to the Mac
+.venv/bin/python sim/pose_human.py                       # once: the seated person (needs torch + smplx and the
+                                                         # licensed SMPL-X model in sim/assets/smplx/)
+make twin BITE=3                                         # -> sim/out/twin_<session>_bite03.mp4 (real time, 1080p)
+make twin BITE=all SPEED=1.5                             # every bite, one film
+make twin BITE=3 STILL=52.9                              # one frame
+make twin-poses                                          # feeding_start, food_detect_start, lift, scoop_end
+```
+
+| | from |
+|---|---|
+| the arm | Kinova's Gen3 model (MuJoCo Menagerie) + the 2F-85, closed on the fork; joints from each move's `arm/*_arm_*.npz`. FK agrees with the controller's own tool pose to 6 mm / 1.2 deg over a bite |
+| the fork | `kinova/motion.tip_in_tool` (tip_px, camera_to_tip, the tine offset) and `utensil.head_width_m` |
+| the wrist camera | `config/camera`: the mount and the measured intrinsics, principal point included, so the TWIN tile lines up with the REAL one (the tine tips land at v 425 against the measured 436) |
+| the table, the food | `workspace.table_height_m`; each piece where `perceive/detection.json` puts it, mapped exactly as `feeding/locate_target.py` maps its target; the picked one rides the tines from the plunge's end until the bite |
+| the container | the detection's `bowl` box: the clear clamshell on its blue mat (it sat at (0.240, 0.236) m in all six bites of 2026-09-25 -- ~30-40 mm from `workspace.bowl_centre_m`, which `make locate-bowl` measured on 2026-09-24 with the round bowl) |
+| the person | SMPL-X, seated, placed so the mouth lands on the approach's measured `mouth_base`; the jaw opens with `open_wait.json`, the upper body leans in for the bite (the arm stops 80 mm short) |
+| set dressing | the room, the wheelchair and the arm's mount, the laptop |
+
+The HUD: the phase (from `events.jsonl`), joint speeds against the soft limits, the tip's speed and height, the
+mouth-opening signal during the wait, the force at the fork during the bite, and the REAL | TWIN wrist-camera
+tiles. `sim/record.py` reads a bite; `sim/scene.py` builds the scene; `sim/twin.py` directs and renders;
+`sim/procedural.py` makes the textures and meshes (into `sim/out/cache/`, git-ignored).
 
 ## Machines
 

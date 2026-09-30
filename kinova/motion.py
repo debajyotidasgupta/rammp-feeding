@@ -21,7 +21,7 @@ from kortex_api.autogen.messages import Base_pb2
 import runlog
 from settings import cfg
 from feeding.camera import CAM_IN_TOOL, FXC, VP
-from kinova.scripts.safe_move import Joints, MoveError, TorqueGuard, _events, fold
+from kinova.scripts.safe_move import Joints, MoveError, TorqueGuard, _events, check_tool, fold
 
 if TYPE_CHECKING:
     from kinova.connection import KinovaConnection
@@ -303,6 +303,7 @@ def run_path(conn: KinovaConnection, path: Sequence[Sequence[float]], dps: float
     guard = TorqueGuard(limit=torque_limit)
     tel = runlog.Telemetry(label)
     outcome = "error"
+    check_tool(conn)
     conn.base.ExecuteWaypointTrajectory(wl)
     t0 = time.time()
     try:

@@ -149,6 +149,40 @@ class TorqueGuard:
         return None
 
 
+def tool_mismatch(conn: Any) -> list[str]:
+    """How the arm's configured tool differs from config deployment.arm.tool ([] = it is ours). Read from the arm;
+    the fake controller (no ControlConfig) counts as ours."""
+    try:
+        router = conn._tcp_router
+    except AttributeError:
+        return []
+    from kortex_api.autogen.client_stubs.ControlConfigClientRpc import ControlConfigClient
+    t = ControlConfigClient(router).GetToolConfiguration()
+    want, tol = cfg.deployment.arm.tool, cfg.deployment.arm.tool.tolerance
+    tr = t.tool_transform
+    got = dict(transform_m=[tr.x, tr.y, tr.z], rotation_deg=[tr.theta_x, tr.theta_y, tr.theta_z], mass_kg=t.tool_mass)
+    bad = []
+    for key in ("transform_m", "rotation_deg"):
+        if max(abs(g - float(w)) for g, w in zip(got[key], want[key])) > float(tol[key]):
+            bad.append("%s %s (ours %s)" % (key, [round(v, 4) for v in got[key]], list(want[key])))
+    if abs(got["mass_kg"] - float(want.mass_kg)) > float(tol.mass_kg):
+        bad.append("mass %.3f kg (ours %.3f)" % (got["mass_kg"], float(want.mass_kg)))
+    return bad
+
+
+def check_tool(conn: Any) -> None:
+    """Refuse to move unless the arm's tool is ours: a different tool frame puts every cartesian target (and the tip
+    model) off by the difference -- 80 mm low on 2026-09-30, when another user's 200 mm frame was left on the arm.
+    Once per connection."""
+    if getattr(conn, "_tool_ok", False):
+        return
+    bad = tool_mismatch(conn)
+    if bad:
+        raise MoveError("REFUSED: the arm's tool configuration is not ours: %s. `make tool` shows it; "
+                        "`make tool APPLY=1` sets ours (saving these values)" % "; ".join(bad))
+    conn._tool_ok = True
+
+
 class MoveError(RuntimeError):
     """A move was refused, ignored, or stopped. The arm is stationary."""
 
@@ -391,6 +425,7 @@ def goto(conn: KinovaConnection, target: Sequence[float], speed: float = 10.0, t
     ramp = v / acc if math.isfinite(acc) else 0.0  # the time the arm's acceleration limit needs to reach v
     rj.constraint.value = max(float(cfg.motion.goto_min_s), travel / v + max(float(cfg.motion.goto_pad_s), ramp))
     tries = int(cfg.motion.goto_duration_retries) + 1
+    check_tool(conn)
     for attempt in range(1, tries + 1):
         conn.base.ExecuteAction(a)
         try:
@@ -437,6 +472,7 @@ def goto_cartesian(conn: KinovaConnection, xyz: Sequence[float], rpy: Sequence[f
     t.theta_x, t.theta_y, t.theta_z = rpy
     cp.constraint.speed.translation = speed
     cp.constraint.speed.orientation = float(cfg.motion.cartesian_orientation_dps)
+    check_tool(conn)
     conn.base.ExecuteAction(a)
 
     def arrived(fb: Any, q: Joints) -> bool:

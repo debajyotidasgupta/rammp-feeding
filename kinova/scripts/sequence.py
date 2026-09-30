@@ -50,7 +50,7 @@ from typing import TYPE_CHECKING, Sequence
 import runlog
 from kinova import scene
 from kinova.connection import kinova_connection
-from kinova.scripts.safe_move import (Joints, MoveError, fold, goto, goto_cartesian, joints,
+from kinova.scripts.safe_move import (MAX_TILT_DEG, Joints, MoveError, fold, goto, goto_cartesian, joints,
                                       pitch_sum, tilt_deg, tool_pose)
 from settings import cfg
 
@@ -174,9 +174,31 @@ def home_(conn: KinovaConnection) -> None:
     report(conn, "at feeding_start")
 
 
+def direct(conn: KinovaConnection, speed: float) -> None:
+    """Straight to feeding_start from anywhere: one joint move, every joint the short way round.
+
+    For a workspace the operator has checked is clear (it does not route round the table like `home`). The usual
+    guards hold: joint limits, the utensil ending down, a torque step stops it."""
+    home = load(HOME)
+    q = joints(conn)
+    travel = max(abs(fold(t - c)) for t, c in zip(home["joints_deg"], q))
+    # From a hand-placed pose the utensil can start tipped past the usual limit. The move takes J2+J4+J6 linearly
+    # to straight down, so the tilt only falls from here (twin check, 2026-09-30: 29 -> 0.7 deg, monotone): allow
+    # where it starts, not more.
+    tilt0 = tilt_deg(conn)
+    max_tilt = max(MAX_TILT_DEG, tilt0 + 3.0)
+    log.info("direct to feeding_start: %.0f deg on the furthest joint at %.0f deg/s (~%.0f s); utensil starts "
+             "%.0f deg off vertical (allowed %.0f)", travel, speed, travel / max(speed, 1e-3), tilt0, max_tilt)
+    report(conn, "start")
+    goto(conn, home["joints_deg"], speed=speed, max_tilt=max_tilt, label="direct to feeding_start")
+    report(conn, "at feeding_start")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("what", choices=["detect", "home"])
+    ap.add_argument("what", choices=["detect", "home", "direct"])
+    ap.add_argument("--speed", type=float, default=float(cfg.motion.sequence.direct_dps),
+                    help="direct: the furthest joint's average speed, deg/s")
     ap.add_argument("--rerecord-lift", action="store_true",
                     help="overwrite lift_pose.json with where this lift ends")
     a = ap.parse_args()
@@ -186,6 +208,8 @@ def main() -> int:
         try:
             if a.what == "detect":
                 detect(conn, a.rerecord_lift)
+            elif a.what == "direct":
+                direct(conn, a.speed)
             else:
                 home_(conn)
         except MoveError as e:

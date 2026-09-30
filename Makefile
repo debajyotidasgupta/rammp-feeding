@@ -56,8 +56,13 @@ SDK        := $(ROOTDIR)/kortex_api_2.8.0_$(ARCHTAG)
 # invocation leaves root-owned __pycache__ in the synced tree, which then blocks
 # sync.sh --delete and needs sudo to clear.
 INARM      := docker exec -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/work -w /work $(DRIVER) python3 -u -m
+# make start / detect / start-direct also append their output, timestamped, to $(RUNS)/moves.log: a stop's reason is
+# kept even when the terminal is gone. RAMMP_SET passes through (e.g. slower speeds for a first trial).
+MOVELOG    = set -o pipefail; echo "== $$(date '+%F %T') make $@" >> $(RUNS)/moves.log; \
+              docker exec -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/work -e RAMMP_SET="$$RAMMP_SET" -w /work $(DRIVER) python3 -u -m
+TO_MOVELOG := 2>&1 | while IFS= read -r l; do printf '%s\n' "$$l"; printf '%s %s\n' "$$(date +%T)" "$$l" >> $(RUNS)/moves.log; done
 
-.PHONY: sdk kortex driver-image vision images driver depth clean-depth status state start detect perceive over acquire deliver retract feed detector models models-stop capture review locate-bowl limits twin twin-poses
+.PHONY: start-direct tool sdk kortex driver-image vision images driver depth clean-depth status state start detect perceive over acquire deliver retract feed detector models models-stop capture review locate-bowl limits twin twin-poses
 
 # --- the arm ----------------------------------------------------------------
 # Every motion goes through kinova/scripts/safe_move.py: utensil kept pointing
@@ -68,10 +73,15 @@ state:
 	@$(INARM) kinova.scripts.arm_state
 
 start:
-	@$(INARM) kinova.scripts.sequence home
+	@$(MOVELOG) kinova.scripts.sequence home $(TO_MOVELOG)
 
 detect:
-	@$(INARM) kinova.scripts.sequence detect
+	@$(MOVELOG) kinova.scripts.sequence detect $(TO_MOVELOG)
+
+# Straight to feeding_start from ANYWHERE, every joint the short way round (SPEED=<deg/s>, default
+# motion.sequence.direct_dps). It does not route round the table like `start`: for a workspace you can see is clear.
+start-direct:
+	@$(MOVELOG) kinova.scripts.sequence direct $(if $(SPEED),--speed $(SPEED),) $(TO_MOVELOG)
 
 # Runs on the jetson HOST (it drives both containers and the GPU venv). Results
 # go to the run record (~/rammp_runs/<session>/bite_NN/perceive/), outside the synced tree. STAGE1_DA3=1 adds
@@ -132,6 +142,11 @@ feed:
 limits:
 	@$(INARM) kinova.scripts.arm_limits $(if $(APPLY),--apply,)
 
+# The arm's tool frame + mass (on the arm; another user may change it): show, or set config deployment.arm.tool
+# (APPLY=1; the replaced values are saved to runs_dir), or put saved values back (RESTORE=<that file>)
+tool:
+	@$(INARM) kinova.scripts.arm_tool $(if $(APPLY),--apply,) $(if $(RESTORE),--restore $(RESTORE),)
+
 review:
 	@PYTHONPATH=. $(FACE_PY) -m feeding.review "$(or $(RUN),$$(dirname $$(readlink -f $(RUNS)/latest)))" --write
 
@@ -174,11 +189,14 @@ vision:
 
 images: driver-image vision
 
-# The driver container: the arm scripts run in it (INARM), this tree mounted at /work. Recreating it clears its
-# /tmp (the swing / retract caches: the next delivery rebuilds them).
+# The driver container: the arm scripts run in it (INARM), this tree mounted at /work, the run record at its host
+# path (RAMMP_ROOT: files the arm scripts save, e.g. make tool's, land on the host). Recreating it clears its /tmp
+# (the swing / retract caches: the next delivery rebuilds them).
 driver:
 	-docker rm -f $(DRIVER) 2>/dev/null
-	docker run -d --name $(DRIVER) --network host --restart unless-stopped -v $(CURDIR):/work -w /work $(DRIVER_IMG)
+	@mkdir -p $(RUNS)
+	docker run -d --name $(DRIVER) --network host --restart unless-stopped -v $(CURDIR):/work -w /work \
+	  -v $(RUNS):$(RUNS) -e RAMMP_ROOT=$(ROOTDIR) $(DRIVER_IMG)
 	@docker exec $(DRIVER) python3 -c "import kortex_api" && echo "driver $(DRIVER) up ($(DRIVER_IMG))"
 
 # This arm's depth sensor reports fx=fy=334.810; the package's shipped default

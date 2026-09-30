@@ -27,6 +27,15 @@ deployment:
                                 # deg/s under their 80 hard limit, J5-J7 10% under their 70 (at the hard limit a
                                 # tracking overshoot could fault the arm mid-move)
       modes: [ANGULAR_TRAJECTORY, CARTESIAN_TRAJECTORY, CARTESIAN_WAYPOINT_TRAJECTORY]
+    tool:                       # ON the arm (ControlConfig): every cartesian target and the tool pose are in this frame,
+                                # and the mass feeds the torque model the contact guard and bite detection read. The
+                                # tip model (camera.mount, utensil) is measured against it. Every move refuses on a
+                                # mismatch; `make tool APPLY=1` sets it (saving the values it replaces)
+      transform_m: [0.0, 0.0, 0.12]     # the 2F-85's TCP, flange frame (calibration/*_pose.json were captured with it)
+      rotation_deg: [0.0, 0.0, 0.0]
+      mass_kg: 0.831                    # gripper + utensil
+      mass_centre_m: [0.0, 0.0, 0.0473]
+      tolerance: {transform_m: 0.002, rotation_deg: 0.5, mass_kg: 0.02}
   containers: {driver: "{name}_driver", vision: "{name}_vision"}   # `make driver` / `make depth` create them
   images: {driver: "{name}/driver:py310", vision: "{name}/kortex-vision:humble"}   # make driver-image / vision
   ros_domain_id: 0              # our ROS 2 traffic (the depth nodes); a box running other ROS 2 needs its own
@@ -99,6 +108,7 @@ motion:
   cartesian_orientation_dps: 10.0   # orientation speed limit of straight-line tool moves
   sequence:                     # make detect / make start
     lift_z_m: 0.545             # tool z at the top of the lift from feeding_start (the arm's reach sets it)
+    direct_dps: 20.0            # make start-direct: straight to feeding_start, the furthest joint's speed (SPEED=)
     min_lift_above_table_m: 0.25   # the swing to the bowl crosses the table: refuse a lift top lower than this
     lift_mps: 0.22              # up from feeding_start (2026-09-25, user: faster everywhere but the plunge; was 0.06)
     descend_mps: 0.13           # down into feeding_start: at 0.22 the braking at the bottom read as a contact

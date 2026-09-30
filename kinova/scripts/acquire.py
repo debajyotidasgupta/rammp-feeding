@@ -58,7 +58,7 @@ from kinova.motion import (A_MAX, CAM_IN_TOOL, LIMITS, WATCH_EXTRA_S, _time_scal
                                                                                    # LIMITS, _time_scale: re-exported
 from kinova.motion import (R_from_kortex, _ik, _waypoints, kortex_from_R, margin, max_step, record_plan, rot_x,
                            tip_in_tool, validate, waypoint_list)
-from kinova.scripts.safe_move import (Joints, MoveError, TorqueGuard, _events, fold, goto_cartesian,
+from kinova.scripts.safe_move import (Joints, MoveError, TorqueGuard, _events, check_tool, fold, goto_cartesian,
                                       joints, tilt_deg, tool_pose)
 from settings import cfg
 
@@ -314,6 +314,7 @@ def _run_watched(conn: KinovaConnection, wl: Any, total: float, label: str, on_s
     ev.clear()
     tel = runlog.Telemetry(label)
     why = None
+    check_tool(conn)
     conn.base.ExecuteWaypointTrajectory(wl)
     t0 = time.time()
     try:

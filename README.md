@@ -13,6 +13,7 @@ make status      what is running, is the arm reachable
 make state       where is the arm right now
 
 make start       back to feeding_start       (retraces the outbound path)
+make start-direct  straight to feeding_start from anywhere, shortest joint path (SPEED=10: deg/s; clear workspace only)
 make detect      feeding_start -> food_detect_start
 make perceive    at food_detect_start: capture, detect, depth, target
 make acquire     over -> plunge -> scoop
@@ -33,6 +34,8 @@ make twin        the digital twin: replay a recorded bite in MuJoCo -> sim/out/*
 make models      every model loaded and warm (detector + DA3, face + colour stream, depth); make feed runs it
 make depth       the vision node: two depth sessions, 31 s apart (the arm ends each every ~62 s)
 make limits      the arm's own speed limits (APPLY=1: set them from config deployment.arm.soft_limits)
+make tool        the arm's tool frame + mass vs ours (APPLY=1: set ours, saving the arm's; RESTORE=<file>).
+                 Every move refuses while they differ: another user's tool frame shifts every cartesian target
 ```
 
 Frozen 2026-09-24 (tag `acquire-v1`): two consecutive full runs, fork on strawberries, both picked up and held ("the most perfect scoop"). Run to run: OVER 82/81 mm, punch 45.3/44.3 mm down, scoop 6.3/6.2 s, rise 164.5/163.8 mm, 1.0/1.0 mm off vertical.

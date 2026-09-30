@@ -7,6 +7,7 @@
 Each check prints OK / WARN / FAIL; any FAIL exits 1 (make feed does not start). What it catches, and why:
   tool          the arm's tool frame + mass (ControlConfig) are ours. Another user's tool shifts every cartesian
                 target (2026-09-30: a 200 mm frame, make detect's lift 80 mm off)                     FAIL
+  other clients nothing else connected to the arm (another driver, a script, the web app)             FAIL
   faults        the arm's fault banks are clear                                                       FAIL
   kinematics    at feeding_start: the tool pose the arm reports matches the one captured there. Differing
                 at the same joints = the arm's kinematics or joint zeros changed (2026-09-30: 3.2 deg,
@@ -60,6 +61,30 @@ def check_tool(conn, rep: Report, fix: bool) -> None:
     rep.add("FAIL" if bad else "OK", "tool",
             "; ".join(bad) + " -- make tool APPLY=1 (or make preflight FIX=1)" if bad else
             "frame %s m, %.3f kg: ours" % (list(cfg.deployment.arm.tool.transform_m), float(cfg.deployment.arm.tool.mass_kg)))
+
+
+def check_clients(conn, rep: Report) -> None:
+    """Nobody else connected to the arm: two programs commanding one arm fight (2026-09-30: another project's
+    driver connected to it mid-session). The arm lists every session; ours is our socket, 127.0.0.1 its own."""
+    try:
+        ours = "%s;port=%d" % conn._tcp_transport.sock.getsockname()
+        listed = conn._tcp_session.GetConnections().connection
+    except AttributeError:
+        rep.add("OK", "other clients", "skipped (no session list)")
+        return
+    others = []
+    for c in listed:
+        info = dict(kv.split("=", 1) for kv in c.connection_information.split(";") if "=" in kv)
+        if info.get("ip") == "127.0.0.1" or "ip=%s;port=%s" % (info.get("ip"), info.get("port")) == "ip=" + ours:
+            continue
+        others.append("%s:%s" % (info.get("ip", "?"), info.get("port", "?")))
+    if others and cfg.preflight.get("allow_other_clients", False):
+        rep.add("WARN", "other clients", "%d connected to the arm (%s) -- allowed by preflight.allow_other_clients"
+                % (len(others), ", ".join(others)))
+        return
+    rep.add("FAIL" if others else "OK", "other clients",
+            "%d other connection(s) to the arm: %s -- another driver, script or the Kinova web app: stop it before "
+            "moving" % (len(others), ", ".join(others)) if others else "none: this stack alone is connected")
 
 
 def check_faults(conn, rep: Report) -> None:
@@ -141,6 +166,7 @@ def main() -> int:
     log.info("preflight (arm %s)", cfg.deployment.arm.ip)
     with kinova_connection() as conn:
         check_tool(conn, rep, a.fix)
+        check_clients(conn, rep)
         check_faults(conn, rep)
         check_kinematics(conn, rep)
         check_limits(conn, rep, a.fix)

@@ -61,6 +61,7 @@ deployment:
 preflight:                      # make preflight (make feed runs it first): the arm as the calibration assumes it
   kinematics_mm: 3.0            # at feeding_start, the tool pose the arm reports vs the captured one: more = re-capture
   kinematics_deg: 1.0
+  allow_other_clients: false    # another program connected to the arm fails the preflight (true: a warning only)
 
 workspace:                      # where the table and the bowl are in THIS deployment (arm base frame, m).
   # The bowl profile's poses were captured at its `captured_at`; every bowl-dependent pose is shifted by the
@@ -194,9 +195,11 @@ acquisition:
 
 perception:
   scene:                        # the fixed scene camera (make locate-scene): the COARSE bowl + table
-    bowl_prompts: [bowl, dish, bowl with a glass jar]   # every one's boxes are candidates: from the side a bowl reads
-                                # as a dish or a plate with a jar, and "bowl" alone boxed a lidded box 1 m off
+    bowl_prompts: [dish, bowl, bowl with a glass jar]   # in order, until one yields a reachable bowl (~5 s each):
+                                # from the side a bowl reads as a dish or a plate with a jar, and "bowl" alone
+                                # boxed a lidded box 1 m off
     max_reach_m: 0.75           # a candidate further than this from the arm's base is not the bowl
+    detect_width: 848           # detect on a copy this wide (the detector's time grows with the pixels)
   min_box_side_px: 25
   max_box_aspect: 3.0
   food_inside_bowl_min: 0.8     # fraction of a food box inside the bowl box

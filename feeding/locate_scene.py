@@ -173,36 +173,44 @@ def main() -> int:
     np.save(out / "scene_depth.npy", (depth * 1000).astype(np.uint16))
     from feeding.detector_server import connect
     det = connect()
-    colour.filename = str(out / "scene_colour.jpg")
-    boxes = []
-    for p in a.prompt:                    # a side view of a bowl reads as a dish, a plate with a jar, ... : ask all
-        for b in det.locate(colour, p) or []:
-            bb = [float(getattr(b, k)) for k in ("x1", "y1", "x2", "y2")]
-            if all(iou(bb, o) < 0.5 for o in boxes):
-                boxes.append(bb)
-    if not boxes:
-        print("no %s in the scene camera's view -- nothing located (see %s)" % (" / ".join(a.prompt), out))
-        return 3
+    # detect on a copy no wider than perception.scene.detect_width: the detector's time grows with the pixels
+    # (1280x720: ~5 s a prompt on the site Orin; boxes are scaled back)
+    k = min(1.0, float(cfg.get("perception.scene.detect_width", 848)) / colour.width)
+    small = colour.resize((round(colour.width * k), round(colour.height * k)), Image.BILINEAR) if k < 1 else colour
+    small.save(out / "scene_colour_detect.jpg")
+    small = Image.open(out / "scene_colour_detect.jpg"); small.filename = str(out / "scene_colour_detect.jpg")
     p_link, _ = depth_points(depth)
     uv = project_colour(p_link)
     p_base = p_link @ R.T + t
-    # every candidate, placed in the base frame; then only one the arm can reach, on the table, and of those the
-    # nearest to the last reading (else the configured workspace): "bowl" also names the food containers around it
+    # the prompts in order, stopping at the first that yields a reachable bowl (each costs ~5 s on the site Orin):
+    # every candidate placed in the base frame; only one the arm can reach, on the table, and of those the nearest
+    # to the last reading (else the configured workspace) -- "bowl" also names the food containers around it
     # (2026-09-30: a lidded box 1 m away, at the edge of the table, won the single-best-box call)
     ref = reference(runs)
-    cands = []
-    for bx in boxes:
-        m = measure(bx, uv, p_base)
-        if m.get("bowl_xy") is not None:
-            r = float(np.hypot(*m["bowl_xy"]))
-            if r > float(cfg.get("perception.scene.max_reach_m", 0.75)):
-                m["rejected"] = "%.2f m from the arm's base: out of reach" % r
-            m["from_ref_m"] = float(np.hypot(m["bowl_xy"][0] - ref[0], m["bowl_xy"][1] - ref[1]))
-        cands.append(m)
-    ok = [m for m in cands if not m.get("rejected")]
+    boxes, cands = [], []
+    for p in a.prompt:
+        for b in det.locate(small, p) or []:
+            bb = [float(getattr(b, key)) / k for key in ("x1", "y1", "x2", "y2")]
+            if any(iou(bb, o) >= 0.5 for o in boxes):
+                continue
+            boxes.append(bb)
+            m = dict(measure(bb, uv, p_base), prompt=p)
+            if m.get("bowl_xy") is not None:
+                r = float(np.hypot(*m["bowl_xy"]))
+                if r > float(cfg.get("perception.scene.max_reach_m", 0.75)):
+                    m["rejected"] = "%.2f m from the arm's base: out of reach" % r
+                m["from_ref_m"] = float(np.hypot(m["bowl_xy"][0] - ref[0], m["bowl_xy"][1] - ref[1]))
+            cands.append(m)
+        if any(not m.get("rejected") for m in cands):
+            break
+    if not cands:
+        print("no %s in the scene camera's view -- nothing located (see %s)" % (" / ".join(a.prompt), out))
+        return 3
     for m in cands:
-        print("  candidate %s: %s" % (m["box_px"], m.get("rejected") or "bowl (%.3f, %.3f), %.2f m from the reference"
-                                      % (m["bowl_xy"][0], m["bowl_xy"][1], m["from_ref_m"])))
+        print("  candidate %s (%s): %s" % (m["box_px"], m["prompt"], m.get("rejected") or
+                                           "bowl (%.3f, %.3f), %.2f m from the reference"
+                                           % (m["bowl_xy"][0], m["bowl_xy"][1], m["from_ref_m"])))
+    ok = [m for m in cands if not m.get("rejected")]
     if not ok:
         draw(colour, cands, None, out)
         print("no reachable %s on the table -- nothing located (see %s)" % (" / ".join(a.prompt), out))

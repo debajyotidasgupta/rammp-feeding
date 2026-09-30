@@ -100,10 +100,65 @@ def circle_fit(xy: np.ndarray) -> tuple[np.ndarray, float]:
     return np.array([cx, cy]), float(np.sqrt(max(c + cx * cx + cy * cy, 0.0)))
 
 
+def measure(bx: list[float], uv: np.ndarray, p_base: np.ndarray) -> dict:
+    """One candidate box -> the bowl it holds: centre (a circle through the rim), top, table around it; or why not."""
+    res = dict(box_px=[round(v, 1) for v in bx])
+    inside = (uv[:, 0] >= bx[0]) & (uv[:, 0] <= bx[2]) & (uv[:, 1] >= bx[1]) & (uv[:, 1] <= bx[3])
+    w, h = bx[2] - bx[0], bx[3] - bx[1]
+    ring = ((uv[:, 0] >= bx[0] - 0.6 * w) & (uv[:, 0] <= bx[2] + 0.6 * w) & (uv[:, 1] >= bx[1] - 0.3 * h)
+            & (uv[:, 1] <= bx[3] + 0.6 * h) & ~inside)
+    if inside.sum() < 50 or ring.sum() < 50:
+        return dict(res, rejected="too little depth at it (%d points) or around it (%d)" % (inside.sum(), ring.sum()))
+    table_z = float(np.median(p_base[ring, 2]))
+    b = p_base[inside]
+    above = b[b[:, 2] > table_z + 0.010]                        # the bowl, not the table seen through the box
+    if len(above) < 30:
+        return dict(res, rejected="nothing standing above the table (z %.3f)" % table_z)
+    lo, hi = np.percentile(above[:, :2], 5, axis=0), np.percentile(above[:, :2], 95, axis=0)
+    top_z = float(np.percentile(above[:, 2], 95))
+    # the centre: a circle through the RIM (the top 15 mm), which a side view sees on both the near and the far
+    # edge -- the middle of the points' extent leans toward the camera (only the near wall is visible)
+    rim = above[above[:, 2] > top_z - 0.015][:, :2]
+    centre, radius = circle_fit(rim) if len(rim) >= 20 else ((lo + hi) / 2, None)
+    if radius is None or not 0.03 < radius < 0.15:
+        centre, radius = (lo + hi) / 2, None                   # no believable rim: the extent's middle
+    return dict(res, bowl_xy=[float(v) for v in centre], table_z=table_z, bowl_top_z=top_z,
+                bowl_extent_m=[round(float(v), 3) for v in hi - lo],
+                rim_radius_m=None if radius is None else round(radius, 3), points=int(len(above)))
+
+
+def iou(a: list[float], b: list[float]) -> float:
+    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0])); iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    inter = ix * iy
+    return inter / ((a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter + 1e-9)
+
+
+def reference(runs: Path) -> list[float]:
+    """Where the bowl is expected: the last reading (any age), else rammp.yaml's workspace."""
+    try:
+        return [float(v) for v in json.loads((runs / "scene_state.json").read_text())["bowl_xy"]]
+    except (OSError, ValueError, KeyError):
+        return [float(v) for v in cfg.workspace.bowl_centre_m]
+
+
+def draw(colour: Image.Image, cands: list[dict], best: dict | None, out: Path) -> None:
+    im = colour.copy()
+    dr = ImageDraw.Draw(im)
+    for m in cands:
+        chosen = m is best
+        c = (34, 197, 94) if chosen else (239, 68, 68) if m.get("rejected") else (148, 163, 184)
+        dr.rectangle(m["box_px"], outline=c, width=3 if chosen else 2)
+        text = (m.get("rejected") or "(%.3f, %.3f) m" % tuple(m["bowl_xy"])) if not chosen else \
+            "BOWL (%.3f, %.3f) m, table z %.3f" % (m["bowl_xy"][0], m["bowl_xy"][1], m["table_z"])
+        dr.text((m["box_px"][0], m["box_px"][1] - 14), text, fill=c)
+    im.save(out / "scene_detection.jpg")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", help="the directory for the images and the result (default: a new one in runs_dir)")
-    ap.add_argument("--prompt", default=str(cfg.get("perception.scene.bowl_prompt", "bowl")))
+    ap.add_argument("--prompt", nargs="+", default=list(cfg.get("perception.scene.bowl_prompts", ["bowl"])),
+                    help="what to ask for; every prompt's boxes are candidates (overlaps merged)")
     a = ap.parse_args()
     if not SC:
         print("no scene camera configured (profiles.scene_camera)")
@@ -119,51 +174,52 @@ def main() -> int:
     from feeding.detector_server import connect
     det = connect()
     colour.filename = str(out / "scene_colour.jpg")
-    box = det.locate_one(colour, a.prompt)
-    if box is None:
-        print("no %r in the scene camera's view -- nothing located (see %s)" % (a.prompt, out))
+    boxes = []
+    for p in a.prompt:                    # a side view of a bowl reads as a dish, a plate with a jar, ... : ask all
+        for b in det.locate(colour, p) or []:
+            bb = [float(getattr(b, k)) for k in ("x1", "y1", "x2", "y2")]
+            if all(iou(bb, o) < 0.5 for o in boxes):
+                boxes.append(bb)
+    if not boxes:
+        print("no %s in the scene camera's view -- nothing located (see %s)" % (" / ".join(a.prompt), out))
         return 3
-    bx = [float(getattr(box, k)) for k in ("x1", "y1", "x2", "y2")]
     p_link, _ = depth_points(depth)
     uv = project_colour(p_link)
     p_base = p_link @ R.T + t
-    inside = (uv[:, 0] >= bx[0]) & (uv[:, 0] <= bx[2]) & (uv[:, 1] >= bx[1]) & (uv[:, 1] <= bx[3])
-    w, h = bx[2] - bx[0], bx[3] - bx[1]
-    ring = ((uv[:, 0] >= bx[0] - 0.6 * w) & (uv[:, 0] <= bx[2] + 0.6 * w) & (uv[:, 1] >= bx[1] - 0.3 * h)
-            & (uv[:, 1] <= bx[3] + 0.6 * h) & ~inside)
-    if inside.sum() < 50 or ring.sum() < 50:
-        print("too little depth at the bowl (%d points) or around it (%d)" % (inside.sum(), ring.sum()))
+    # every candidate, placed in the base frame; then only one the arm can reach, on the table, and of those the
+    # nearest to the last reading (else the configured workspace): "bowl" also names the food containers around it
+    # (2026-09-30: a lidded box 1 m away, at the edge of the table, won the single-best-box call)
+    ref = reference(runs)
+    cands = []
+    for bx in boxes:
+        m = measure(bx, uv, p_base)
+        if m.get("bowl_xy") is not None:
+            r = float(np.hypot(*m["bowl_xy"]))
+            if r > float(cfg.get("perception.scene.max_reach_m", 0.75)):
+                m["rejected"] = "%.2f m from the arm's base: out of reach" % r
+            m["from_ref_m"] = float(np.hypot(m["bowl_xy"][0] - ref[0], m["bowl_xy"][1] - ref[1]))
+        cands.append(m)
+    ok = [m for m in cands if not m.get("rejected")]
+    for m in cands:
+        print("  candidate %s: %s" % (m["box_px"], m.get("rejected") or "bowl (%.3f, %.3f), %.2f m from the reference"
+                                      % (m["bowl_xy"][0], m["bowl_xy"][1], m["from_ref_m"])))
+    if not ok:
+        draw(colour, cands, None, out)
+        print("no reachable %s on the table -- nothing located (see %s)" % (" / ".join(a.prompt), out))
         return 3
-    table_z = float(np.median(p_base[ring, 2]))
-    b = p_base[inside]
-    above = b[b[:, 2] > table_z + 0.010]                        # the bowl, not the table seen through the box
-    if len(above) < 30:
-        print("the box holds nothing standing above the table (table z %.3f)" % table_z)
-        return 3
-    lo, hi = np.percentile(above[:, :2], 5, axis=0), np.percentile(above[:, :2], 95, axis=0)
-    top_z = float(np.percentile(above[:, 2], 95))
-    # the centre: a circle through the RIM (the top 15 mm), which a side view sees on both the near and the far
-    # edge -- the middle of the points' extent leans toward the camera (only the near wall is visible)
-    rim = above[above[:, 2] > top_z - 0.015][:, :2]
-    bowl_xy, radius = circle_fit(rim) if len(rim) >= 20 else ((lo + hi) / 2, None)
-    if radius is None or not 0.03 < radius < 0.15:
-        bowl_xy, radius = (lo + hi) / 2, None                  # no believable rim: the extent's middle
+    best = min(ok, key=lambda m: m["from_ref_m"])
+    bowl_xy, table_z, top_z, radius, bx = best["bowl_xy"], best["table_z"], best["bowl_top_z"], best["rim_radius_m"], best["box_px"]
     res = dict(t=time.time(), bowl_xy=[round(float(v), 4) for v in bowl_xy], table_z=round(table_z, 4),
-               bowl_top_z=round(top_z, 4), bowl_extent_m=[round(float(v), 3) for v in hi - lo],
-               rim_radius_m=None if radius is None else round(radius, 3),
-               box_px=[round(v, 1) for v in bx], points=int(len(above)), extrinsic=source,
-               error_m=float(SC.extrinsic.error_m), seconds=round(time.time() - t0, 2), record=str(out))
+               bowl_top_z=round(top_z, 4), bowl_extent_m=best["bowl_extent_m"], rim_radius_m=radius,
+               box_px=bx, points=best["points"], candidates=len(cands), reference_xy=[round(v, 3) for v in ref],
+               extrinsic=source, error_m=float(SC.extrinsic.error_m), seconds=round(time.time() - t0, 2),
+               record=str(out))
     (out / "scene_state.json").write_text(json.dumps(res, indent=1))
     (runs / "scene_state.json").write_text(json.dumps(res, indent=1))
-    im = colour.copy()
-    dr = ImageDraw.Draw(im)
-    dr.rectangle(bx, outline=(34, 197, 94), width=3)
-    dr.text((bx[0], bx[1] - 16), "bowl: (%.3f, %.3f) m, table z %.3f m" % (bowl_xy[0], bowl_xy[1], table_z),
-            fill=(34, 197, 94))
-    im.save(out / "scene_detection.jpg")
+    draw(colour, cands, best, out)
     print("bowl at (%.3f, %.3f) m in the base frame (+-%.2f m), table z %.3f m, bowl top z %.3f m, rim radius %s m"
           % (bowl_xy[0], bowl_xy[1], res["error_m"], table_z, top_z, res["rim_radius_m"]))
-    print("  %d points, %.1f s; %s" % (len(above), res["seconds"], out))
+    print("  %d points, %d candidate(s), %.1f s; %s" % (res["points"], len(cands), res["seconds"], out))
     return 0
 
 

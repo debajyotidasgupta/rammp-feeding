@@ -193,6 +193,10 @@ acquisition:
     slow_mps: 0.005
 
 perception:
+  scene:                        # the fixed scene camera (make locate-scene): the COARSE bowl + table
+    bowl_prompts: [bowl, dish, bowl with a glass jar]   # every one's boxes are candidates: from the side a bowl reads
+                                # as a dish or a plate with a jar, and "bowl" alone boxed a lidded box 1 m off
+    max_reach_m: 0.75           # a candidate further than this from the arm's base is not the bowl
   min_box_side_px: 25
   max_box_aspect: 3.0
   food_inside_bowl_min: 0.8     # fraction of a food box inside the bowl box

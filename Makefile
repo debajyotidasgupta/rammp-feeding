@@ -32,16 +32,15 @@ DET_PORT   := $(shell $(SET) deployment.servers.detector_port)
 FACE_PORT  := $(shell $(SET) deployment.servers.face_port)
 CAM_PORT   := $(shell $(SET) deployment.servers.camera_port)
 CAMERA     := $(shell $(SET) deployment.containers.camera)
+SCENE_CAM  := $(shell $(SET) deployment.containers.scene_camera)
 CAM_KIND   := $(shell $(SET) camera.streams.kind)
-COLOUR_TOPIC:= $(shell $(SET) camera.streams.colour_topic 2>/dev/null)
-CAM_DOMAIN := $(shell $(SET) camera.streams.ros.domain_id 2>/dev/null)
-CAM_DDS    := $(shell $(SET) camera.streams.ros.cyclonedds_uri 2>/dev/null)
 DEPTH_TOPIC:= $(shell $(SET) camera.streams.depth_topics)
 DRIVER_IMG := $(shell $(SET) deployment.images.driver)
 VISION_IMG := $(shell $(SET) deployment.images.vision)
 DA3SRC     := $(shell $(SET) deployment.paths.da3_src)
 HF_CACHE   := $(shell $(SET) deployment.paths.hf_home)
 ROOTDIR    := $(shell $(SET) deployment.root)
+CAL_FILES  := $(shell python3 -m settings files)     # other stacks' calibration files, read in place
 ROS_DOMAIN := $(shell $(SET) deployment.ros_domain_id)
 MODELS_WAIT:= $(shell $(SET) deployment.servers.startup_timeout_s)
 # RTSP transport for the depth stream. The session drops periodically either way
@@ -67,7 +66,7 @@ MOVELOG    = set -o pipefail; echo "== $$(date '+%F %T') make $@" >> $(RUNS)/mov
               docker exec -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/work -e RAMMP_SET="$$RAMMP_SET" -w /work $(DRIVER) python3 -u -m
 TO_MOVELOG := 2>&1 | while IFS= read -r l; do printf '%s\n' "$$l"; printf '%s %s\n' "$$(date +%T)" "$$l" >> $(RUNS)/moves.log; done
 
-.PHONY: start-direct tool preflight camera camera-server sdk kortex driver-image vision images driver depth clean-depth status state start detect perceive over acquire deliver retract feed detector models models-stop capture review locate-bowl limits twin twin-poses
+.PHONY: start-direct tool preflight camera camera-server locate-scene sdk kortex driver-image vision images driver depth clean-depth status state start detect perceive over acquire deliver retract feed detector models models-stop capture review locate-bowl limits twin twin-poses
 
 # --- the arm ----------------------------------------------------------------
 # Every motion goes through kinova/scripts/safe_move.py: utensil kept pointing
@@ -81,7 +80,7 @@ start:
 	@$(MOVELOG) kinova.scripts.sequence home $(TO_MOVELOG)
 
 detect:
-	@$(MOVELOG) kinova.scripts.sequence detect $(TO_MOVELOG)
+	@$(MOVELOG) kinova.scripts.sequence detect $(if $(PLAN),--plan,) $(TO_MOVELOG)
 
 # Straight to feeding_start from ANYWHERE, every joint the short way round (SPEED=<deg/s>, default
 # motion.sequence.direct_dps). It does not route round the table like `start`: for a workspace you can see is clear.
@@ -114,18 +113,8 @@ models:
 camera: $(if $(filter kinova_vision,$(CAM_KIND)),depth) camera-server
 
 camera-server:
-	@if curl -s -m 2 http://127.0.0.1:$(CAM_PORT)/ping | grep -q ok; then echo "camera server already up"; \
-	elif [ "$(CAM_KIND)" = ros2 ]; then docker rm -f $(CAMERA) >/dev/null 2>&1; \
-	  docker run -d --name $(CAMERA) --network host --ipc host --restart unless-stopped \
-	    -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp -e ROS_DOMAIN_ID=$(CAM_DOMAIN) \
-	    $(if $(CAM_DDS),-e CYCLONEDDS_URI=file:///dds.xml -v $(CAM_DDS):/dds.xml:ro,) \
-	    -v $(CURDIR)/feeding/camera_server.py:/camera_server.py:ro --entrypoint bash $(VISION_IMG) -lc \
-	    'source /opt/ros/humble/setup.bash; exec python3 /camera_server.py --port $(CAM_PORT) --depth $(DEPTH_TOPIC) --colour $(COLOUR_TOPIC)' \
-	    >/dev/null && echo "starting camera server ($(CAMERA): $(COLOUR_TOPIC) + $(DEPTH_TOPIC), domain $(CAM_DOMAIN))"; \
-	else docker exec $(VISION) pkill -9 -f "[c]amera_server.py" >/dev/null 2>&1; \
-	  docker cp feeding/camera_server.py $(VISION):/tmp/camera_server.py >/dev/null && \
-	  docker exec -d $(VISION) bash -lc "source /opt/ros/humble/setup.bash; source /ros2_ws/install/setup.bash; cd /tmp && python3 camera_server.py --port $(CAM_PORT) --depth $(DEPTH_TOPIC) > /tmp/camera_server.log 2>&1" && \
-	  echo "starting camera server (in $(VISION))"; fi
+	@feeding/camera_up.sh camera
+	@feeding/camera_up.sh scene_camera
 
 detector: models
 
@@ -134,6 +123,7 @@ models-stop:
 	@pkill -f "[d]etect_mouth_mp --serve" && echo "face server stopped" || true
 	@docker exec $(VISION) pkill -9 -f "[c]amera_server.py" >/dev/null 2>&1 && echo "camera server stopped" || true
 	@docker rm -f $(CAMERA) >/dev/null 2>&1 && echo "camera server ($(CAMERA)) stopped" || true
+	@docker rm -f $(SCENE_CAM) >/dev/null 2>&1 && echo "scene camera server ($(SCENE_CAM)) stopped" || true
 
 # Acquisition, one verified step at a time. Uses the current bite ($(RUNS)/latest: the latest make perceive).
 over:
@@ -177,6 +167,11 @@ tool:
 review:
 	@PYTHONPATH=. $(FACE_PY) -m feeding.review "$(or $(RUN),$$(dirname $$(readlink -f $(RUNS)/latest)))" --write
 
+# The COARSE bowl + table position from the fixed scene camera (profiles.scene_camera) -> runs_dir/scene_state.json:
+# where food_detect_start goes. No motion. make models brings its camera server up.
+locate-scene:
+	@PYTHONPATH=. HF_HOME=$(HF_CACHE) $(DETECT_PY) -m feeding.locate_scene
+
 locate-bowl:
 	@PYTHONPATH=. $(DETECT_PY) -m feeding.locate_bowl "$(or $(RUN),$$(readlink -f $(RUNS)/latest)/perceive)"
 
@@ -217,13 +212,14 @@ vision:
 images: driver-image vision
 
 # The driver container: the arm scripts run in it (INARM), this tree mounted at /work, the run record at its host
-# path (RAMMP_ROOT: files the arm scripts save, e.g. make tool's, land on the host). Recreating it clears its /tmp
+# path (RAMMP_ROOT: files the arm scripts save, e.g. make tool's, land on the host), and every external calibration
+# file the config reads (settings.py files: a camera mount, the scene camera) read-only at its own path. Recreating it clears its /tmp
 # (the swing / retract caches: the next delivery rebuilds them).
 driver:
 	-docker rm -f $(DRIVER) 2>/dev/null
 	@mkdir -p $(RUNS)
 	docker run -d --name $(DRIVER) --network host --restart unless-stopped -v $(CURDIR):/work -w /work \
-	  -v $(RUNS):$(RUNS) -e RAMMP_ROOT=$(ROOTDIR) $(DRIVER_IMG)
+	  -v $(RUNS):$(RUNS) -e RAMMP_ROOT=$(ROOTDIR) $(foreach f,$(CAL_FILES),-v $(f):$(f):ro) $(DRIVER_IMG)
 	@docker exec $(DRIVER) python3 -c "import kortex_api" && echo "driver $(DRIVER) up ($(DRIVER_IMG))"
 
 # This arm's depth sensor reports fx=fy=334.810; the package's shipped default

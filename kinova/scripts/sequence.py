@@ -44,11 +44,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Sequence
 
+import numpy as np
+
 import runlog
 from kinova import scene
+from kinova.motion import _ik, fk_tip
 from kinova.connection import kinova_connection
 from kinova.scripts.safe_move import (MAX_TILT_DEG, Joints, MoveError, fold, goto, goto_cartesian, joints,
                                       pitch_sum, tilt_deg, tool_pose)
@@ -65,7 +69,10 @@ LIFT = CAL / "lift_pose.json"
 DETECT = cfg.path("bowl.overlook_pose")           # the selected bowl's food_detect_start, as captured
                                                   # (moved with the bowl / table: kinova/scene.py)
 
-LIFT_Z = float(cfg.motion.sequence.lift_z_m)      # m, tool z at the top of the lift (stall is ~0.565)
+LIFT_Z = float(cfg.motion.sequence.lift_z_m)      # m, tool z at the top of the lift (stall is ~0.565); computed
+                                                  # overlook: scene.lift_z() instead (no higher than the overlook)
+STATE_DIR = Path(os.environ.get("RAMMP_STATE_DIR", "/tmp"))
+LIFT_REACHED = STATE_DIR / "lift_reached.json"    # a computed overlook: where the last lift ended (home retraces it)
 NEAR_DEG = float(cfg.motion.near_pose_deg)        # within this of a pose's joints = "at" that pose
 LIFT_SPEED = float(cfg.motion.sequence.lift_mps)
 DESCEND_SPEED = float(cfg.motion.sequence.descend_mps)   # into the parking pose: slower, it brakes near the table
@@ -118,27 +125,83 @@ def report(conn: KinovaConnection, what: str) -> None:
     runlog.event("at", pose_name=what, joints=q, tool=p, tilt_deg=tilt)
 
 
-def detect(conn: KinovaConnection, rerecord: bool) -> None:
-    """feeding_start -> food_detect_start: the vertical lift, then the swing via its midpoint."""
+def lift_joints(conn: KinovaConnection, top: float) -> Joints:
+    """The joints at the top of the lift: where the last lift ended (computed overlook), else the captured lift."""
+    if scene.computed():
+        if LIFT_REACHED.exists():
+            rec = json.loads(LIFT_REACHED.read_text())
+            if abs(float(rec["z_m"]) - top) < 0.005:
+                return [float(v) for v in rec["joints_deg"]]
+        h = load(HOME)["tool_pose"]                  # not recorded yet: the controller's IK, seeded with the capture
+        q = _ik(conn, (h["x_m"], h["y_m"], top), (h["theta_x_deg"], h["theta_y_deg"], h["theta_z_deg"]),
+                load(LIFT)["joints_deg"])
+        if q is None:
+            raise MoveError("the lift top z %.3f above feeding_start is not reachable" % top)
+        return list(q)
+    return load(LIFT)["joints_deg"]
+
+
+def check_path(conn: KinovaConnection, legs: Sequence[tuple[Joints, Joints]], top: float) -> tuple[float, float]:
+    """(highest, lowest) utensil tip z along these joint legs (the controller's FK, sampled). Refuses a path that
+    rises more than motion.sequence.max_path_above_lift_m over where it starts, or brings the tip within
+    min_tip_above_table_m of the table or min_tip_above_bowl_m of the bowl's top (the scene camera's)."""
+    zs = [float(fk_tip(conn, [x + fold(y - x) * s for x, y in zip(a, b)])[2])
+          for a, b in legs for s in np.linspace(0.0, 1.0, 13)]
+    peak, low = max(zs), min(zs)
+    rise = float(cfg.motion.sequence.max_path_above_lift_m)
+    if peak > zs[0] + rise:
+        raise MoveError("the swing would lift the utensil tip to z %.3f, %.0f mm above where it starts (the lift top, "
+                        "tool z %.3f) -- more than %.0f mm: not moving" % (peak, 1000 * (peak - zs[0]), top, 1000 * rise))
+    ws, sq = scene.workspace(), cfg.motion.sequence
+    floor = max(ws["table_z"] + float(sq.min_tip_above_table_m), ws["bowl_top_z"] + float(sq.min_tip_above_bowl_m))
+    if low < floor:
+        raise MoveError("the swing would bring the utensil tip down to z %.3f: %.0f mm above the table, %.0f mm above "
+                        "the bowl's top (at least %.0f / %.0f) -- not moving"
+                        % (low, 1000 * (low - ws["table_z"]), 1000 * (low - ws["bowl_top_z"]),
+                           1000 * float(sq.min_tip_above_table_m), 1000 * float(sq.min_tip_above_bowl_m)))
+    return peak, low
+
+
+def detect(conn: KinovaConnection, rerecord: bool, plan: bool = False) -> None:
+    """feeding_start -> food_detect_start: the vertical lift, then the swing via its midpoint. With a computed
+    overlook (kinova/scene.py) the lift goes no higher than the overlook, and the swing's peak is checked first."""
     home = load(HOME)
-    clearance = LIFT_Z - scene.table_height()
+    top = scene.lift_z()
+    clearance = top - scene.table_height()
     if clearance < float(cfg.motion.sequence.min_lift_above_table_m):
         raise MoveError("the lift top (z %.3f) is only %.0f mm above the table (z %.3f): the swing to the bowl "
-                        "crosses the table -- not moving" % (LIFT_Z, 1000 * clearance, scene.table_height()))
+                        "crosses the table -- not moving" % (top, 1000 * clearance, scene.table_height()))
     q = joints(conn)
-    if dist_deg(q, home["joints_deg"]) > NEAR_DEG:
+    if dist_deg(q, home["joints_deg"]) > NEAR_DEG and not plan:
         raise MoveError("not at feeding_start (%.1f deg away) -- run `home` first"
                         % dist_deg(q, home["joints_deg"]))
     qd = scene.overlook_joints(conn)          # before anything moves: a bowl out of reach refuses here
+    if scene.computed():
+        ws = scene.workspace()
+        lift = lift_joints(conn, top)
+        peak, low = check_path(conn, [(lift, midpoint(lift, qd)), (midpoint(lift, qd), qd)], top)
+        t = scene.overlook_pose()["tool_pose"]
+        log.info("  overlook over the bowl at (%.3f, %.3f) m, table z %.3f (%s)", ws["bowl_xy"][0], ws["bowl_xy"][1],
+                 ws["table_z"], ws["source"])
+        log.info("  food_detect_start: tool (%.3f %.3f %.3f), joints %s", t["x_m"], t["y_m"], t["z_m"],
+                 " ".join("%.1f" % v for v in qd))
+        log.info("  lift to tool z %.3f (the captured lift top: %.3f); on the swing the tip stays z %.3f .. %.3f "
+                 "(%.0f .. %.0f mm above the table; its lowest %.0f mm above the bowl's top)", top, LIFT_Z, low, peak,
+                 1000 * (low - ws["table_z"]), 1000 * (peak - ws["table_z"]), 1000 * (low - ws["bowl_top_z"]))
+    if plan:
+        log.info("  PLAN only: nothing moved")
+        return
     report(conn, "at feeding_start")
     h = home["tool_pose"]
     xy = (h["x_m"], h["y_m"])
     rpy = (h["theta_x_deg"], h["theta_y_deg"], h["theta_z_deg"])
-    goto_cartesian(conn, (xy[0], xy[1], LIFT_Z), rpy, speed=LIFT_SPEED, label="lift (smooth)")
-    if rerecord or not LIFT.exists():
+    goto_cartesian(conn, (xy[0], xy[1], top), rpy, speed=LIFT_SPEED, label="lift (smooth)")
+    if scene.computed():
+        LIFT_REACHED.write_text(json.dumps(dict(z_m=top, joints_deg=joints(conn))))
+    elif rerecord or not LIFT.exists():
         record_lift(conn)
         log.info("    recorded %s", LIFT.name)
-    lift = load(LIFT)["joints_deg"]
+    lift = lift_joints(conn, top)
     mid = midpoint(lift, qd)
     goto(conn, mid, speed=SWING_SPEED, torque_limit=SWING_TORQUE_NM, label="swing, first half")
     goto(conn, qd, speed=SWING_SPEED, torque_limit=SWING_TORQUE_NM, label="swing, second half")
@@ -147,7 +210,7 @@ def detect(conn: KinovaConnection, rerecord: bool) -> None:
 
 def home_(conn: KinovaConnection) -> None:
     """Back to feeding_start by retracing detect(), from food_detect_start or the top of the lift."""
-    home, lift = load(HOME), load(LIFT)
+    home, lift = load(HOME), dict(joints_deg=lift_joints(conn, scene.lift_z()))
     qd = scene.overlook_joints(conn)
     q = joints(conn)
     if dist_deg(q, home["joints_deg"]) <= NEAR_DEG:
@@ -197,6 +260,7 @@ def direct(conn: KinovaConnection, speed: float) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("what", choices=["detect", "home", "direct"])
+    ap.add_argument("--plan", action="store_true", help="detect: compute and check, move nothing")
     ap.add_argument("--speed", type=float, default=float(cfg.motion.sequence.direct_dps),
                     help="direct: the furthest joint's average speed, deg/s")
     ap.add_argument("--rerecord-lift", action="store_true",
@@ -207,7 +271,7 @@ def main() -> int:
     with kinova_connection() as conn:
         try:
             if a.what == "detect":
-                detect(conn, a.rerecord_lift)
+                detect(conn, a.rerecord_lift, a.plan)
             elif a.what == "direct":
                 direct(conn, a.speed)
             else:

@@ -6,6 +6,8 @@ the depth correction (scale / offset) -- used by perception, the floor measureme
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 
 from settings import cfg
@@ -18,7 +20,31 @@ FXD, FYD, CXD, CYD = float(_d.fx), float(_d.fy), float(_d.cx), float(_d.cy)
 DEPTH_SHAPE = (int(_d.height), int(_d.width))
 T_D2C = np.array(_d.depth_to_colour_m, dtype=float)
 DEPTH_SCALE, DEPTH_OFFSET_M = float(_d.scale), float(_d.offset_m)
-CAM_IN_TOOL = np.array(cfg.camera.mount.camera_in_tool_m, dtype=float)
+def _mount() -> np.ndarray:
+    """The colour camera's position in the TOOL frame. From camera.mount.file when set -- another stack's calibration,
+    read in place (format rammp_box_opening: end_effector_link = the flange, mount_xyz, mount_quat_xyzw) -- else
+    camera.mount.camera_in_tool_m. The geometry here assumes the camera turned 180 deg about the tool axis (image +u =
+    tool -x, +v = tool -y); a file saying otherwise is refused rather than half-used."""
+    m = cfg.camera.mount
+    path = str(m.get("file", "") or "")
+    if not path:
+        return np.array(m.camera_in_tool_m, dtype=float)
+    import yaml
+    doc = yaml.safe_load(open(os.path.expanduser(path)))
+    if doc.get("parent_frame") != "end_effector_link":
+        raise ValueError("%s: mount relative to %r, expected end_effector_link" % (path, doc.get("parent_frame")))
+    x, y, z, w = (float(v) for v in doc["mount_quat_xyzw"])
+    R = np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+                  [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+                  [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]])
+    off = np.degrees(np.arccos(np.clip((np.trace(R.T @ np.diag([-1.0, -1.0, 1.0])) - 1) / 2, -1, 1)))
+    if off > 3.0:
+        raise ValueError("%s: the camera is rotated %.1f deg from 180 deg about the tool axis -- not supported" % (path, off))
+    tool = np.array(cfg.deployment.arm.tool.transform_m, dtype=float)     # the flange -> tool offset
+    return np.array(doc["mount_xyz"], dtype=float) - tool
+
+
+CAM_IN_TOOL = _mount()
 COLOUR_URL = cfg.camera.streams.colour_url             # RTSP from the camera, or the camera server's MJPEG
 
 

@@ -33,6 +33,7 @@ depth:                          # aligned to colour: the colour intrinsics, no o
   min_valid_m: 0.07             # the D405 sees from ~7 cm
 
 mount:
-  camera_in_tool_m: [0.0, 0.05639, -0.12305]   # PROVISIONAL: the built-in camera's place, which it took (user); the
-                                               # hover check measures the difference
+  file: ""                      # a calibration file read in place (a machine's: local.yaml), e.g. the box-opening
+                                # stack's camera_d405_wrist.yaml (end_effector_link, measured 2026-08-25); it wins over
+  camera_in_tool_m: [0.0, 0.075, -0.125]       # ... this, the same numbers (75 mm off-axis, lens ~ the flange plane)
   image_rotated_at_delivery: true              # as mounted: world-up is image-left at the delivery pose

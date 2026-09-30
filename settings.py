@@ -8,6 +8,7 @@
 
     python3 -m settings get delivery.stop_m     # shell: prints the value (true -> 1, false -> empty)
     python3 -m settings dump                    # the merged configuration, as YAML
+    python3 -m settings files                   # the external calibration files it reads in place (make driver)
 
 Layers, later wins: config/rammp.yaml < the selected profiles (config/camera|utensil|bowl|food/<name>.yaml, under
 cfg.camera / cfg.utensil / cfg.bowl / cfg.food; a utensil's by_camera.<camera> section with that camera) <
@@ -118,6 +119,10 @@ def load() -> Cfg:
         name = os.environ.get("RAMMP_" + kind.upper(), c["profiles"][kind])
         c["profiles"][kind] = name
         c[kind] = yaml.safe_load((CONFIG / kind / (name + ".yaml")).read_text())
+    # an optional fixed camera watching the scene (a camera profile too): the coarse bowl / table position
+    scene = os.environ.get("RAMMP_SCENE_CAMERA", c["profiles"].get("scene_camera") or "")
+    c["profiles"]["scene_camera"] = scene
+    c["scene_camera"] = yaml.safe_load((CONFIG / "camera" / (scene + ".yaml")).read_text()) if scene else {}
     # a utensil's measurements against one camera (tip pixel, camera-to-tip, ...) live in its profile under
     # by_camera.<camera>, applied only with that camera selected (before local.yaml / RAMMP_SET, which still win)
     over = (c["utensil"].pop("by_camera", None) or {}).get(c["profiles"]["camera"])
@@ -131,7 +136,8 @@ def load() -> Cfg:
     if os.environ.get("RAMMP_ROOT"):
         d["root"] = os.environ["RAMMP_ROOT"]
     return Cfg(_fill(c, dict(arm_ip=d["arm"]["ip"], root=str(d.get("root", "~")).rstrip("/"),
-                             name=d.get("name", "rammp"), camera_port=d["servers"]["camera_port"])))
+                             name=d.get("name", "rammp"), camera_port=d["servers"]["camera_port"],
+                             scene_camera_port=d["servers"].get("scene_camera_port", 8768))))
 
 
 cfg = load()
@@ -150,6 +156,19 @@ def _shell(v):
 if __name__ == "__main__":
     if len(sys.argv) >= 3 and sys.argv[1] == "get":
         print(_shell(cfg.get(sys.argv[2])))
+    elif len(sys.argv) >= 2 and sys.argv[1] == "files":      # external calibration files the config reads in place
+        seen = []
+        def walk(node):
+            if isinstance(node, dict):
+                for k, v in node.items():
+                    if k == "file" and isinstance(v, str) and v:
+                        p = os.path.expanduser(v)
+                        if os.path.isabs(p) and p not in seen:
+                            seen.append(p)
+                    else:
+                        walk(v)
+        walk(cfg)
+        print(" ".join(seen))
     elif len(sys.argv) >= 2 and sys.argv[1] == "dump":
         print(yaml.safe_dump(json.loads(json.dumps(cfg)), sort_keys=False))
     else:

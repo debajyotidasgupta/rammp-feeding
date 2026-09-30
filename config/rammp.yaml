@@ -28,7 +28,8 @@ deployment:
                                 # tracking overshoot could fault the arm mid-move)
       modes: [ANGULAR_TRAJECTORY, CARTESIAN_TRAJECTORY, CARTESIAN_WAYPOINT_TRAJECTORY]
   containers: {driver: "{name}_driver", vision: "{name}_vision"}   # `make driver` / `make depth` create them
-  images: {driver: "{name}/kinova-gen3-ros2:kortex", vision: "{name}/kortex-vision:humble"}   # make kortex / vision
+  images: {driver: "{name}/driver:py310", vision: "{name}/kortex-vision:humble"}   # make driver-image / vision
+  ros_domain_id: 0              # our ROS 2 traffic (the depth nodes); a box running other ROS 2 needs its own
   venvs: {detector: "{root}/venvs/la", face: "{root}/venvs/mp"}
   paths:
     da3_src: "{root}/da3src"                  # the Depth Anything 3 checkout (on PYTHONPATH for the detector)

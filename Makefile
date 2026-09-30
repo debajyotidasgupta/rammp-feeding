@@ -37,6 +37,7 @@ VISION_IMG := $(shell $(SET) deployment.images.vision)
 DA3SRC     := $(shell $(SET) deployment.paths.da3_src)
 HF_CACHE   := $(shell $(SET) deployment.paths.hf_home)
 ROOTDIR    := $(shell $(SET) deployment.root)
+ROS_DOMAIN := $(shell $(SET) deployment.ros_domain_id)
 MODELS_WAIT:= $(shell $(SET) deployment.servers.startup_timeout_s)
 # RTSP transport for the depth stream. The session drops periodically either way
 # (an upstream timeout, not a network fault -- the link measures 0% loss), but
@@ -56,7 +57,7 @@ SDK        := $(ROOTDIR)/kortex_api_2.8.0_$(ARCHTAG)
 # sync.sh --delete and needs sudo to clear.
 INARM      := docker exec -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/work -w /work $(DRIVER) python3 -u -m
 
-.PHONY: sdk kortex vision images driver depth clean-depth status state start detect perceive over acquire deliver retract feed detector models models-stop capture review locate-bowl limits twin twin-poses
+.PHONY: sdk kortex driver-image vision images driver depth clean-depth status state start detect perceive over acquire deliver retract feed detector models models-stop capture review locate-bowl limits twin twin-poses
 
 # --- the arm ----------------------------------------------------------------
 # Every motion goes through kinova/scripts/safe_move.py: utensil kept pointing
@@ -160,25 +161,25 @@ capture:
 sdk:
 	./setup_kortex_sdk.sh
 
+# The ROS 2 C++ driver (the submodule), for work on it; the feeding stack does not use it.
 kortex:
 	@test -d "$(SDK)" || { echo "no SDK at $(SDK) -- run 'make sdk'"; exit 1; }
-	$(MAKE) -C $(SUBMODULE) build-real KORTEX_SRC=$(SDK) IMAGE_REAL=$(DRIVER_IMG)
+	$(MAKE) -C $(SUBMODULE) build-real KORTEX_SRC=$(SDK)
+
+driver-image:
+	docker build -f docker/Dockerfile.driver -t $(DRIVER_IMG) docker/
 
 vision:
 	docker build -f docker/Dockerfile.vision -t $(VISION_IMG) docker/
 
-images: kortex vision
+images: driver-image vision
 
-# The driver container: the arm scripts run in it (INARM), with this tree mounted at /work. It installs the
-# Kortex Python API at start (requirements.txt pins why 2.8.0) and then idles. Recreating it clears its /tmp.
+# The driver container: the arm scripts run in it (INARM), this tree mounted at /work. Recreating it clears its
+# /tmp (the swing / retract caches: the next delivery rebuilds them).
 driver:
 	-docker rm -f $(DRIVER) 2>/dev/null
-	docker run -d --name $(DRIVER) --network host --restart unless-stopped -v $(CURDIR):/work -w /work \
-	  --entrypoint bash $(DRIVER_IMG) -lc 'pip3 install -q "protobuf<=3.20" \
-	    "kortex_api @ https://artifactory.kinovaapps.com/artifactory/generic-public/kortex/API/2.8.0/kortex_api-2.8.0.post5-py3-none-any.whl" \
-	    >/tmp/pip.log 2>&1; sleep infinity'
-	@for i in $$(seq 1 90); do docker exec $(DRIVER) python3 -c "import kortex_api" 2>/dev/null && { echo "driver $(DRIVER) ready ($${i} s)"; exit 0; }; sleep 1; done; \
-	  echo "kortex_api did not install -- docker exec $(DRIVER) cat /tmp/pip.log"; exit 1
+	docker run -d --name $(DRIVER) --network host --restart unless-stopped -v $(CURDIR):/work -w /work $(DRIVER_IMG)
+	@docker exec $(DRIVER) python3 -c "import kortex_api" && echo "driver $(DRIVER) up ($(DRIVER_IMG))"
 
 # This arm's depth sensor reports fx=fy=334.810; the package's shipped default
 # is 360.013 -- 7.53% off, a scale error on every deprojected point worth about
@@ -194,7 +195,7 @@ driver:
 depth:
 	-docker rm -f $(VISION) 2>/dev/null
 	docker run -d --name $(VISION) --network host --ipc host --restart unless-stopped \
-	  -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp -e ROS_DOMAIN_ID=0 \
+	  -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp -e ROS_DOMAIN_ID=$(ROS_DOMAIN) \
 	  -v $(CURDIR)/calibration:/calib:ro \
 	  --entrypoint bash $(VISION_IMG) -lc \
 	  'source /opt/ros/humble/setup.bash; source /ros2_ws/install/setup.bash; \

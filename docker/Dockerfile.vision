@@ -1,12 +1,12 @@
-# kinova_vision (ros2_kortex_vision) layered onto the RAMMP arm image.
+# kinova_vision (ros2_kortex_vision) on ROS 2 Humble: the depth stream, and depth_server.py inside it.
 #
 # Kinova streams depth over RTSP as a raw 16-bit format that ffmpeg/VLC cannot
 # decode -- ffprobe reports codec_type=data. kinova_vision is the GStreamer
 # pipeline that parses it and republishes it as sensor_msgs/Image, so this is
 # the only supported way to actually see depth.
 #
-#   docker build -f docker/Dockerfile.vision -t rammp/kortex-vision:humble .
-FROM kinova-gen3-ros2:kortex
+#   make vision     # -> deployment.images.vision
+FROM ros:humble-ros-base
 
 SHELL ["/bin/bash", "-c"]
 ENV DEBIAN_FRONTEND=noninteractive
@@ -22,7 +22,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ros-humble-image-transport \
       ros-humble-rclcpp-components \
       ros-humble-tf2 ros-humble-tf2-ros \
-      python3-opencv \
+      python3-opencv python3-numpy \
+      ros-humble-rmw-cyclonedds-cpp \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /ros2_ws
@@ -42,9 +43,7 @@ RUN f=src/ros2_kortex_vision/src/vision.cpp && \
     sed -i 's|^\( *\)node_->declare_parameter<std::string>(CAMERA_INFO_URL_DEFAULT_PARAM);|\1if (!node_->has_parameter(CAMERA_INFO_URL_DEFAULT_PARAM))\n\1  node_->declare_parameter<std::string>(CAMERA_INFO_URL_DEFAULT_PARAM);|' $f && \
     grep -n "has_parameter(CAMERA_INFO" $f
 
-# Build only the new package; the arm workspace is already built in the base.
 RUN source /opt/ros/humble/setup.bash && \
-    source /ros2_ws/install/setup.bash && \
     colcon build --symlink-install --packages-select kinova_vision \
       --cmake-args -DCMAKE_BUILD_TYPE=Release
 

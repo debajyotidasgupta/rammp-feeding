@@ -586,23 +586,24 @@ leave them alone. Everything of ours is in one folder, so it can go in one step:
 
 ```
 ~/cornell/rammp        this tree (SYNC_USER=abra SYNC_DEST=cornell/rammp ./sync.sh 192.168.1.11)
-~/cornell/venvs/la     detector: torch 2.10 (jetson-ai-lab jp6/cu126), transformers 4.57.1, DA3 (-e, no deps)
+~/cornell/venvs/la     detector: torch 2.10 (jetson-ai-lab jp6/cu126), transformers 4.57.1, decord2, DA3 (-e)
 ~/cornell/venvs/mp     face: mediapipe 1.0.1
 ~/cornell/da3src       Depth Anything 3 @ 3d835ec
 ~/cornell/.cache/huggingface   the model cache (LocateAnything-3B, DA3METRIC-LARGE)
-~/cornell/kortex_api_2.8.0_aarch64   the KORTEX C++ SDK (only for rebuilding the driver image)
 ~/cornell/models       face_landmarker.task
 ~/cornell/rammp_runs   the run record
 ~/cornell/logs, cache  setup logs, the pip cache
-docker                 images cornell/kinova-gen3-ros2:kortex, cornell/kortex-vision:humble;
-                       containers cornell_driver, cornell_vision
+docker                 images cornell/driver:py310 (docker/Dockerfile.driver: Python 3.10, numpy, kortex_api),
+                       cornell/kortex-vision:humble (Dockerfile.vision: ROS 2 Humble + kinova_vision);
+                       containers cornell_driver, cornell_vision; our ROS 2 on domain 42 (theirs is 0)
 ```
 
-Its `config/local.yaml` is four lines: `root: ~/cornell`, `name: cornell`, the arm at 192.168.1.10, the detector
-on :8775. Clean up:
+Its `config/local.yaml` holds only its facts: `root: ~/cornell`, `name: cornell`, the arm at 192.168.1.10, the
+detector on :8775, ROS domain 42. Set up from nothing: `./setup_jetson.sh` (the venvs, DA3, the models, all under
+the root; `decord2` because decord has no aarch64 wheel), then `make images driver depth models`. Clean up:
 
 ```
-docker rm -f cornell_driver cornell_vision; docker rmi cornell/kinova-gen3-ros2:kortex cornell/kortex-vision:humble
+docker rm -f cornell_driver cornell_vision; docker rmi cornell/driver:py310 cornell/kortex-vision:humble
 pkill -f "cornell/venvs"; rm -rf ~/cornell
 ```
 

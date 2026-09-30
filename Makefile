@@ -36,7 +36,7 @@ DRIVER_IMG := $(shell $(SET) deployment.images.driver)
 VISION_IMG := $(shell $(SET) deployment.images.vision)
 DA3SRC     := $(shell $(SET) deployment.paths.da3_src)
 HF_CACHE   := $(shell $(SET) deployment.paths.hf_home)
-SDK_CFG    := $(shell $(SET) deployment.paths.kortex_sdk)
+ROOTDIR    := $(shell $(SET) deployment.root)
 MODELS_WAIT:= $(shell $(SET) deployment.servers.startup_timeout_s)
 # RTSP transport for the depth stream. The session drops periodically either way
 # (an upstream timeout, not a network fault -- the link measures 0% loss), but
@@ -48,7 +48,7 @@ MODELS_WAIT:= $(shell $(SET) deployment.servers.startup_timeout_s)
 RTSP_PROTOCOLS ?= tcp
 SUBMODULE  := third_party/kinova-gen3-ros2
 ARCHTAG    := $(shell uname -m | sed 's/arm64/aarch64/; s/x86_64/x86-64/; s/amd64/x86-64/')
-SDK        := $(or $(SDK_CFG),$(HOME)/kortex_api_2.8.0_$(ARCHTAG))
+SDK        := $(ROOTDIR)/kortex_api_2.8.0_$(ARCHTAG)
 # Arm commands run inside the driver container, which is where the KORTEX SDK
 # lives. It mounts this tree at /work, so an edit here is live immediately.
 # PYTHONDONTWRITEBYTECODE because the container runs as root: without it every
@@ -83,7 +83,7 @@ perceive:
 # it answers; this returns once both do. make feed runs it first.
 models:
 	@if curl -s -m 2 http://127.0.0.1:$(DET_PORT)/ping | grep -q ok; then echo "detector + depth server already up"; \
-	else PYTHONPATH=.:$(DA3SRC)/src $(if $(HF_CACHE),HF_HOME=$(HF_CACHE),) nohup $(DETECT_PY) -m feeding.detector_server > $(RUNS)/detector.log 2>&1 & \
+	else PYTHONPATH=.:$(DA3SRC)/src HF_HOME=$(HF_CACHE) nohup $(DETECT_PY) -m feeding.detector_server > $(RUNS)/detector.log 2>&1 & \
 	  echo "starting detector + depth server (log: $(RUNS)/detector.log)"; fi
 	@if curl -s -m 2 http://127.0.0.1:$(FACE_PORT)/ping | grep -q ok; then echo "face server already up"; \
 	else PYTHONPATH=. nohup $(FACE_PY) -m feeding.detect_mouth_mp --serve > $(RUNS)/face_server.log 2>&1 & \

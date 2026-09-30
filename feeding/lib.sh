@@ -24,7 +24,7 @@ DRIVER="$(S deployment.containers.driver)"; VISION="$(S deployment.containers.vi
 PY="$(S deployment.venvs.detector)/bin/python"   # LocateAnything, Depth Anything 3, the measurements
 MPY="$(S deployment.venvs.face)/bin/python"      # MediaPipe, frame grabs
 DA3SRC="$(S deployment.paths.da3_src)"            # Depth Anything 3's source (on PYTHONPATH for $PY)
-_hf="$(S deployment.paths.hf_home)"; [ -n "$_hf" ] && export HF_HOME="$_hf"   # where the models are cached
+export HF_HOME="$(S deployment.paths.hf_home)"   # where the models are cached
 FRAMES="$(S perception.depth_frames)"
 export PYTHONUNBUFFERED=1                         # lines reach the console log when they are printed
 ARM_REC=/tmp/rammp_rec                            # the arm's record, inside the driver container

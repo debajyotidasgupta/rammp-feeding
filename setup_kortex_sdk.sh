@@ -5,7 +5,7 @@
 # per machine. Everything else (Dockerfiles, scripts) is versioned, so this is
 # the only per-host step. Prints the staged path on stdout.
 #
-#   ./setup_kortex_sdk.sh            # -> $HOME/kortex_api_2.8.0_<arch>
+#   ./setup_kortex_sdk.sh            # -> <deployment.root>/kortex_api_2.8.0_<arch>
 #   KORTEX_DEST=/opt/... ./setup_kortex_sdk.sh
 set -euo pipefail
 
@@ -17,7 +17,7 @@ case "$(uname -m)" in
   *) echo "unsupported arch: $(uname -m)" >&2; exit 1 ;;
 esac
 
-DEST="${KORTEX_DEST:-$HOME/kortex_api_2.8.0_$SUFFIX}"
+DEST="${KORTEX_DEST:-$(cd "$(dirname "$0")" && python3 -m settings get deployment.root)/kortex_api_2.8.0_$SUFFIX}"
 echo "arch $(uname -m) -> $ZIP" >&2
 rm -rf "$DEST"; mkdir -p "$DEST"
 tmp=$(mktemp -t kortex.XXXXXX).zip

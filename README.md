@@ -569,12 +569,15 @@ tiles. `sim/record.py` reads a bite; `sim/scene.py` builds the scene; `sim/twin.
 | host | role |
 |---|---|
 | abra@192.168.1.11 | **the site Jetson from 2026-09-30** (AGX Orin, JetPack 6.2 / R36.4.7, Python 3.10), wired to the arm at **192.168.1.10**. A SHARED team machine: everything of ours is under `~/cornell/` (below) |
-| jetson | the lab Jetson until 2026-09-25 (JetPack R39, Python 3.12); arm 192.168.2.67; driver `tcp_rec`, vision `kinova_vision`, `~/venvs/la` |
+| jetson | the lab Jetson until 2026-09-25 (JetPack R39, Python 3.12); arm 192.168.2.67; root `~`; its containers predate the naming (`tcp_rec`, `kinova_vision`: in its local.yaml) |
 | triphammer | x86-64, RTX 4070 Ti; no PREEMPT_RT, on wifi |
 | the Mac | source of truth; `./sync.sh [host]` pushes with `--delete` (never `config/local.yaml`) |
 
-Edit on the Mac, never on a replica. Each machine's own values (the arm's IP, container and image names, venvs,
-model cache, ports) live in its `config/local.yaml`, which sync never touches.
+Edit on the Mac, never on a replica. A machine's own facts live in its `config/local.yaml` (never synced):
+`deployment.root` (where it keeps venvs, models, the model cache, sources, runs), `deployment.name` (the prefix of
+its containers and images), the arm's `ip`, and a port only if one clashes. Everything else in
+`config/rammp.yaml` is derived from them (`{root}/venvs/la`, `{name}_driver`, ...); `RAMMP_ROOT=<dir>` overrides the
+root for one command.
 
 ### The shared site Jetson (`abra@192.168.1.11`, `~/cornell/`)
 
@@ -586,7 +589,8 @@ leave them alone. Everything of ours is in one folder, so it can go in one step:
 ~/cornell/venvs/la     detector: torch 2.10 (jetson-ai-lab jp6/cu126), transformers 4.57.1, DA3 (-e, no deps)
 ~/cornell/venvs/mp     face: mediapipe 1.0.1
 ~/cornell/da3src       Depth Anything 3 @ 3d835ec
-~/cornell/hf           the Hugging Face cache (LocateAnything-3B, DA3METRIC-LARGE)
+~/cornell/.cache/huggingface   the model cache (LocateAnything-3B, DA3METRIC-LARGE)
+~/cornell/kortex_api_2.8.0_aarch64   the KORTEX C++ SDK (only for rebuilding the driver image)
 ~/cornell/models       face_landmarker.task
 ~/cornell/rammp_runs   the run record
 ~/cornell/logs, cache  setup logs, the pip cache
@@ -594,7 +598,8 @@ docker                 images cornell/kinova-gen3-ros2:kortex, cornell/kortex-vi
                        containers cornell_driver, cornell_vision
 ```
 
-Its `config/local.yaml` points every one of these there (arm 192.168.1.10, detector on :8775). Clean up:
+Its `config/local.yaml` is four lines: `root: ~/cornell`, `name: cornell`, the arm at 192.168.1.10, the detector
+on :8775. Clean up:
 
 ```
 docker rm -f cornell_driver cornell_vision; docker rmi cornell/kinova-gen3-ros2:kortex cornell/kortex-vision:humble

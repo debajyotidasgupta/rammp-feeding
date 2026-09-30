@@ -11,6 +11,7 @@
 
 Layers, later wins: config/rammp.yaml < the selected profiles (config/camera|utensil|bowl|food/<name>.yaml, under
 cfg.camera / cfg.utensil / cfg.bowl / cfg.food) < config/local.yaml (per machine, not committed) < RAMMP_SET="a.b=1,c=2".
+Strings may use {root}, {name} (deployment.root / .name: per machine) and {arm_ip}; RAMMP_ROOT overrides the root.
 RAMMP_CONFIG points at another config directory. Profiles can be swapped per run: RAMMP_UTENSIL=spoon, RAMMP_FOOD=strawberry etc.
 Lists work in RAMMP_SET: RAMMP_SET="workspace.bowl_centre_m=[0.28, 0.27],delivery.stop_m=0.06".
 """
@@ -118,7 +119,11 @@ def load() -> Cfg:
     for item in filter(None, re.split(r",(?![^\[]*\])", os.environ.get("RAMMP_SET", ""))):   # commas in [..] kept
         k, _, v = item.partition("=")
         _set(c, k.strip(), yaml.safe_load(v))
-    return Cfg(_fill(c, dict(arm_ip=c["deployment"]["arm"]["ip"])))
+    d = c["deployment"]
+    if os.environ.get("RAMMP_ROOT"):
+        d["root"] = os.environ["RAMMP_ROOT"]
+    return Cfg(_fill(c, dict(arm_ip=d["arm"]["ip"], root=str(d.get("root", "~")).rstrip("/"),
+                             name=d.get("name", "rammp"))))
 
 
 cfg = load()

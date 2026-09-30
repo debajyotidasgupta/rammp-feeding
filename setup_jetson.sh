@@ -6,6 +6,7 @@
 #
 # The torch wheels are NVIDIA's for JetPack 6 / CUDA 12.6 (jetson-ai-lab); PyPI's aarch64 torch has no CUDA.
 # decord2: LocateAnything's remote code imports decord, which publishes no aarch64 wheel; decord2 does.
+# docker/patches/da3_optional_exports.patch: DA3 imports its export helpers' heavy deps; inference needs none.
 set -euo pipefail
 cd "$(dirname "$0")"
 S() { python3 -m settings get "$1"; }
@@ -21,6 +22,10 @@ DA3_REF=3d835ec1a5802d64a8b8b15f817a1ab54809bfe4
 echo "== Depth Anything 3 -> $DA3"
 [ -d "$DA3" ] || git clone -q https://github.com/ByteDance-Seed/Depth-Anything-3 "$DA3"
 git -C "$DA3" checkout -q "$DA3_REF"
+# inference only: DA3's export helpers (video, gaussian splats, colmap) import moviepy / open3d / ... at import
+# time; this makes them optional instead of installing them (no aarch64 wheels for several)
+git -C "$DA3" apply --reverse --check "$PWD/docker/patches/da3_optional_exports.patch" 2>/dev/null \
+  || git -C "$DA3" apply "$PWD/docker/patches/da3_optional_exports.patch"
 
 echo "== detector venv -> $LA"
 [ -x "$LA/bin/python" ] || /usr/bin/python3.10 -m venv "$LA"

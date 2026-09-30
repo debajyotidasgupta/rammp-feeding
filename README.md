@@ -568,11 +568,38 @@ tiles. `sim/record.py` reads a bite; `sim/scene.py` builds the scene; `sim/twin.
 
 | host | role |
 |---|---|
-| jetson | AGX Orin, arm64; driver container `tcp_rec`, vision `kinova_vision`, GPU venv `~/venvs/la` |
+| abra@192.168.1.11 | **the site Jetson from 2026-09-30** (AGX Orin, JetPack 6.2 / R36.4.7, Python 3.10), wired to the arm at **192.168.1.10**. A SHARED team machine: everything of ours is under `~/cornell/` (below) |
+| jetson | the lab Jetson until 2026-09-25 (JetPack R39, Python 3.12); arm 192.168.2.67; driver `tcp_rec`, vision `kinova_vision`, `~/venvs/la` |
 | triphammer | x86-64, RTX 4070 Ti; no PREEMPT_RT, on wifi |
-| the Mac | source of truth; `./sync.sh [host]` pushes with `--delete` |
+| the Mac | source of truth; `./sync.sh [host]` pushes with `--delete` (never `config/local.yaml`) |
 
-Arm at **192.168.2.67**. Edit on the Mac, never on a replica.
+Edit on the Mac, never on a replica. Each machine's own values (the arm's IP, container and image names, venvs,
+model cache, ports) live in its `config/local.yaml`, which sync never touches.
+
+### The shared site Jetson (`abra@192.168.1.11`, `~/cornell/`)
+
+Other people's `sheppy-*` containers run on it (foxglove holds :8765, a USB RealSense and an Orbbec are theirs):
+leave them alone. Everything of ours is in one folder, so it can go in one step:
+
+```
+~/cornell/rammp        this tree (SYNC_USER=abra SYNC_DEST=cornell/rammp ./sync.sh 192.168.1.11)
+~/cornell/venvs/la     detector: torch 2.10 (jetson-ai-lab jp6/cu126), transformers 4.57.1, DA3 (-e, no deps)
+~/cornell/venvs/mp     face: mediapipe 1.0.1
+~/cornell/da3src       Depth Anything 3 @ 3d835ec
+~/cornell/hf           the Hugging Face cache (LocateAnything-3B, DA3METRIC-LARGE)
+~/cornell/models       face_landmarker.task
+~/cornell/rammp_runs   the run record
+~/cornell/logs, cache  setup logs, the pip cache
+docker                 images cornell/kinova-gen3-ros2:kortex, cornell/kortex-vision:humble;
+                       containers cornell_driver, cornell_vision
+```
+
+Its `config/local.yaml` points every one of these there (arm 192.168.1.10, detector on :8775). Clean up:
+
+```
+docker rm -f cornell_driver cornell_vision; docker rmi cornell/kinova-gen3-ros2:kortex cornell/kortex-vision:humble
+pkill -f "cornell/venvs"; rm -rf ~/cornell
+```
 
 ## History
 

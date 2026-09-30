@@ -44,7 +44,7 @@ capture_depth() {    # $1 = run dir: 20-frame median depth, from frames since th
     docker cp "$VISION":/tmp/dl_depth.npy "$1/depth.npy" >/dev/null 2>&1 || true
   fi
   # fallback: fill sensor holes (the food hiding the face from the depth camera) from Depth Anything 3
-  PYTHONPATH=.:$HOME/da3src/src "$PY" -m feeding.depth_fill "$1" 2>/dev/null | sed -u 's/^/    /' || true
+  PYTHONPATH=.:$DA3SRC/src "$PY" -m feeding.depth_fill "$1" 2>/dev/null | sed -u 's/^/    /' || true
 }
 detect_face() {      # $1 = run dir: MediaPipe, else LocateAnything
   rc=5

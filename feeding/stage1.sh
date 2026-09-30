@@ -58,7 +58,7 @@ if ! PYTHONPATH=. "$PY" -m feeding.depth_grab "$OUT/depth.npy" --frames "$FRAMES
   docker cp "$VISION":/tmp/s1_depth.npy "$OUT/depth.npy" >/dev/null 2>&1 || echo "      (no depth frame from the sensor)"
 fi
 # fallback: fill sensor holes (or a missing depth frame) from the resident Depth Anything 3
-PYTHONPATH=.:$HOME/da3src/src "$PY" -m feeding.depth_fill "$OUT" 2>/dev/null | sed -u 's/^/      /' || true
+PYTHONPATH=.:$DA3SRC/src "$PY" -m feeding.depth_fill "$OUT" 2>/dev/null | sed -u 's/^/      /' || true
 
 echo "$(date +%T) [3/4] detect"
 BOWL_CACHE=(); [ -n "$(S features.bowl_once_per_session)" ] && BOWL_CACHE=(--bowl-cache "$RAMMP_SESSION/bowl.json")
@@ -67,7 +67,7 @@ PYTHONPATH=. "$PY" -m feeding.perceive --image "$OUT/colour.jpg" --out "$OUT/det
 
 DA3_ARG=()
 if [ "${STAGE1_DA3:-0}" = 1 ]; then
-  PYTHONPATH=.:$HOME/da3src/src "$PY" -m feeding.run_depth_anything3 \
+  PYTHONPATH=.:$DA3SRC/src "$PY" -m feeding.run_depth_anything3 \
     --image "$OUT/colour.jpg" --out "$OUT/da3" 2>/dev/null | grep -E "time|metric" | sed 's/^/      /'
   DA3_ARG=(--da3 "$OUT/da3.npy")
 fi

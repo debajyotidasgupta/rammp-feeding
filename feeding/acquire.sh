@@ -38,7 +38,7 @@ measure() {   # $1 = label; depth from the vision container, analysed on the hos
     echo "  $(tail -1 "$ACQ/measure_$1.err") -- trying the Depth Anything 3 fallback"
     ev depth_fallback ", \"at\": \"$1\""
     PYTHONPATH=. "$MPY" -m feeding.grab_frame "$ACQ/acq_$1_colour.jpg" >/dev/null 2>&1
-    PYTHONPATH=.:$HOME/da3src/src "$PY" -m feeding.depth_fill "$ACQ" --colour "acq_$1_colour.jpg" --depth "acq_$1.npy" | sed -u 's/^/  /'
+    PYTHONPATH=.:$DA3SRC/src "$PY" -m feeding.depth_fill "$ACQ" --colour "acq_$1_colour.jpg" --depth "acq_$1.npy" | sed -u 's/^/  /'
     PYTHONPATH=. "$PY" -m feeding.measure_under --depth "$ACQ/acq_$1.npy" --out "$ACQ/under_$1.json" --guess "${2:-0.30}"
   fi
   docker cp "$ACQ/under_$1.json" "$DRIVER":/tmp/under.json >/dev/null

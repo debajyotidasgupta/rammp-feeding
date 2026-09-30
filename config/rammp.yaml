@@ -23,8 +23,13 @@ deployment:
                                 # deg/s under their 80 hard limit, J5-J7 10% under their 70 (at the hard limit a
                                 # tracking overshoot could fault the arm mid-move)
       modes: [ANGULAR_TRAJECTORY, CARTESIAN_TRAJECTORY, CARTESIAN_WAYPOINT_TRAJECTORY]
-  containers: {driver: tcp_rec, vision: kinova_vision}
+  containers: {driver: tcp_rec, vision: kinova_vision}   # `make driver` / `make depth` create them
+  images: {driver: "kinova-gen3-ros2:kortex", vision: "rammp/kortex-vision:humble"}   # `make kortex` / `make vision`
   venvs: {detector: ~/venvs/la, face: ~/venvs/mp}
+  paths:                        # per machine: a shared box keeps all of it in one folder (config/local.yaml)
+    da3_src: ~/da3src           # the Depth Anything 3 checkout (on PYTHONPATH for the detector)
+    hf_home: ""                 # the Hugging Face model cache; "" = the default (~/.cache/huggingface)
+    kortex_sdk: ""              # the KORTEX C++ SDK for `make kortex`; "" = ~/kortex_api_2.8.0_<arch>
   runs_dir: ~/rammp_runs
   models:
     face_landmarker: ~/models/face_landmarker.task

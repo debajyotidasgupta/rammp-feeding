@@ -32,6 +32,11 @@ DET_PORT   := $(shell $(SET) deployment.servers.detector_port)
 FACE_PORT  := $(shell $(SET) deployment.servers.face_port)
 DEPTH_PORT := $(shell $(SET) deployment.servers.depth_port)
 DEPTH_TOPIC:= $(shell $(SET) camera.streams.depth_topics)
+DRIVER_IMG := $(shell $(SET) deployment.images.driver)
+VISION_IMG := $(shell $(SET) deployment.images.vision)
+DA3SRC     := $(shell $(SET) deployment.paths.da3_src)
+HF_CACHE   := $(shell $(SET) deployment.paths.hf_home)
+SDK_CFG    := $(shell $(SET) deployment.paths.kortex_sdk)
 MODELS_WAIT:= $(shell $(SET) deployment.servers.startup_timeout_s)
 # RTSP transport for the depth stream. The session drops periodically either way
 # (an upstream timeout, not a network fault -- the link measures 0% loss), but
@@ -43,7 +48,7 @@ MODELS_WAIT:= $(shell $(SET) deployment.servers.startup_timeout_s)
 RTSP_PROTOCOLS ?= tcp
 SUBMODULE  := third_party/kinova-gen3-ros2
 ARCHTAG    := $(shell uname -m | sed 's/arm64/aarch64/; s/x86_64/x86-64/; s/amd64/x86-64/')
-SDK        := $(HOME)/kortex_api_2.8.0_$(ARCHTAG)
+SDK        := $(or $(SDK_CFG),$(HOME)/kortex_api_2.8.0_$(ARCHTAG))
 # Arm commands run inside the driver container, which is where the KORTEX SDK
 # lives. It mounts this tree at /work, so an edit here is live immediately.
 # PYTHONDONTWRITEBYTECODE because the container runs as root: without it every
@@ -51,7 +56,7 @@ SDK        := $(HOME)/kortex_api_2.8.0_$(ARCHTAG)
 # sync.sh --delete and needs sudo to clear.
 INARM      := docker exec -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/work -w /work $(DRIVER) python3 -u -m
 
-.PHONY: sdk kortex vision images depth clean-depth status state start detect perceive over acquire deliver retract feed detector models models-stop capture review locate-bowl limits twin twin-poses
+.PHONY: sdk kortex vision images driver depth clean-depth status state start detect perceive over acquire deliver retract feed detector models models-stop capture review locate-bowl limits twin twin-poses
 
 # --- the arm ----------------------------------------------------------------
 # Every motion goes through kinova/scripts/safe_move.py: utensil kept pointing
@@ -78,7 +83,7 @@ perceive:
 # it answers; this returns once both do. make feed runs it first.
 models:
 	@if curl -s -m 2 http://127.0.0.1:$(DET_PORT)/ping | grep -q ok; then echo "detector + depth server already up"; \
-	else PYTHONPATH=.:$$HOME/da3src/src nohup $(DETECT_PY) -m feeding.detector_server > $(RUNS)/detector.log 2>&1 & \
+	else PYTHONPATH=.:$(DA3SRC)/src $(if $(HF_CACHE),HF_HOME=$(HF_CACHE),) nohup $(DETECT_PY) -m feeding.detector_server > $(RUNS)/detector.log 2>&1 & \
 	  echo "starting detector + depth server (log: $(RUNS)/detector.log)"; fi
 	@if curl -s -m 2 http://127.0.0.1:$(FACE_PORT)/ping | grep -q ok; then echo "face server already up"; \
 	else PYTHONPATH=. nohup $(FACE_PY) -m feeding.detect_mouth_mp --serve > $(RUNS)/face_server.log 2>&1 & \
@@ -157,12 +162,23 @@ sdk:
 
 kortex:
 	@test -d "$(SDK)" || { echo "no SDK at $(SDK) -- run 'make sdk'"; exit 1; }
-	$(MAKE) -C $(SUBMODULE) build-real KORTEX_SRC=$(SDK)
+	$(MAKE) -C $(SUBMODULE) build-real KORTEX_SRC=$(SDK) IMAGE_REAL=$(DRIVER_IMG)
 
 vision:
-	docker build -f docker/Dockerfile.vision -t rammp/kortex-vision:humble docker/
+	docker build -f docker/Dockerfile.vision -t $(VISION_IMG) docker/
 
 images: kortex vision
+
+# The driver container: the arm scripts run in it (INARM), with this tree mounted at /work. It installs the
+# Kortex Python API at start (requirements.txt pins why 2.8.0) and then idles. Recreating it clears its /tmp.
+driver:
+	-docker rm -f $(DRIVER) 2>/dev/null
+	docker run -d --name $(DRIVER) --network host --restart unless-stopped -v $(CURDIR):/work -w /work \
+	  --entrypoint bash $(DRIVER_IMG) -lc 'pip3 install -q "protobuf<=3.20" \
+	    "kortex_api @ https://artifactory.kinovaapps.com/artifactory/generic-public/kortex/API/2.8.0/kortex_api-2.8.0.post5-py3-none-any.whl" \
+	    >/tmp/pip.log 2>&1; sleep infinity'
+	@for i in $$(seq 1 90); do docker exec $(DRIVER) python3 -c "import kortex_api" 2>/dev/null && { echo "driver $(DRIVER) ready ($${i} s)"; exit 0; }; sleep 1; done; \
+	  echo "kortex_api did not install -- docker exec $(DRIVER) cat /tmp/pip.log"; exit 1
 
 # This arm's depth sensor reports fx=fy=334.810; the package's shipped default
 # is 360.013 -- 7.53% off, a scale error on every deprojected point worth about
@@ -176,17 +192,17 @@ images: kortex vision
 # The flag is kept because it stops the WRONG intrinsics being advertised, not
 # because it makes the right ones available.
 depth:
-	-docker rm -f kinova_vision 2>/dev/null
-	docker run -d --name kinova_vision --network host --ipc host --restart unless-stopped \
+	-docker rm -f $(VISION) 2>/dev/null
+	docker run -d --name $(VISION) --network host --ipc host --restart unless-stopped \
 	  -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp -e ROS_DOMAIN_ID=0 \
 	  -v $(CURDIR)/calibration:/calib:ro \
-	  --entrypoint bash rammp/kortex-vision:humble -lc \
+	  --entrypoint bash $(VISION_IMG) -lc \
 	  'source /opt/ros/humble/setup.bash; source /ros2_ws/install/setup.bash; \
 	   exec ros2 launch kinova_vision kinova_vision.launch.py \
 	     device:=$(ARM_IP) launch_color:=false launch_depth:=true \
 	     depth_camera_info_url:=file:///calib/depth_480x270.ini \
 	     depth_rtsp_element_config:="depth protocols=$(RTSP_PROTOCOLS) latency=30"'
-	@docker exec -d kinova_vision bash -lc 'sleep 31; source /opt/ros/humble/setup.bash; source /ros2_ws/install/setup.bash; \
+	@docker exec -d $(VISION) bash -lc 'sleep 31; source /opt/ros/humble/setup.bash; source /ros2_ws/install/setup.bash; \
 	   exec ros2 launch kinova_vision kinova_vision.launch.py camera:=camera2 \
 	     device:=$(ARM_IP) launch_color:=false launch_depth:=true \
 	     depth_camera_info_url:=file:///calib/depth_480x270.ini \
@@ -195,7 +211,7 @@ depth:
 	@echo "RTSP session every ~62 s; staggered, one of the two is always streaming)"
 
 clean-depth:
-	-docker rm -f kinova_vision
+	-docker rm -f $(VISION)
 
 status:
 	@echo "arch      : $$(uname -m)"

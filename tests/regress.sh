@@ -7,6 +7,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 export RAMMP_FOOD=strawberry        # the saved runs are strawberries (the aim offset is per food) ...
 export RAMMP_UTENSIL=fork_20260924  # ... taken with the fork calibration of that day
+export RAMMP_CAMERA=kinova_wrist     # ... and the built-in camera (a machine may select another in local.yaml)
 MODE="${1:-check}"; RUNS="$HOME/rammp_runs"; OUT="$RUNS/regress/$MODE"; rm -rf "$OUT"; mkdir -p "$OUT"
 LA="$HOME/venvs/la/bin/python"; MP="$HOME/venvs/mp/bin/python"
 PERCEIVE=(20260924_201906 20260924_202241 20260924_202544)

@@ -110,8 +110,9 @@ def _fill(node, subs):
 
 def load() -> Cfg:
     c = yaml.safe_load((CONFIG / "rammp.yaml").read_text())
-    path = CONFIG / "local.yaml"
-    local = (yaml.safe_load(path.read_text()) or {}) if path.exists() else {}
+    path = CONFIG / "local.yaml"                             # RAMMP_NO_LOCAL=1: ignore it (the tests: hermetic)
+    use = path.exists() and not os.environ.get("RAMMP_NO_LOCAL")
+    local = (yaml.safe_load(path.read_text()) or {}) if use else {}
     _merge(c["profiles"], local.get("profiles") or {})       # a machine may pick its own camera, utensil, ...
     for kind in ("camera", "utensil", "bowl", "food"):
         name = os.environ.get("RAMMP_" + kind.upper(), c["profiles"][kind])

@@ -51,6 +51,8 @@ import numpy as np  # noqa: E402
 import fake_kortex as fk  # noqa: E402
 
 fk.install_clock()
+os.environ["RAMMP_NO_LOCAL"] = "1"                   # hermetic: no machine's local.yaml (its camera, its arm...)
+os.environ.setdefault("RAMMP_CAMERA", "kinova_wrist")  # the scenarios were recorded with the built-in camera
 os.environ.setdefault("RAMMP_FOOD", "strawberry")      # the scenarios were recorded with the strawberry aim offset
 os.environ.setdefault("RAMMP_UTENSIL", "fork_20260924")   # ... and the fork calibration of 2026-09-24
 

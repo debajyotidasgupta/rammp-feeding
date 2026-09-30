@@ -27,5 +27,7 @@ by_camera:                      # measured against a camera other than the built
                                 # section of the selected camera)
   realsense_d405:               # the site D405, 2026-09-30, holding a spoon run as this fork (user)
     camera_to_tip_m: 0.26       # user, ruler, the D405 to the spoon tip
-    tip_px: [435, 306]          # PROVISIONAL: the calibrated tip re-projected through the D405 -- measure it
-    image_region_px: [280, 300, 660, 480]   # PROVISIONAL: the gripper and utensil in the D405 image
+    tip_px: [435, 306]          # the calibrated tip (fork.yaml above) re-projected through the D405: the spoon sits
+                                # as the fork did, and in this view it is HIDDEN behind the gripper, so it cannot be
+                                # read off the image -- the 10 mm hover check is what confirms it
+    image_region_px: [280, 300, 660, 480]   # the gripper (black, four knobs) across the bottom of the D405 image

@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 
 from settings import cfg
-from feeding.camera import COLOUR_RTSP
+from feeding.camera import COLOUR_URL
 
 CS = cfg.perception.colour_stream
 GAP_S = float(CS.gap_s)                  # no frame for this long = a gap, logged
@@ -31,7 +31,7 @@ RECONNECT_S = float(CS.reconnect_after_s)  # no frame for this long = reopen the
 class ColourStream:
     """A background reader. frame_after(n) blocks for the first frame newer than frame number n."""
 
-    def __init__(self, url: str = COLOUR_RTSP, log_path: Path | None = None):
+    def __init__(self, url: str = COLOUR_URL, log_path: Path | None = None):
         self.url = url
         self.log_path = log_path or Path(os.path.expanduser(str(cfg.deployment.runs_dir))) / "colour_stream.jsonl"
         self.cond = threading.Condition()

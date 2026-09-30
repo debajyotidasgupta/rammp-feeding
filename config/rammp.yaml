@@ -7,6 +7,7 @@
 
 profiles:
   camera: kinova_wrist          # config/camera/<name>.yaml -- intrinsics, extrinsic, depth correction, streams
+                                # (kinova_wrist: the arm's own vision module; realsense_d405: a ROS 2 D405)
   utensil: fork                 # config/utensil/<name>.yaml -- camera-to-tip, tip pixel, aim offset, ...
   bowl: front                   # config/bowl/<name>.yaml -- the overlook pose over it, where the scoop ends
   food: cubes                   # config/food/<name>.yaml -- the detector prompt, the aim offset
@@ -36,7 +37,7 @@ deployment:
       mass_kg: 0.831                    # gripper + utensil
       mass_centre_m: [0.0, 0.0, 0.0473]
       tolerance: {transform_m: 0.002, rotation_deg: 0.5, mass_kg: 0.02}
-  containers: {driver: "{name}_driver", vision: "{name}_vision"}   # `make driver` / `make depth` create them
+  containers: {driver: "{name}_driver", vision: "{name}_vision", camera: "{name}_camera"}   # make driver / depth / camera
   images: {driver: "{name}/driver:py310", vision: "{name}/kortex-vision:humble"}   # make driver-image / vision
   ros_domain_id: 0              # our ROS 2 traffic (the depth nodes); a box running other ROS 2 needs its own
   venvs: {detector: "{root}/venvs/la", face: "{root}/venvs/mp"}
@@ -50,7 +51,7 @@ deployment:
   servers:                      # resident processes, all on localhost (make models)
     detector_port: 8765         # LocateAnything + Depth Anything 3
     face_port: 8766             # MediaPipe
-    depth_port: 8767            # the depth stream, inside the vision container
+    camera_port: 8767           # the camera server (feeding/camera_server.py): depth medians, colour frames
     startup_timeout_s: 300      # make models waits this long for all three (2026-09-25: the detector took > 120 s)
 
 preflight:                      # make preflight (make feed runs it first): the arm as the calibration assumes it

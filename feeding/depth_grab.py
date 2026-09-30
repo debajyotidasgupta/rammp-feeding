@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A depth frame (median of fresh frames) from the resident depth server; exit 1 if it is not up.
+"""A depth frame (median of fresh frames) from the camera server; exit 1 if it is not up.
 
     python -m feeding.depth_grab OUT.npy [--frames 15]
 
@@ -17,13 +17,13 @@ from settings import cfg
 
 
 def fetch(frames: int, since: float | None = None) -> np.ndarray | None:
-    """A median of fresh frames from the resident depth server: frames that arrived after `since` (unix time:
+    """A median of fresh frames from the camera server: frames that arrived after `since` (unix time:
     when the arm stopped -- then frames buffered before a stream dropout still count; default: now), short
     waits, a few tries, None if it never answers."""
     wait, tries = float(cfg.perception.depth_fresh_wait_s), int(cfg.perception.depth_tries)
     since = time.time() if since is None else since
     url = "http://127.0.0.1:%d/median?frames=%d&wait=%.1f&since=%.3f&min=%d" % (
-        int(cfg.deployment.servers.depth_port), frames, wait, since, int(cfg.perception.depth_min_frames))
+        int(cfg.deployment.servers.camera_port), frames, wait, since, int(cfg.perception.depth_min_frames))
     for k in range(tries):
         try:
             with urllib.request.urlopen(url, timeout=wait + 5) as r:

@@ -30,7 +30,12 @@ FACE_PY    := $(shell $(SET) deployment.venvs.face)/bin/python
 RUNS       := $(shell $(SET) deployment.runs_dir)
 DET_PORT   := $(shell $(SET) deployment.servers.detector_port)
 FACE_PORT  := $(shell $(SET) deployment.servers.face_port)
-DEPTH_PORT := $(shell $(SET) deployment.servers.depth_port)
+CAM_PORT   := $(shell $(SET) deployment.servers.camera_port)
+CAMERA     := $(shell $(SET) deployment.containers.camera)
+CAM_KIND   := $(shell $(SET) camera.streams.kind)
+COLOUR_TOPIC:= $(shell $(SET) camera.streams.colour_topic 2>/dev/null)
+CAM_DOMAIN := $(shell $(SET) camera.streams.ros.domain_id 2>/dev/null)
+CAM_DDS    := $(shell $(SET) camera.streams.ros.cyclonedds_uri 2>/dev/null)
 DEPTH_TOPIC:= $(shell $(SET) camera.streams.depth_topics)
 DRIVER_IMG := $(shell $(SET) deployment.images.driver)
 VISION_IMG := $(shell $(SET) deployment.images.vision)
@@ -62,7 +67,7 @@ MOVELOG    = set -o pipefail; echo "== $$(date '+%F %T') make $@" >> $(RUNS)/mov
               docker exec -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/work -e RAMMP_SET="$$RAMMP_SET" -w /work $(DRIVER) python3 -u -m
 TO_MOVELOG := 2>&1 | while IFS= read -r l; do printf '%s\n' "$$l"; printf '%s %s\n' "$$(date +%T)" "$$l" >> $(RUNS)/moves.log; done
 
-.PHONY: start-direct tool preflight sdk kortex driver-image vision images driver depth clean-depth status state start detect perceive over acquire deliver retract feed detector models models-stop capture review locate-bowl limits twin twin-poses
+.PHONY: start-direct tool preflight camera camera-server sdk kortex driver-image vision images driver depth clean-depth status state start detect perceive over acquire deliver retract feed detector models models-stop capture review locate-bowl limits twin twin-poses
 
 # --- the arm ----------------------------------------------------------------
 # Every motion goes through kinova/scripts/safe_move.py: utensil kept pointing
@@ -99,19 +104,36 @@ models:
 	@if curl -s -m 2 http://127.0.0.1:$(FACE_PORT)/ping | grep -q ok; then echo "face server already up"; \
 	else PYTHONPATH=. nohup $(FACE_PY) -m feeding.detect_mouth_mp --serve > $(RUNS)/face_server.log 2>&1 & \
 	  echo "starting face server (log: $(RUNS)/face_server.log)"; fi
-	@if curl -s -m 2 http://127.0.0.1:$(DEPTH_PORT)/ping | grep -q ok; then echo "depth server already up"; \
-	else docker exec $(VISION) pkill -9 -f "[d]epth_server.py" >/dev/null 2>&1; \
-	  docker cp feeding/depth_server.py $(VISION):/tmp/depth_server.py >/dev/null && \
-	  docker exec -d $(VISION) bash -lc "source /opt/ros/humble/setup.bash; source /ros2_ws/install/setup.bash; cd /tmp && python3 depth_server.py --port $(DEPTH_PORT) --topic $(DEPTH_TOPIC) > /tmp/depth_server.log 2>&1" && \
-	  echo "starting depth server (in $(VISION))"; fi
-	@for i in $$(seq 1 $(MODELS_WAIT)); do curl -s -m 2 http://127.0.0.1:$(DET_PORT)/ping | grep -q ok && curl -s -m 2 http://127.0.0.1:$(FACE_PORT)/ping | grep -q ok && curl -s -m 2 http://127.0.0.1:$(DEPTH_PORT)/ping | grep -q ok && { echo "all models loaded and warm, depth streaming ($${i} s)"; exit 0; }; sleep 1; done; echo "models did not come up -- see $(RUNS)/*.log"; exit 1
+	@$(MAKE) -s camera-server
+	@for i in $$(seq 1 $(MODELS_WAIT)); do curl -s -m 2 http://127.0.0.1:$(DET_PORT)/ping | grep -q ok && curl -s -m 2 http://127.0.0.1:$(FACE_PORT)/ping | grep -q ok && curl -s -m 2 http://127.0.0.1:$(CAM_PORT)/ping | grep -q ok && { echo "all models loaded and warm, camera streaming ($${i} s)"; exit 0; }; sleep 1; done; echo "models did not come up -- see $(RUNS)/*.log"; exit 1
+
+# The camera, whichever it is (camera.streams.kind in the selected profile), behind the camera server:
+#   kinova_vision  the arm's vision module: our depth nodes (make depth) + the server inside that container
+#   ros2           any ROS 2 camera's colour + depth topics (another process drives the camera), the server in its
+#                  own container on that camera's ROS domain / DDS config (camera.streams.ros, per machine)
+camera: $(if $(filter kinova_vision,$(CAM_KIND)),depth) camera-server
+
+camera-server:
+	@if curl -s -m 2 http://127.0.0.1:$(CAM_PORT)/ping | grep -q ok; then echo "camera server already up"; \
+	elif [ "$(CAM_KIND)" = ros2 ]; then docker rm -f $(CAMERA) >/dev/null 2>&1; \
+	  docker run -d --name $(CAMERA) --network host --ipc host --restart unless-stopped \
+	    -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp -e ROS_DOMAIN_ID=$(CAM_DOMAIN) \
+	    $(if $(CAM_DDS),-e CYCLONEDDS_URI=file:///dds.xml -v $(CAM_DDS):/dds.xml:ro,) \
+	    -v $(CURDIR)/feeding/camera_server.py:/camera_server.py:ro --entrypoint bash $(VISION_IMG) -lc \
+	    'source /opt/ros/humble/setup.bash; exec python3 /camera_server.py --port $(CAM_PORT) --depth $(DEPTH_TOPIC) --colour $(COLOUR_TOPIC)' \
+	    >/dev/null && echo "starting camera server ($(CAMERA): $(COLOUR_TOPIC) + $(DEPTH_TOPIC), domain $(CAM_DOMAIN))"; \
+	else docker exec $(VISION) pkill -9 -f "[c]amera_server.py" >/dev/null 2>&1; \
+	  docker cp feeding/camera_server.py $(VISION):/tmp/camera_server.py >/dev/null && \
+	  docker exec -d $(VISION) bash -lc "source /opt/ros/humble/setup.bash; source /ros2_ws/install/setup.bash; cd /tmp && python3 camera_server.py --port $(CAM_PORT) --depth $(DEPTH_TOPIC) > /tmp/camera_server.log 2>&1" && \
+	  echo "starting camera server (in $(VISION))"; fi
 
 detector: models
 
 models-stop:
 	@pkill -f "[f]eeding.detector_server" && echo "detector + depth server stopped" || true
 	@pkill -f "[d]etect_mouth_mp --serve" && echo "face server stopped" || true
-	@docker exec $(VISION) pkill -9 -f "[d]epth_server.py" && echo "depth server stopped" || true
+	@docker exec $(VISION) pkill -9 -f "[c]amera_server.py" >/dev/null 2>&1 && echo "camera server stopped" || true
+	@docker rm -f $(CAMERA) >/dev/null 2>&1 && echo "camera server ($(CAMERA)) stopped" || true
 
 # Acquisition, one verified step at a time. Uses the current bite ($(RUNS)/latest: the latest make perceive).
 over:

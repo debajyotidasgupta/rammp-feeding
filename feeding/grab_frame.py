@@ -15,7 +15,7 @@ import urllib.request
 import cv2
 
 from settings import cfg
-from feeding.camera import COLOUR_RTSP as RTSP
+from feeding.camera import COLOUR_URL as URL
 SKIP = 8
 
 
@@ -35,7 +35,7 @@ def via_server(out: str) -> bool:
 def main() -> int:
     if via_server(sys.argv[1]):
         return 0
-    cap = cv2.VideoCapture(RTSP); t0 = time.time(); n = 0; frame = None
+    cap = cv2.VideoCapture(URL); t0 = time.time(); n = 0; frame = None
     while time.time() - t0 < 8.0:
         ok, f = cap.read()
         if not ok:
@@ -45,7 +45,7 @@ def main() -> int:
             break
     cap.release()
     if frame is None:
-        print("no frame from %s in 8 s" % RTSP, file=sys.stderr)
+        print("no frame from %s in 8 s" % URL, file=sys.stderr)
         return 1
     cv2.imwrite(sys.argv[1], frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
     print("frame after %d decoded, %.1f s" % (n, time.time() - t0))

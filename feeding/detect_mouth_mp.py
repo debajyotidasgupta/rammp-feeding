@@ -28,10 +28,10 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from settings import cfg
-from feeding.camera import COLOUR_RTSP, CXC, CXD, CYC, CYD, FXC, FXD, FYC, FYD, T_D2C, corrected
+from feeding.camera import COLOUR_URL, CXC, CXD, CYC, CYD, FXC, FXD, FYC, FYD, T_D2C, corrected
 
 MODEL = cfg.path("deployment.models.face_landmarker")
-RTSP = COLOUR_RTSP
+URL = COLOUR_URL
 NOSE = [1, 2, 4, 5, 6, 19, 94, 98, 168, 195, 197, 327]
 LIPS = [0, 13, 14, 17, 37, 61, 78, 84, 267, 291, 308, 314]
 FACE_PTS = list(range(0, 468, 6))
@@ -80,7 +80,7 @@ def wait_open(D: Path, timeout: float, det=None, stream=None) -> int:
             return _wait(det, read, D, timeout, open_s=0.0, source="resident stream")
         import cv2
         t_call = time.time()
-        cap = cv2.VideoCapture(RTSP)
+        cap = cv2.VideoCapture(URL)
         try:
             return _wait(det, lambda: (*cap.read(), round(float(cap.get(cv2.CAP_PROP_POS_MSEC)), 1)), D, timeout,
                          open_s=time.time() - t_call, source="rtsp opened for the wait")

@@ -1,0 +1,38 @@
+# Intel RealSense D405 on the wrist, in the built-in camera's place (the site Jetson, 2026-09-30), through ROS 2:
+# 848x480 colour + depth aligned to colour (the same pixel grid). Its driver runs elsewhere (on the site Jetson, the
+# other team's sheppy-wrist_camera container); the camera server (make camera) only subscribes.
+# The ROS domain / DDS config of those topics are the machine's: set camera.streams.ros in config/local.yaml.
+
+streams:
+  kind: ros2
+  colour_topic: /wrist_camera/color/image_raw
+  depth_topics: [/wrist_camera/aligned_depth_to_color/image_raw]
+  colour_url: "http://127.0.0.1:{camera_port}/mjpeg"   # the camera server's colour stream (face server, grab_frame)
+  ros: {domain_id: 0, cyclonedds_uri: ""}             # "" = the image's default DDS config
+
+colour:                         # /wrist_camera/color/camera_info, 2026-09-30 (plumb_bob, k1 -0.054: not undistorted)
+  width: 848
+  height: 480
+  fx: 434.884
+  fy: 434.330
+  cx: 423.960
+  cy: 237.798
+  vertical_vp: [423.960, 237.798]   # PROVISIONAL (= the principal point): measure at food_detect_start
+  focus_point_px: [424, 238]
+
+depth:                          # aligned to colour: the colour intrinsics, no offset between the two
+  width: 848
+  height: 480
+  fx: 434.884
+  fy: 434.330
+  cx: 423.960
+  cy: 237.798
+  depth_to_colour_m: [0.0, 0.0, 0.0]
+  scale: 1.0
+  offset_m: 0.0
+  min_valid_m: 0.07             # the D405 sees from ~7 cm
+
+mount:
+  camera_in_tool_m: [0.0, 0.05639, -0.12305]   # PROVISIONAL: the built-in camera's place, which it took (user); the
+                                               # hover check measures the difference
+  image_rotated_at_delivery: true              # as mounted: world-up is image-left at the delivery pose

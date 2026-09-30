@@ -32,7 +32,8 @@ make twin        the digital twin: replay a recorded bite in MuJoCo -> sim/out/*
                  SESSION=<run dir>, STILL=<s> for one frame, SPEED=1.5); make twin-poses: the calibrated poses
 
 make models      every model loaded and warm (detector + DA3, face + colour stream, depth); make feed runs it
-make depth       the vision node: two depth sessions, 31 s apart (the arm ends each every ~62 s)
+make camera      the selected camera behind the camera server (make models starts it too)
+make depth       the Kinova vision nodes: two depth sessions, 31 s apart (the arm ends each every ~62 s)
 make limits      the arm's own speed limits (APPLY=1: set them from config deployment.arm.soft_limits)
 make preflight   before any motion: tool, faults, kinematics vs the capture, speed limits, servers (FIX=1
                  sets our tool + limits). make feed runs it first; nothing moves
@@ -521,7 +522,7 @@ feeding/
   locate_bowl.py             make locate-bowl
   colour_stream.py           the resident colour stream (in the face server): live frames, dropout log
   camera_latency.py          how far the colour picture lags the arm (a J7 +-5 deg test; 0.4 s measured)
-  depth_server.py            the resident depth median (vision container), both depth sessions merged
+  camera_server.py           the camera, kept open: depth medians + colour frames, from any camera (make camera)
   detect_mouth_mp.py         face / mouth (MediaPipe): the open-mouth wait, live readout, snapshots
   stage1.sh                  make perceive
   perceive.py                detection
@@ -538,6 +539,21 @@ third_party/                 kinova-gen3-ros2 (submodule)
 ```
 
 The gripper is **never commanded** anywhere in this tree.
+
+## The camera: any camera, behind the camera server (`make camera`)
+
+Nothing in the stack reads a camera directly: colour frames and depth medians come from
+`feeding/camera_server.py` (`/frame`, `/mjpeg`, `/median`), and the selected camera profile
+(`config/camera/<name>.yaml`, `profiles.camera`, a machine may pick its own in `local.yaml`) says where it gets them:
+
+| `streams.kind` | the camera | how |
+|---|---|---|
+| `kinova_vision` | the arm's vision module (`kinova_wrist.yaml`) | depth from our kinova_vision nodes (`make depth`), colour over RTSP from the arm; the server runs in the vision container |
+| `ros2` | any ROS 2 RGB-D camera (`realsense_d405.yaml`: the site D405) | its colour + aligned-depth topics, published by whatever drives it; the server runs in `{name}_camera` on that camera's ROS domain / DDS config (`camera.streams.ros`, per machine) |
+
+A new camera: copy a profile, set its topics (or RTSP) and intrinsics, and the utensil's measurements against it
+go under the utensil profile's `by_camera.<camera>` (camera-to-tip, tip pixel, image region), which apply only with
+that camera selected. Then calibrate at food_detect_start as for any new setup.
 
 ## The digital twin (`sim/`, `make twin`)
 

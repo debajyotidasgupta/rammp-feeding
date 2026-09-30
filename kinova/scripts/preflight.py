@@ -12,7 +12,7 @@ Each check prints OK / WARN / FAIL; any FAIL exits 1 (make feed does not start).
                 at the same joints = the arm's kinematics or joint zeros changed (2026-09-30: 3.2 deg,
                 8 mm) -- the captured poses are stale: re-capture                                    FAIL
   speed limits  the trajectory soft limits are ours (slower is safe, but every move takes longer)     WARN
-  servers       the detector, face (with a live colour stream) and depth servers answer               WARN
+  servers       the detector, face (with a live colour stream) and camera servers answer              WARN
 --fix sets the tool and the limits (make tool APPLY=1 / make limits APPLY=1: the arm's values are saved first).
 Where the utensil tip is in the image, and where the table and bowl are, are checked at food_detect_start by the
 perception stages, not here.
@@ -118,7 +118,7 @@ def _get(port: int, path: str) -> str | None:
 
 def check_servers(rep: Report) -> None:
     s = cfg.deployment.servers
-    down = [n for n, p in (("detector", s.detector_port), ("face", s.face_port), ("depth", s.depth_port))
+    down = [n for n, p in (("detector", s.detector_port), ("face", s.face_port), ("camera", s.camera_port))
             if (_get(int(p), "/ping") or "").strip() != "ok"]
     st = _get(int(s.face_port), "/stream")
     stream = json.loads(st) if st else {}

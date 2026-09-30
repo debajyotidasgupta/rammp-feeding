@@ -27,7 +27,7 @@ G30="$(S acquisition.stepped.depth_guess_m.hover30)"; G10="$(S acquisition.stepp
 H30="$(S acquisition.stepped.hover_m.hover30)"; H10="$(S acquisition.stepped.hover_m.hover10)"
 
 measure() {   # $1 = label; depth from the vision container, analysed on the host (called right after a move)
-  if ! PYTHONPATH=. "$PY" -m feeding.depth_grab "$ACQ/acq_$1.npy" --since "$(date +%s.%N)" >/dev/null 2>&1; then    # resident: ~0.5 s
+  if ! PYTHONPATH=. "$PY" -m feeding.depth_grab "$ACQ/acq_$1.npy" --since "$(date +%s.%N)" >/dev/null 2>&1 && [ "$CAM_KIND" = kinova_vision ]; then    # resident: ~0.5 s
     docker cp feeding/depth_probe.py "$VISION":/tmp/depth_probe.py >/dev/null
     docker exec "$VISION" bash -lc "source /opt/ros/humble/setup.bash; source /ros2_ws/install/setup.bash; \
       cd /tmp && python3 depth_probe.py --out /tmp/acq_$1 --frames $FRAMES" >/dev/null 2>&1

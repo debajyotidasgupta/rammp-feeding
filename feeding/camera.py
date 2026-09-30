@@ -1,4 +1,4 @@
-"""The wrist camera, from the selected camera profile (config/camera/<name>.yaml).
+"""The wrist camera, from the selected camera profile (config/camera/<name>.yaml) -- whichever camera it is.
 
 One place for the intrinsics, the depth-to-colour extrinsic, the pixel mappings between the two sensors, and
 the depth correction (scale / offset) -- used by perception, the floor measurement, the face and the depth fill.
@@ -19,7 +19,7 @@ DEPTH_SHAPE = (int(_d.height), int(_d.width))
 T_D2C = np.array(_d.depth_to_colour_m, dtype=float)
 DEPTH_SCALE, DEPTH_OFFSET_M = float(_d.scale), float(_d.offset_m)
 CAM_IN_TOOL = np.array(cfg.camera.mount.camera_in_tool_m, dtype=float)
-COLOUR_RTSP = cfg.camera.streams.colour_rtsp
+COLOUR_URL = cfg.camera.streams.colour_url             # RTSP from the camera, or the camera server's MJPEG
 
 
 def corrected(depth_raw):

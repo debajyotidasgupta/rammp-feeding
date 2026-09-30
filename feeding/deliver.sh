@@ -30,14 +30,9 @@ arm() { $ARM "$@" 2>&1 | { grep --line-buffered -v Deprecation || true; }; retur
 
 capture_colour() {   # $1 = run dir: one colour frame, ~1 s
   PYTHONPATH=. "$MPY" -m feeding.grab_frame "$1/colour.jpg" >/dev/null 2>&1 && return 0
-  rm -f /tmp/dl_*.jpg     # fallback: the old way (records until the 22 s timeout)
-  timeout 22 gst-launch-1.0 rtspsrc location="$(S camera.streams.colour_rtsp)" protocols=tcp latency=200 \
-    ! rtph264depay ! h264parse ! openh264dec ! videoconvert ! jpegenc \
-    ! multifilesink location=/tmp/dl_%03d.jpg >/dev/null 2>&1 || true
-  cp "$(ls /tmp/dl_*.jpg | tail -1)" "$1/colour.jpg"; rm -f /tmp/dl_*.jpg
 }
 capture_depth() {    # $1 = run dir: 20-frame median depth, from frames since the arm stopped ($STILL_SINCE)
-  if ! PYTHONPATH=. "$PY" -m feeding.depth_grab "$1/depth.npy" --since "${STILL_SINCE:-$(date +%s.%N)}" >/dev/null 2>&1; then     # resident: ~0.5 s
+  if ! PYTHONPATH=. "$PY" -m feeding.depth_grab "$1/depth.npy" --since "${STILL_SINCE:-$(date +%s.%N)}" >/dev/null 2>&1 && [ "$CAM_KIND" = kinova_vision ]; then     # resident: ~0.5 s
     docker cp feeding/depth_probe.py "$VISION":/tmp/depth_probe.py >/dev/null
     docker exec "$VISION" bash -lc "source /opt/ros/humble/setup.bash; source /ros2_ws/install/setup.bash; \
       cd /tmp && python3 depth_probe.py --out /tmp/dl_depth --frames $FRAMES" >/dev/null 2>&1

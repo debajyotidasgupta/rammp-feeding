@@ -21,6 +21,7 @@
 S() { python3 -m settings get "$1"; }     # a value from config/ (settings.py)
 RUNS="$(S deployment.runs_dir)"
 DRIVER="$(S deployment.containers.driver)"; VISION="$(S deployment.containers.vision)"
+CAM_KIND="$(S camera.streams.kind)"                # kinova_vision (its own depth nodes) or ros2 (any camera's topics)
 PY="$(S deployment.venvs.detector)/bin/python"   # LocateAnything, Depth Anything 3, the measurements
 MPY="$(S deployment.venvs.face)/bin/python"      # MediaPipe, frame grabs
 DA3SRC="$(S deployment.paths.da3_src)"            # Depth Anything 3's source (on PYTHONPATH for $PY)

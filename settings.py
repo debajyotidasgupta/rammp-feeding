@@ -10,7 +10,8 @@
     python3 -m settings dump                    # the merged configuration, as YAML
 
 Layers, later wins: config/rammp.yaml < the selected profiles (config/camera|utensil|bowl|food/<name>.yaml, under
-cfg.camera / cfg.utensil / cfg.bowl / cfg.food) < config/local.yaml (per machine, not committed) < RAMMP_SET="a.b=1,c=2".
+cfg.camera / cfg.utensil / cfg.bowl / cfg.food; a utensil's by_camera.<camera> section with that camera) <
+config/local.yaml (per machine, not committed; it may also pick the profiles) < RAMMP_SET="a.b=1,c=2".
 Strings may use {root}, {name} (deployment.root / .name: per machine) and {arm_ip}; RAMMP_ROOT overrides the root.
 RAMMP_CONFIG points at another config directory. Profiles can be swapped per run: RAMMP_UTENSIL=spoon, RAMMP_FOOD=strawberry etc.
 Lists work in RAMMP_SET: RAMMP_SET="workspace.bowl_centre_m=[0.28, 0.27],delivery.stop_m=0.06".
@@ -109,13 +110,19 @@ def _fill(node, subs):
 
 def load() -> Cfg:
     c = yaml.safe_load((CONFIG / "rammp.yaml").read_text())
+    path = CONFIG / "local.yaml"
+    local = (yaml.safe_load(path.read_text()) or {}) if path.exists() else {}
+    _merge(c["profiles"], local.get("profiles") or {})       # a machine may pick its own camera, utensil, ...
     for kind in ("camera", "utensil", "bowl", "food"):
         name = os.environ.get("RAMMP_" + kind.upper(), c["profiles"][kind])
         c["profiles"][kind] = name
         c[kind] = yaml.safe_load((CONFIG / kind / (name + ".yaml")).read_text())
-    local = CONFIG / "local.yaml"
-    if local.exists():
-        _merge(c, yaml.safe_load(local.read_text()) or {})
+    # a utensil's measurements against one camera (tip pixel, camera-to-tip, ...) live in its profile under
+    # by_camera.<camera>, applied only with that camera selected (before local.yaml / RAMMP_SET, which still win)
+    over = (c["utensil"].pop("by_camera", None) or {}).get(c["profiles"]["camera"])
+    if over:
+        _merge(c["utensil"], over)
+    _merge(c, local)
     for item in filter(None, re.split(r",(?![^\[]*\])", os.environ.get("RAMMP_SET", ""))):   # commas in [..] kept
         k, _, v = item.partition("=")
         _set(c, k.strip(), yaml.safe_load(v))
@@ -123,7 +130,7 @@ def load() -> Cfg:
     if os.environ.get("RAMMP_ROOT"):
         d["root"] = os.environ["RAMMP_ROOT"]
     return Cfg(_fill(c, dict(arm_ip=d["arm"]["ip"], root=str(d.get("root", "~")).rstrip("/"),
-                             name=d.get("name", "rammp"))))
+                             name=d.get("name", "rammp"), camera_port=d["servers"]["camera_port"])))
 
 
 cfg = load()

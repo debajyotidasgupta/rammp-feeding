@@ -25,7 +25,7 @@ from PIL import Image, ImageDraw
 
 from feeding.locate_anything import LocateAnything
 from settings import cfg
-from feeding.camera import COLOUR_RTSP, CXC, CXD, CYC, CYD, FXC, FXD, FYC, FYD, T_D2C, corrected
+from feeding.camera import COLOUR_URL, CXC, CXD, CYC, CYD, FXC, FXD, FYC, FYD, T_D2C, corrected
 
 
 

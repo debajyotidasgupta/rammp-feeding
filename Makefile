@@ -62,7 +62,7 @@ MOVELOG    = set -o pipefail; echo "== $$(date '+%F %T') make $@" >> $(RUNS)/mov
               docker exec -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/work -e RAMMP_SET="$$RAMMP_SET" -w /work $(DRIVER) python3 -u -m
 TO_MOVELOG := 2>&1 | while IFS= read -r l; do printf '%s\n' "$$l"; printf '%s %s\n' "$$(date +%T)" "$$l" >> $(RUNS)/moves.log; done
 
-.PHONY: start-direct tool sdk kortex driver-image vision images driver depth clean-depth status state start detect perceive over acquire deliver retract feed detector models models-stop capture review locate-bowl limits twin twin-poses
+.PHONY: start-direct tool preflight sdk kortex driver-image vision images driver depth clean-depth status state start detect perceive over acquire deliver retract feed detector models models-stop capture review locate-bowl limits twin twin-poses
 
 # --- the arm ----------------------------------------------------------------
 # Every motion goes through kinova/scripts/safe_move.py: utensil kept pointing
@@ -141,6 +141,11 @@ feed:
 # The arm's kinematic soft limits (on the arm): show, or apply config deployment.arm.soft_limits
 limits:
 	@$(INARM) kinova.scripts.arm_limits $(if $(APPLY),--apply,)
+
+# Before any motion: the arm's tool, faults, kinematics (at feeding_start), speed limits, the servers. Never moves.
+# FIX=1 also sets our tool and speed limits (saving the arm's). make feed runs it first.
+preflight:
+	@$(INARM) kinova.scripts.preflight $(if $(FIX),--fix,)
 
 # The arm's tool frame + mass (on the arm; another user may change it): show, or set config deployment.arm.tool
 # (APPLY=1; the replaced values are saved to runs_dir), or put saved values back (RESTORE=<that file>)

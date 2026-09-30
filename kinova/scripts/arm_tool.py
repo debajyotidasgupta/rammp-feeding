@@ -49,6 +49,15 @@ def write(conn, tool: dict) -> None:
     _client(conn).SetToolConfiguration(t)
 
 
+def save_before(tool: dict) -> Path:
+    """The arm's values, to <runs_dir>/arm_tool_before_<time>.json, before anything replaces them."""
+    out = Path(str(cfg.deployment.runs_dir)).expanduser()
+    out.mkdir(parents=True, exist_ok=True)
+    saved = out / time.strftime("arm_tool_before_%Y%m%d_%H%M%S.json")
+    saved.write_text(json.dumps(dict(tool=tool, saved=time.strftime("%Y-%m-%dT%H:%M:%S")), indent=1))
+    return saved
+
+
 def show(name: str, tool: dict) -> None:
     log.info("  %-6s frame %s m  rotation %s deg  mass %.3f kg  centre %s m", name,
              [round(v, 4) for v in tool["transform_m"]], [round(v, 2) for v in tool["rotation_deg"]],
@@ -69,10 +78,7 @@ def main() -> int:
         show("ours", ours)
         if a.apply or a.restore:
             new = json.loads(Path(a.restore).read_text())["tool"] if a.restore else ours
-            out = Path(str(cfg.deployment.runs_dir)).expanduser()
-            out.mkdir(parents=True, exist_ok=True)
-            saved = out / time.strftime("arm_tool_before_%Y%m%d_%H%M%S.json")
-            saved.write_text(json.dumps(dict(tool=now, saved=time.strftime("%Y-%m-%dT%H:%M:%S")), indent=1))
+            saved = save_before(now)
             log.info("  saved the arm's values to %s (put back: make tool RESTORE=%s)", saved, saved)
             write(conn, new)
             runlog.event("tool_set", before=now, after=new, saved=str(saved))

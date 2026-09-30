@@ -34,6 +34,8 @@ make twin        the digital twin: replay a recorded bite in MuJoCo -> sim/out/*
 make models      every model loaded and warm (detector + DA3, face + colour stream, depth); make feed runs it
 make depth       the vision node: two depth sessions, 31 s apart (the arm ends each every ~62 s)
 make limits      the arm's own speed limits (APPLY=1: set them from config deployment.arm.soft_limits)
+make preflight   before any motion: tool, faults, kinematics vs the capture, speed limits, servers (FIX=1
+                 sets our tool + limits). make feed runs it first; nothing moves
 make tool        the arm's tool frame + mass vs ours (APPLY=1: set ours, saving the arm's; RESTORE=<file>).
                  Every move refuses while they differ: another user's tool frame shifts every cartesian target
 ```

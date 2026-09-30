@@ -53,6 +53,10 @@ deployment:
     depth_port: 8767            # the depth stream, inside the vision container
     startup_timeout_s: 300      # make models waits this long for all three (2026-09-25: the detector took > 120 s)
 
+preflight:                      # make preflight (make feed runs it first): the arm as the calibration assumes it
+  kinematics_mm: 3.0            # at feeding_start, the tool pose the arm reports vs the captured one: more = re-capture
+  kinematics_deg: 1.0
+
 workspace:                      # where the table and the bowl are in THIS deployment (arm base frame, m).
   # The bowl profile's poses were captured at its `captured_at`; every bowl-dependent pose is shifted by the
   # difference (kinova/scene.py). Measure with `make locate-bowl` after `make perceive`, or a tape: only the

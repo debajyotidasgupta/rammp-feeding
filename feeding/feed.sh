@@ -30,6 +30,8 @@ finish() {  # $1 = why
 # every model loaded and warm BEFORE the first bite, and kept loaded throughout
 if [ -n "$(S features.resident_models)" ]; then make -s models || { echo "models not up -- not starting"; exit 1; }; fi
 n=0
+# the arm as the calibration assumes it (tool, faults, kinematics, limits, servers): nothing moves if not
+$(arm_cmd preflight) || { echo "preflight failed -- not starting (make preflight shows why)"; finish preflight; exit 1; }
 if [ -z "${FROM_DETECT:-}" ]; then moves detect || { echo "could not reach food_detect_start"; finish no_detect; exit 1; }; fi
 while [ "$n" -lt "$BITES" ]; do
   bite_begin

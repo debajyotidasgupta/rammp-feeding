@@ -143,22 +143,22 @@ def lift_joints(conn: KinovaConnection, top: float) -> Joints:
 
 def check_path(conn: KinovaConnection, legs: Sequence[tuple[Joints, Joints]], top: float) -> tuple[float, float]:
     """(highest, lowest) utensil tip z along these joint legs (the controller's FK, sampled). Refuses a path that
-    rises more than motion.sequence.max_path_above_lift_m over where it starts, or brings the tip within
-    min_tip_above_table_m of the table or min_tip_above_bowl_m of the bowl's top (the scene camera's)."""
-    zs = [float(fk_tip(conn, [x + fold(y - x) * s for x, y in zip(a, b)])[2])
-          for a, b in legs for s in np.linspace(0.0, 1.0, 13)]
+    rises more than motion.sequence.max_path_above_lift_m over where it starts, or takes the tip below
+    scene.tip_floor() anywhere (above the bowl's top over the bowl, above the table elsewhere)."""
+    tips = [fk_tip(conn, [x + fold(y - x) * s for x, y in zip(a, b)]) for a, b in legs for s in np.linspace(0.0, 1.0, 13)]
+    zs = [float(t[2]) for t in tips]
     peak, low = max(zs), min(zs)
     rise = float(cfg.motion.sequence.max_path_above_lift_m)
     if peak > zs[0] + rise:
         raise MoveError("the swing would lift the utensil tip to z %.3f, %.0f mm above where it starts (the lift top, "
                         "tool z %.3f) -- more than %.0f mm: not moving" % (peak, 1000 * (peak - zs[0]), top, 1000 * rise))
-    ws, sq = scene.workspace(), cfg.motion.sequence
-    floor = max(ws["table_z"] + float(sq.min_tip_above_table_m), ws["bowl_top_z"] + float(sq.min_tip_above_bowl_m))
-    if low < floor:
-        raise MoveError("the swing would bring the utensil tip down to z %.3f: %.0f mm above the table, %.0f mm above "
-                        "the bowl's top (at least %.0f / %.0f) -- not moving"
-                        % (low, 1000 * (low - ws["table_z"]), 1000 * (low - ws["bowl_top_z"]),
-                           1000 * float(sq.min_tip_above_table_m), 1000 * float(sq.min_tip_above_bowl_m)))
+    ws = scene.workspace()
+    for t in tips:
+        if t[2] < scene.tip_floor(t[0], t[1]) - 1e-6:
+            raise MoveError("the swing would bring the utensil tip down to z %.3f at (%.3f, %.3f): %.0f mm above the "
+                            "table, %.0f mm above the bowl's top -- below the floor there (z %.3f): not moving"
+                            % (t[2], t[0], t[1], 1000 * (t[2] - ws["table_z"]), 1000 * (t[2] - ws["bowl_top_z"]),
+                               scene.tip_floor(t[0], t[1])))
     return peak, low
 
 

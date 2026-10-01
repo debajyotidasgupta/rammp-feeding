@@ -73,6 +73,9 @@ workspace:                      # where the table and the bowl are in THIS deplo
                                    # the table, its lens axis through the bowl (kinova/scene.py); null = the captured
                                    # pose, shifted with the bowl as below
   scene_max_age_s: 3600         # the scene camera's bowl / table reading (make locate-scene) counts for this long
+  overlook_arrive_above_m: 0.05 # a computed overlook: moves into it (the retract) arrive this far above, then descend
+  scoop_end_follows: bowl       # the scoop end (where the swing to the user starts) moves with: bowl (x, y, z) or
+                                # table (z only: the swing stays where it was validated relative to the user)
   max_shape_change_deg: 30      # a shifted food_detect_start may differ this much on any joint from the captured
                                 # one; more = the arm would take a different shape there: re-capture instead
 
@@ -127,7 +130,8 @@ motion:
     lift_margin_m: 0.03         # a computed overlook: the lift tops out this far above it (then the swing goes down)
     max_path_above_lift_m: 0.05 # a computed overlook: the swing's utensil tip may rise this far above where it starts
     min_tip_above_table_m: 0.05 # ... and must stay this far above the table
-    min_tip_above_bowl_m: 0.015 # ... and above the bowl's top (the scene camera's bowl_top_z)
+    min_tip_above_bowl_m: 0.015 # ... and above the bowl's top (the scene camera's bowl_top_z) over the bowl
+    bowl_margin_m: 0.04         # "over the bowl": within its rim radius + this
     lift_mps: 0.22              # up from feeding_start (2026-09-25, user: faster everywhere but the plunge; was 0.06)
     descend_mps: 0.13           # down into feeding_start: at 0.22 the braking at the bottom read as a contact
                                 # (J4 -6.9 -> -4.0 N.m, nothing touched, 2026-09-25)

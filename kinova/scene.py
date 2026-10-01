@@ -56,11 +56,22 @@ def workspace() -> dict:
             if time.time() - float(st["t"]) < float(w.scene_max_age_s):
                 return dict(bowl_xy=[float(v) for v in st["bowl_xy"]], table_z=float(st["table_z"]),
                             bowl_top_z=float(st.get("bowl_top_z", st["table_z"])),
+                            bowl_radius=float(st.get("rim_radius_m") or cfg.workspace.get("bowl_radius_m", 0.08)),
                             source="scene camera (%s)" % time.strftime("%H:%M:%S", time.localtime(st["t"])))
         except (OSError, ValueError, KeyError):
             pass
     return dict(bowl_xy=[float(v) for v in w.bowl_centre_m], table_z=float(w.table_height_m),
-                bowl_top_z=float(w.table_height_m) + float(cfg.workspace.get("bowl_height_m", 0.06)), source="config")
+                bowl_top_z=float(w.table_height_m) + float(cfg.workspace.get("bowl_height_m", 0.06)),
+                bowl_radius=float(cfg.workspace.get("bowl_radius_m", 0.08)), source="config")
+
+
+def tip_floor(x: float, y: float) -> float:
+    """The lowest the utensil tip may pass at (x, y) on a move between poses: above the bowl's top
+    (motion.sequence.min_tip_above_bowl_m) over the bowl and a margin round it, above the table
+    (min_tip_above_table_m) everywhere else. The workspace's bowl and table (the scene camera's)."""
+    w, sq = workspace(), cfg.motion.sequence
+    near = np.hypot(x - w["bowl_xy"][0], y - w["bowl_xy"][1]) < w["bowl_radius"] + float(sq.bowl_margin_m)
+    return (w["bowl_top_z"] + float(sq.min_tip_above_bowl_m)) if near else (w["table_z"] + float(sq.min_tip_above_table_m))
 
 
 def table_height() -> float:
@@ -148,6 +159,20 @@ def overlook_joints(conn: KinovaConnection) -> Joints:
     return list(q)
 
 
+def overlook_above_joints(conn: KinovaConnection) -> Joints:
+    """food_detect_start raised by workspace.overlook_arrive_above_m (a computed overlook is low over the bowl:
+    moves into it arrive above it, then descend straight down). Continuous IK from the overlook's joints."""
+    q0 = overlook_joints(conn)
+    t = overlook_pose()["tool_pose"]
+    T0 = np.array([t["x_m"], t["y_m"], t["z_m"]])
+    R = R_from_kortex(t["theta_x_deg"], t["theta_y_deg"], t["theta_z_deg"])
+    up = float(cfg.workspace.get("overlook_arrive_above_m", 0.05))
+    path, why = homotopy(conn, q0, lambda s: (T0 + np.array([0.0, 0.0, up * s]), R), 4)
+    if path is None:
+        raise MoveError("%.0f mm above food_detect_start is not reachable (%s)" % (1000 * up, why))
+    return list(path[-1])
+
+
 def lift_z() -> float:
     """The top of the lift from feeding_start (tool z): with a computed overlook, no higher than it (plus
     motion.sequence.lift_margin_m) and at least the table clearance; else the configured lift top, as it is (a
@@ -159,9 +184,14 @@ def lift_z() -> float:
 
 
 def scoop_end() -> dict:
-    """Where the scoop carries the food to: tool_m moved by shift(); joints_deg is an IK seed (the arm's shape)."""
+    """Where the scoop carries the food to -- where the swing to the user starts: tool_m moved by shift(), or with
+    workspace.scoop_end_follows: table by the table's height only (the swing's validated region is about where the
+    user sits relative to the arm, not where the bowl is: the scoop's back-off spans the bowl's move instead);
+    joints_deg is an IK seed (the arm's shape)."""
     se = dict(cfg.bowl.scoop_end)
     d = shift()
+    if str(cfg.workspace.get("scoop_end_follows", "bowl")) == "table":
+        d = np.array([0.0, 0.0, d[2]])
     se["tool_m"] = [float(se["tool_m"][i]) + float(d[i]) for i in range(3)]
     return se
 

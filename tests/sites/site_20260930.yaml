@@ -1,0 +1,14 @@
+# The site of 2026-09-30 (abra@192.168.1.11), as measured that day -- the input to tests/site_check.py.
+profiles: {camera: realsense_d405, scene_camera: orbbec_gemini336l}
+set:
+  workspace.overlook_camera_height_m: 0.35      # the user's choice
+  workspace.scoop_end_follows: table            # the swing where it was validated (relative to the user), not the bowl
+workspace:                                      # the scene camera's reading (make locate-scene, 14:56)
+  bowl_xy: [0.290, 0.158]
+  table_z: -0.024
+  bowl_top_z: 0.046
+food: {height_m: 0.025, size_m: 0.025}          # a cube
+user:
+  # NOT measured at this site: last week's mouth, lowered with the table (the user said relative heights matter):
+  # (-0.277, 0.306, 0.635) with the table 238 mm higher. Replace with a delivery look at the site.
+  mouth_m: [-0.277, 0.306, 0.397]

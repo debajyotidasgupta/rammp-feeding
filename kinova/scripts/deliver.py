@@ -518,15 +518,33 @@ def _down_and_home(conn: KinovaConnection, st: DeliveryState, q1: Joints, q2: Jo
         path3, err = homotopy(conn, q2, lambda s: (Ta + (Td - Ta) * s, RS), 40, toward=st.q80)
         if path3 is None:
             raise MoveError("descent " + err)
-        lo = min(fk_tip(conn, [fold(x + fold(y - x) * k / 20) for x, y in zip(path3[-1], qd)])[2] for k in range(21))
+        q_to = scene.overlook_above_joints(conn) if scene.computed() else qd   # low overlook: arrive above it
+        tips = [fk_tip(conn, [fold(x + fold(y - x) * k / 20) for x, y in zip(path3[-1], q_to)]) for k in range(21)]
+        lo = min(float(t[2]) for t in tips)
+        if scene.computed():
+            # a computed overlook is LOW by design (over the bowl): the return's floor is where the tip passes --
+            # above the bowl's top over it, above the table elsewhere (scene.tip_floor), as for make detect's swing
+            low = next((t for t in tips if t[2] < scene.tip_floor(t[0], t[1]) - 1e-6), None)
+            if low is not None:
+                raise MoveError("the return would take the utensil tip to z %.3f at (%.3f, %.3f), below the floor there "
+                                "(z %.3f) -- stopped" % (low[2], low[0], low[1], scene.tip_floor(low[0], low[1])))
         if not resumed and go:
             RetractPlan(q_start=q1, path2=path2, path3=path3, lo=lo).save()
     log.info("    return: utensil tip never below %.0f mm", 1000 * lo)
-    if lo < MIN_TIP_Z:
+    if lo < MIN_TIP_Z and not scene.computed():
         raise MoveError("the return would dip the utensil tip to %.0f mm -- stopped" % (1000 * lo))
     run_path(conn, path3, RETRACT_DOWN_DPS, "down to scoop end + 80 mm", go, from_here=go or resumed,
              torque_limit=RETRACT_TORQUE_NM)
     if not go:
+        return
+    if scene.computed():                         # a low overlook: above it by joints, then straight down onto it
+        goto(conn, scene.overlook_above_joints(conn), speed=RETRACT_HOME_DPS, label="-> above food_detect_start",
+             max_tilt=95.0, torque_limit=RETRACT_TORQUE_NM)
+        t = scene.overlook_pose()["tool_pose"]
+        goto_cartesian(conn, (t["x_m"], t["y_m"], t["z_m"]), (t["theta_x_deg"], t["theta_y_deg"], t["theta_z_deg"]),
+                       speed=float(cfg.motion.sequence.descend_mps), label="down onto food_detect_start")
+        STATE.unlink()
+        runlog.event("retracted", lowest_tip_z_m=lo)
         return
     try:
         goto(conn, qd, speed=RETRACT_HOME_DPS, label="-> food_detect_start", max_tilt=95.0,

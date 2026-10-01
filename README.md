@@ -635,6 +635,20 @@ mouth-opening signal during the wait, the force at the fork during the bite, and
 tiles. `sim/record.py` reads a bite; `sim/scene.py` builds the scene; `sim/twin.py` directs and renders;
 `sim/procedural.py` makes the textures and meshes (into `sim/out/cache/`, git-ignored).
 
+**Two planners, side by side** (`sim/compare_planners.py`): the bites `tests/site_check.py --dump` records (the
+scripted moves, `--planner curobo`), replayed on the site's geometry. MuJoCo's renderer gives a quick look; for
+the film, MuJoCo poses every frame and Blender's Cycles draws it (`sim/blender_render.py`: area lights, a room,
+depth of field; ~2.5 s a frame on cascadilla's RTX 3070):
+
+```
+.venv/bin/python -m sim.compare_planners scripted.json curobo.json                      # quick: MuJoCo's renderer
+.venv/bin/python -m sim.compare_planners scripted.json curobo.json --export sim/out/cmp  # scene + poses
+blender -b -P sim/blender_render.py -- sim/out/cmp/left --samples 48                      # (and right), on a GPU box
+.venv/bin/python -m sim.compare_planners scripted.json curobo.json --compose sim/out/cmp # + the HUD -> mp4
+```
+
+The export's `scene.json` names its textures by absolute path: rewrite them for the render box.
+
 ## Machines
 
 | host | role |

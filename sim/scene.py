@@ -59,6 +59,7 @@ class Layout:
     width: int = 1920
     height: int = 1080
     laptop: bool = True                                  # the 2026-09-25 table's laptop
+    tip_in_tool: tuple[float, float, float] | None = None   # a run's own utensil tip (else this machine's model)
     hair: bool = True                                    # False: the scalp's shape in skin (a bald head)
 
     @classmethod
@@ -72,10 +73,11 @@ class Layout:
         return self.table_z + 0.004
 
 
-def tip_in_flange() -> np.ndarray:
-    """The fork's tine tips in the flange frame (the tool frame is the flange + 120 mm along z)."""
+def tip_in_flange(tip_tool=None) -> np.ndarray:
+    """The fork's tine tips in the flange frame (the tool frame is the flange + 120 mm along z); tip_tool: a run's
+    own tip in the tool frame (a dump's tip_in_tool), else this machine's tip model."""
     from kinova.motion import tip_in_tool
-    return tip_in_tool() + np.array([0.0, 0.0, 0.12])
+    return np.asarray(tip_in_tool() if tip_tool is None else tip_tool, float) + np.array([0.0, 0.0, 0.12])
 
 
 def camera_in_flange() -> np.ndarray:
@@ -152,7 +154,7 @@ def _visual(s: mujoco.MjSpec, lay: Layout) -> None:
     v.rgba.haze = [0.06, 0.07, 0.09, 1]
 
 
-def _arm(s: mujoco.MjSpec) -> None:
+def _arm(s: mujoco.MjSpec, lay: Layout) -> None:
     """Kinova's Gen3 + the 2F-85 (closed on the fork) + the fork and the wrist camera, at the base origin."""
     arm = mujoco.MjSpec.from_file(str(ASSETS / "kinova_gen3" / "gen3.xml"))
     grip = mujoco.MjSpec.from_file(str(ASSETS / "robotiq_2f85" / "2f85.xml"))
@@ -185,7 +187,7 @@ def _arm(s: mujoco.MjSpec) -> None:
     flange = brace.add_body(name="flange", pos=[0, 0, -0.061525], quat=[0, 1, 0, 0])
     gf = flange.add_frame()                                 # fingers close along y: on the handle's flat faces
     gf.attach_body(grip.body("base_mount"), "grip_", "")
-    _fork(flange)
+    _fork(flange, lay.tip_in_tool)
     cam = camera_in_flange()
     c = cfg.camera.colour                                    # the measured intrinsics (principal point too)
     wrist = flange.add_camera(name="wrist", pos=list(cam), quat=[0, 0, 1, 0])   # looks along the flange's +z;
@@ -193,15 +195,15 @@ def _arm(s: mujoco.MjSpec) -> None:
     wrist.sensor_size = [c.width * 3e-6, c.height * 3e-6]                     # any pitch: only ratios matter
     wrist.focal_pixel = [float(c.fx), float(c.fy)]
     wrist.principal_pixel = [float(c.cx) - c.width / 2, PRINCIPAL_V_SIGN * (float(c.cy) - c.height / 2)]
-    flange.add_site(name="tip", pos=list(tip_in_flange()), size=[0.002, 0, 0], rgba=[1, 0.8, 0.1, 0], group=5)
+    flange.add_site(name="tip", pos=list(tip_in_flange(lay.tip_in_tool)), size=[0.002, 0, 0], rgba=[1, 0.8, 0.1, 0], group=5)
     flange.add_site(name="cam", pos=list(cam), size=[0.002, 0, 0], group=5)
     frame = s.worldbody.add_frame()
     frame.attach_body(arm.body("base_link"), "arm_", "")
 
 
-def _fork(flange: mujoco.MjsBody) -> None:
+def _fork(flange: mujoco.MjsBody, tip_tool=None) -> None:
     """The fork as calibrated (white plastic): a flat handle in the pads, a neck, a 23 mm head curving to the tines."""
-    tip = tip_in_flange()
+    tip = tip_in_flange(tip_tool)
     w = float(cfg.utensil.head_width_m)
     fork = flange.add_body(name="fork")
     fork.add_geom(type=mujoco.mjtGeom.mjGEOM_BOX, size=[0.0055, 0.0017, 0.042], pos=[0, 0, 0.158],
@@ -385,7 +387,7 @@ def build(lay: Layout) -> mujoco.MjModel:
     pelvis, floor_z = _person(s, lay)
     _room(s, lay, floor_z)
     _wheelchair(s, pelvis, floor_z)
-    _arm(s)
+    _arm(s, lay)
     _food(s, lay)
     return s.compile()
 

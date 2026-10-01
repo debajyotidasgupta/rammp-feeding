@@ -82,7 +82,7 @@ def panel_scene(dump: dict):
     ws, mouth = dump["workspace"], tuple(dump["user"]["mouth_m"])
     lay = Layout.from_config(mouth=mouth, bowl_xy=tuple(ws["bowl_xy"]),
                              foods=[Food(tuple(ws["bowl_xy"]), 0.024, (0.95, 0.62, 0.30))], width=W, height=H,
-                             laptop=False, hair=False)
+                             laptop=False, hair=False, tip_in_tool=tuple(dump["tip_in_tool"]))
     lay.table_z = float(ws["table_z"])
     m = build(lay)
     return m, new_data(m)
@@ -102,18 +102,35 @@ class Panel:
                        and self.m.geom_bodyid[i] == self.m.body("user_upper").id]
         self.t_swing, self.t_app = self.tl.phase_start("deliver swing"), self.tl.phase_start("deliver approach")
         self.t_bite = self.tl.phase_start("deliver retract")
+        # the piece: where the plunge went down (the site check's camera puts it under the utensil, so the pick
+        # lands on it), on the tines from the plunge's bottom
+        tp = self.tl.phase_start("acquire pick")
+        self.t_grab, low = None, None
+        if tp is not None and self.t_swing is not None:
+            for t in np.arange(tp, self.t_swing, 0.02):
+                self.pose_arm(t)
+                z = self.tip()[2]
+                if low is None or z < low[2] - 1e-4:
+                    self.t_grab, low = float(t), self.tip()
+        if low is not None:
+            self.home = np.array([low[0], low[1], self.home[2]])
         ws = dump["workspace"]
         self.bowl = np.array([*ws["bowl_xy"], float(ws["table_z"]) + 0.05])
         self.mouth = np.array(dump["user"]["mouth_m"], float)
 
+    def pose_arm(self, t: float) -> str:
+        q, step = self.tl.at(t)
+        self.d.qpos[arm_qpos_adr(self.m)] = np.radians(q)
+        mujoco.mj_kinematics(self.m, self.d)
+        return step
+
     def pose(self, t: float) -> tuple[str, bool]:
         """The scene at t; returns (step, mouth open)."""
-        m, d, tl = self.m, self.d, self.tl
-        q, step = tl.at(t)
-        d.qpos[arm_qpos_adr(m)] = np.radians(q)
-        mujoco.mj_kinematics(m, d)
-        # the food: in the bowl until the pick ends, on the tip until the bite, then gone
-        if self.t_swing is not None and self.t_bite is not None and self.t_swing <= t < self.t_bite:
+        m, d = self.m, self.d
+        step = self.pose_arm(t)
+        # the food: in the bowl until the plunge's bottom, on the tines until the bite, then gone
+        t_on = self.t_grab if self.t_grab is not None else self.t_swing
+        if t_on is not None and self.t_bite is not None and t_on <= t < self.t_bite:
             d.mocap_pos[self.food] = d.site_xpos[self.tip_id] - d.xmat[m.body("arm_flange").id].reshape(3, 3)[:, 2] * 0.012
         elif self.t_bite is not None and t >= self.t_bite:
             d.mocap_pos[self.food] = [0, 0, -5]

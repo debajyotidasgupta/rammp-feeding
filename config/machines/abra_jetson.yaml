@@ -4,6 +4,7 @@
 # holds :8765, their calibration files are read in place.
 deployment:
   root: ~/cornell
+  images: {planner: "ghcr.io/rammp-org/rammp-curobo:1.0.0"}   # the other team's planner image: torch + cuRobo + rammp_curobo
   name: cornell
   arm: {ip: 192.168.1.10}
   servers: {detector_port: 8775}      # foxglove holds 8765
@@ -26,5 +27,10 @@ scene_camera:
     file: /home/abra/RAMMP-box-opening/install/rammp_box_opening/share/rammp_box_opening/config/camera_scene.yaml
 
 workspace:
-  overlook_camera_height_m: 0.35      # food_detect_start computed: the D405 35 cm above the table, over the bowl (user)
+  overlook_camera_height_m: 0.40      # food_detect_start computed: the D405 40 cm above the table, over the bowl
+                                      # (the user: lower than the old lift, 35 or 40 alike; 40 clears the rim for cuRobo)
   scoop_end_follows: table            # the swing stays where it was validated relative to the user
+
+motion:
+  planner: curobo                     # the free-space moves by cuRobo (make planner); RAMMP_SET=motion.planner=scripted
+                                      # falls back to our lift / swing / retrace

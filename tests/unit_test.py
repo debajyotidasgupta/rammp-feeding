@@ -188,5 +188,36 @@ class Scene(unittest.TestCase):
         self.assertAlmostEqual(scene.tip_floor(0.29 + 0.054 + 0.041, 0.158), -0.024 + 0.05)
 
 
+class CuroboWorld(unittest.TestCase):
+    """The planner's world and utensil model (kinova/curobo_world.py): plain data, no GPU."""
+
+    def test_hollow_bowl_user_and_floats(self):
+        from kinova.curobo_world import no_pad_names, world
+        w = world(dict(bowl_xy=[0.29, 0.158], table_z=-0.024, bowl_top_z=0.046, bowl_radius=0.054),
+                  [-0.277, 0.306, 0.397], chair=[])
+        names = [o["name"] for o in w["obstacles"]]
+        self.assertEqual(sum(n.startswith("bowl_wall_") for n in names), 12)
+        self.assertIn("bowl_floor", names)
+        self.assertNotIn("bowl", names)                      # no solid bowl: the utensil works over its opening
+        head = next(o for o in w["obstacles"] if o["name"] == "user_head")
+        self.assertAlmostEqual(head["position"][2], 0.447)
+        self.assertTrue(all(isinstance(v, float) for o in w["obstacles"] for v in o["position"] + o["dims"]))
+        self.assertEqual(set(no_pad_names(w)), {"pedestal", "bowl_floor"} | {"bowl_wall_%d" % k for k in range(12)})
+
+    def test_spoon_spheres_end_at_the_tip(self):
+        from kinova.curobo_world import TOOL_Z, robot_config, spoon_spheres
+        tip = np.array([-0.0116, 0.0342, 0.135])
+        sp = spoon_spheres(tip, food=False)
+        c = np.array(sp[-1]["center"])                       # bracelet (x, -y, -0.061525 - z_flange)
+        self.assertTrue(np.allclose([c[0], -c[1], -0.061525 - c[2]], tip + [0, 0, TOOL_Z]))
+        self.assertEqual(len(spoon_spheres(tip, food=True)), len(sp) + 1)
+        base = dict(robot_cfg=dict(kinematics=dict(collision_spheres=dict(bracelet_link=[]), self_collision_ignore={})))
+        r = robot_config(base, tip, food=True)
+        k = r["robot_cfg"]["kinematics"]
+        self.assertEqual(len(k["collision_spheres"]["bracelet_link"]), len(sp) + 1)
+        self.assertIn("left_inner_finger_pad", k["self_collision_ignore"]["bracelet_link"])
+        self.assertEqual(base["robot_cfg"]["kinematics"]["collision_spheres"]["bracelet_link"], [])   # not mutated
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

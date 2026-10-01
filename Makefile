@@ -66,7 +66,7 @@ MOVELOG    = set -o pipefail; echo "== $$(date '+%F %T') make $@" >> $(RUNS)/mov
               docker exec -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/work -e RAMMP_SET="$$RAMMP_SET" -w /work $(DRIVER) python3 -u -m
 TO_MOVELOG := 2>&1 | while IFS= read -r l; do printf '%s\n' "$$l"; printf '%s %s\n' "$$(date +%T)" "$$l" >> $(RUNS)/moves.log; done
 
-.PHONY: local site-ready start-direct tool preflight camera camera-server locate-scene sdk kortex driver-image vision images driver depth clean-depth status state start detect perceive over acquire deliver retract feed detector models models-stop capture review locate-bowl limits twin twin-poses
+.PHONY: planner local site-ready start-direct tool preflight camera camera-server locate-scene sdk kortex driver-image vision images driver depth clean-depth status state start detect perceive over acquire deliver retract feed detector models models-stop capture review locate-bowl limits twin twin-poses
 
 # --- the arm ----------------------------------------------------------------
 # Every motion goes through kinova/scripts/safe_move.py: utensil kept pointing
@@ -166,6 +166,18 @@ tool:
 
 review:
 	@PYTHONPATH=. $(FACE_PY) -m feeding.review "$(or $(RUN),$$(dirname $$(readlink -f $(RUNS)/latest)))" --write
+
+# The cuRobo planner server (motion.planner: curobo): its own container, our tree mounted, on the GPU
+PLANNER    := $(shell $(SET) deployment.containers.planner)
+PLANNER_IMG:= $(shell $(SET) deployment.images.planner)
+planner:
+	@if curl -s -m 2 http://127.0.0.1:$$($(SET) deployment.servers.planner_port)/ping | grep -q ok; then echo "planner already up"; \
+	else docker rm -f $(PLANNER) >/dev/null 2>&1; \
+	  docker run -d --name $(PLANNER) --network host --runtime nvidia --gpus all --restart unless-stopped \
+	    -e PYTHONUTF8=1 -e PYTHONPATH=/work -e RAMMP_ROOT=$(ROOTDIR) -v $(CURDIR):/work:ro -v $(RUNS):$(RUNS) -w /work \
+	    --entrypoint bash $(PLANNER_IMG) -lc 'exec python3 -m kinova.planner_server' >/dev/null && \
+	  for i in $$(seq 1 180); do curl -s -m 2 http://127.0.0.1:$$($(SET) deployment.servers.planner_port)/ping | grep -q ok && \
+	    { echo "planner up ($${i} s, cuRobo warm)"; exit 0; }; sleep 1; done; echo "planner did not come up: docker logs $(PLANNER)"; exit 1; fi
 
 # A machine's own settings, versioned: config/machines/<MACHINE>.yaml -> config/local.yaml (which sync never touches)
 local:

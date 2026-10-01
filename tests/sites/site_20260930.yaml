@@ -1,7 +1,7 @@
 # The site of 2026-09-30 (abra@192.168.1.11), as measured that day -- the input to tests/site_check.py.
 profiles: {camera: realsense_d405, scene_camera: orbbec_gemini336l}
 set:
-  workspace.overlook_camera_height_m: 0.35      # the user's choice
+  workspace.overlook_camera_height_m: 0.40      # 35 or 40 alike for the user; 40 clears the rim for cuRobo
   workspace.scoop_end_follows: table            # the swing where it was validated (relative to the user), not the bowl
 workspace:                                      # the scene camera's reading (make locate-scene, 14:56)
   bowl_xy: [0.290, 0.158]

@@ -55,6 +55,7 @@ from settings import cfg
 from feeding.camera import CAM_IN_TOOL, COLOUR_SIZE, CXC, CYC, FXC, FYC, cam_to_tool
 from kinova.motion import (R_from_kortex, Rz, _ik, axis, dps_for, fk_tip, homotopy, margin, max_step, run_path,
                            tip_in_tool)
+from kinova import curobo_client
 from kinova.scripts.safe_move import Joints, MoveError, fold, goto, goto_cartesian, joints, tool_pose
 
 if TYPE_CHECKING:
@@ -188,7 +189,7 @@ def swing(conn: KinovaConnection, validate_only: bool = False) -> None:
     # -Y side (y -0.04 .. -0.10). From a bowl in front of the user (+Y) the same turn would sweep the
     # utensil through where the user's face is. Refuse anything outside the validated region.
     y_lo, y_hi = cfg.bowl.swing_start_y_range_m
-    if not y_lo < p[1] < y_hi:
+    if not curobo_client.enabled() and not y_lo < p[1] < y_hi:     # cuRobo: the user is in its world instead
         raise MoveError("scoop ended at y %+.3f, outside the region the swing was validated for (%.2f..%.2f): "
                         "from here the swing could sweep into the user -- not moving" % (p[1], y_lo, y_hi))
     plan = SwingPlan.cached(q0)
@@ -199,6 +200,10 @@ def swing(conn: KinovaConnection, validate_only: bool = False) -> None:
     else:
         plan = _plan_swing(conn, q0, np.array(p[:3]), R0)
         plan.save()
+    if curobo_client.enabled():               # the same end pose; the way there collision-free, with the food
+        plan.path = curobo_client.plan(q0, plan.path[-1], carrying=True)
+        curobo_client.check_points(conn, plan.path)
+        log.info("    lift + swing + step right: cuRobo, %d waypoints (carrying)", len(plan.path))
     _run_swing(conn, plan, p, validate_only)
 
 
@@ -297,6 +302,17 @@ def _mouth_box_problem(m: dict | None, n: dict, ncx: float, ncy: float, nw: floa
     return None
 
 
+def _keep_mouth(mouth: np.ndarray) -> None:
+    """The measured mouth, for the planner's world (motion.planner: curobo keeps the user in it)."""
+    try:
+        runs = Path(os.path.expanduser(str(cfg.deployment.runs_dir)))
+        (runs / "mouth_state.json").write_text(json.dumps(dict(mouth_base=[float(v) for v in mouth], t=time.time())))
+        if curobo_client.enabled():
+            curobo_client.refresh_world()
+    except (OSError, MoveError) as e:
+        log.info("    (the mouth not kept for the planner: %s)", e)
+
+
 def _depth_implausible(f: dict, mouth_z: float) -> str | None:
     """Why the mouth's depth cannot be a face at the fork (a stale or misregistered depth frame), or None."""
     lo, hi = (float(x) for x in MC.depth_range_m)
@@ -335,6 +351,7 @@ def approach(conn: KinovaConnection, face_path: str, colour_path: str, allow_nos
     if abs(ax[2]) > LEVEL_TOL:
         raise MoveError("utensil is not level -- run the swing first")
     mouth = T0 + R @ cam_to_tool(cam)
+    _keep_mouth(mouth)
     stop = STOP_M
     if f.get("mouth", {}).get("depth_filled"):
         stop += float(DL.stop_extra_if_depth_filled_m)   # the fallback's local error can reach ~60 mm: stand off
@@ -451,6 +468,16 @@ def retract(conn: KinovaConnection, validate_only: bool = False) -> None:
         q1 = q0
     else:
         q1 = _back_off(conn, q0, T0, R0, Te, L, go)
+    if curobo_client.enabled() and not resumed:   # 2+3. one collision-free path back to food_detect_start
+        qd = scene.overlook_joints(conn)
+        q_now = joints(conn) if go else q1
+        curobo_client.planned(conn, q_now, qd, "back to food_detect_start", RETRACT_HOME_DPS, RETRACT_TORQUE_NM,
+                              carrying=False, go=go)
+        if go:
+            goto(conn, qd, speed=float(cfg.motion.settle_dps), label="settle on food_detect_start")
+            STATE.unlink()
+            runlog.event("retracted", planner="curobo")
+        return
     # 2. reverse the swing
     rc = RetractPlan.cached(q1)
     if resumed:

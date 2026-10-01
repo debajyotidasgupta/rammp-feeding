@@ -52,6 +52,7 @@ import numpy as np
 
 import runlog
 from kinova import scene
+from kinova import curobo_client
 from kinova.motion import _ik, fk_tip
 from kinova.connection import kinova_connection
 from kinova.scripts.safe_move import (MAX_TILT_DEG, Joints, MoveError, fold, goto, goto_cartesian, joints,
@@ -162,6 +163,11 @@ def check_path(conn: KinovaConnection, legs: Sequence[tuple[Joints, Joints]], to
     return peak, low
 
 
+def planned(conn: KinovaConnection, start: Joints, goal: Joints, label: str, carrying: bool = False,
+            go: bool = True) -> list[Joints]:
+    return curobo_client.planned(conn, start, goal, label, SWING_SPEED, SWING_TORQUE_NM, carrying, go)
+
+
 def detect(conn: KinovaConnection, rerecord: bool, plan: bool = False) -> None:
     """feeding_start -> food_detect_start: the vertical lift, then the swing via its midpoint. With a computed
     overlook (kinova/scene.py) the lift goes no higher than the overlook, and the swing's peak is checked first."""
@@ -176,6 +182,18 @@ def detect(conn: KinovaConnection, rerecord: bool, plan: bool = False) -> None:
         raise MoveError("not at feeding_start (%.1f deg away) -- run `home` first"
                         % dist_deg(q, home["joints_deg"]))
     qd = scene.overlook_joints(conn)          # before anything moves: a bowl out of reach refuses here
+    if curobo_client.enabled():               # one collision-free path, no lift-and-swing
+        report(conn, "at feeding_start")
+        if plan:
+            path = curobo_client.plan(q, qd)
+            hi, lo = curobo_client.check_points(conn, path)
+            log.info("  cuRobo path to food_detect_start: %d waypoints, utensil tip z %.3f .. %.3f\n  PLAN only: nothing "
+                     "moved", len(path), lo, hi)
+            return
+        planned(conn, q, qd, "to food_detect_start")
+        goto(conn, qd, speed=SETTLE_DPS, label="settle on food_detect")
+        report(conn, "at food_detect")
+        return
     if scene.computed():
         ws = scene.workspace()
         lift = lift_joints(conn, top)
@@ -210,9 +228,16 @@ def detect(conn: KinovaConnection, rerecord: bool, plan: bool = False) -> None:
 
 def home_(conn: KinovaConnection) -> None:
     """Back to feeding_start by retracing detect(), from food_detect_start or the top of the lift."""
-    home, lift = load(HOME), dict(joints_deg=lift_joints(conn, scene.lift_z()))
-    qd = scene.overlook_joints(conn)
+    home = load(HOME)
     q = joints(conn)
+    if curobo_client.enabled() and dist_deg(q, home["joints_deg"]) > NEAR_DEG:   # from anywhere: a collision-free path
+        report(conn, "start")
+        planned(conn, q, home["joints_deg"], "to feeding_start")
+        goto(conn, home["joints_deg"], speed=SETTLE_DPS, label="snap onto feeding_start")
+        report(conn, "at feeding_start")
+        return
+    lift = dict(joints_deg=lift_joints(conn, scene.lift_z()))
+    qd = scene.overlook_joints(conn)
     if dist_deg(q, home["joints_deg"]) <= NEAR_DEG:
         goto(conn, home["joints_deg"], speed=SETTLE_DPS, label="settle on feeding_start")
         report(conn, "at feeding_start")

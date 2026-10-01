@@ -44,67 +44,28 @@ def fold(a):
     return (np.asarray(a, float) + 180.0) % 360.0 - 180.0
 
 
-# ------------------------------------------------------------------ the world, from the site file
+# ------------------------------------------------------------------ the world and the planners (kinova/curobo_world.py)
+
+from kinova.curobo_world import no_pad_names, robot_config  # noqa: E402
+from kinova.curobo_world import world as _world  # noqa: E402
+
 
 def world(site: dict) -> dict:
-    ws, mouth = site["workspace"], np.array(site["user"]["mouth_m"], float)
-    tz = float(ws["table_z"])
-    bx, by = ws["bowl_xy"]
-    r = float(site.get("bowl_radius_m", 0.06))
-    obstacles = [
-        dict(name="pedestal", position=[0.0, 0.0, -0.05], dims=[0.14, 0.14, 0.04]),
-        dict(name="table", position=[0.42, 0.25, tz - 0.025], dims=[0.68, 1.10, 0.05]),   # from x 0.08: clear of the base
-        dict(name="bowl_floor", position=[bx, by, tz + 0.004], dims=[2 * r, 2 * r, 0.008]),
-        dict(name="head", position=[mouth[0] - 0.09, mouth[1], mouth[2] + 0.05], dims=[0.20, 0.18, 0.26]),
-        dict(name="torso", position=[mouth[0] - 0.12, mouth[1], mouth[2] - 0.30], dims=[0.28, 0.42, 0.45]),
-    ]
-    # the bowl is HOLLOW (a solid box puts the overlook, the spoon 20 mm over its opening, inside it): its wall as
-    # 12 thin boxes round the rim, 6 mm thick, from the table to its top
-    top = float(ws["bowl_top_z"])
-    for k in range(12):
-        a_ = 2 * math.pi * k / 12
-        obstacles.append(dict(name="bowl_wall_%d" % k, position=[bx + r * math.cos(a_), by + r * math.sin(a_), (tz + top) / 2],
-                              dims=[0.006, 2 * r * math.tan(math.pi / 12) + 0.004, top - tz], yaw=a_))
-    for o in obstacles:                                      # plain floats: the planner reads this back as YAML
-        o["position"], o["dims"] = [float(v) for v in o["position"]], [float(v) for v in o["dims"]]
-        yaw = float(o.pop("yaw", 0.0))
-        if yaw:                                               # a box turned about z (their schema: rpy_deg)
-            o["rpy_deg"] = [0.0, 0.0, math.degrees(yaw)]
-    return dict(base_frame="base_link", obstacles=obstacles, objects=[], targets=[])
-
-
-# ------------------------------------------------------------------ the spoon (and the food) on the wrist
-
-def spoon_spheres(tip_tool: np.ndarray, food: bool) -> list[dict]:
-    """Spheres from the gripper pads to the spoon tip, in bracelet_link's frame (the flange is 61.5 mm out along
-    -z, turned 180 deg about x: flange (x, y, z) = bracelet (x, -y, -0.061525 - z))."""
-    tip_f = tip_tool + np.array([0.0, 0.0, TOOL_Z])          # in the flange frame
-    out = []
-    for s in np.linspace(0.0, 1.0, 5):
-        p = np.array([0.0, 0.0, 0.17]) + s * (tip_f - np.array([0.0, 0.0, 0.17]))
-        out.append(dict(center=[float(p[0]), float(-p[1]), float(-0.061525 - p[2])], radius=0.012 if s < 0.8 else 0.02))
-    if food:                                                 # a 25 mm piece riding the tip
-        p = tip_f - np.array([0.0, 0.0, 0.01])
-        out.append(dict(center=[float(p[0]), float(-p[1]), float(-0.061525 - p[2])], radius=0.02))
-    return out
+    ws = dict(site["workspace"], bowl_radius=site.get("bowl_radius_m"))
+    return _world(ws, site["user"]["mouth_m"])
 
 
 def planner_for(site: dict, tip_tool: np.ndarray, food: bool, workdir: Path, tight: bool = False) -> CuRoboPlanner:
-    robot = yaml.safe_load((CFG_DIR / "robot_gen3_2f85.yaml").read_text(encoding="utf-8"))
-    k = robot["robot_cfg"]["kinematics"]
-    k["collision_spheres"]["bracelet_link"] = list(k["collision_spheres"].get("bracelet_link", [])) + spoon_spheres(tip_tool, food)
-    ign = k.setdefault("self_collision_ignore", {})
-    ign["bracelet_link"] = sorted(set(ign.get("bracelet_link", [])) | {
-        "robotiq_arg2f_base_link", "left_outer_finger", "right_outer_finger", "left_inner_finger_pad", "right_inner_finger_pad"})
-    tag = "food" if food else "spoon"
+    robot = robot_config(yaml.safe_load((CFG_DIR / "robot_gen3_2f85.yaml").read_text(encoding="utf-8")), tip_tool, food)
+    tag = ("food" if food else "spoon") + ("_tight" if tight else "")
     (workdir / ("robot_%s.yaml" % tag)).write_text(yaml.safe_dump(robot))
-    (workdir / "world_site.yaml").write_text(yaml.safe_dump(world(site)))
+    w = world(site)
+    (workdir / "world_site.yaml").write_text(yaml.safe_dump(w))
     plan = yaml.safe_load((CFG_DIR / "gen3.yaml").read_text(encoding="utf-8"))
     plan["robot"], plan["world"] = "robot_%s.yaml" % tag, "world_site.yaml"
     if tight:          # our margins, not cuRobo's: the bowl unpadded, a 1 cm standoff (the default ~4.5 cm in all)
         plan["planner"]["collision_activation_distance"] = 0.01
-        plan["planner"]["no_pad_names"] = ["pedestal", "bowl_floor"] + ["bowl_wall_%d" % k for k in range(12)]
-        tag += "_tight"
+        plan["planner"]["no_pad_names"] = no_pad_names(w)
     path = workdir / ("gen3_site_%s.yaml" % tag)
     path.write_text(yaml.safe_dump(plan))
     return CuRoboPlanner.from_config(str(path))
@@ -144,11 +105,11 @@ def score(pl: CuRoboPlanner, q_rad: np.ndarray, dt: np.ndarray, tip_tool: np.nda
                      math.degrees(math.acos(np.clip(-ax[2], -1, 1))))
     obs = {o["name"]: o for o in world(site)["obstacles"]}
     def dist(p, o):
-        return box_dist(p, o) if "rpy_deg" not in o else box_dist(_unyaw(p, o), dict(o, position=[0, 0, 0]))
+        return box_dist(p, o) if not any(o.get("rpy_deg", [0, 0, 0])) else box_dist(_unyaw(p, o), dict(o, position=[0, 0, 0]))
     raw = {n: min(min(dist(t, o) for t in tips), min(dist(w, o) for w in wrists)) for n, o in obs.items() if n != "pedestal"}
     clear = {}
-    for n, v in raw.items():                                  # the bowl's pieces reported as one
-        key = "bowl" if n.startswith("bowl") else n
+    for n, v in raw.items():                                  # the bowl's / the chair's pieces reported as one
+        key = "bowl" if n.startswith("bowl") else "chair" if n.startswith("chair_") else n.replace("user_", "")
         clear[key] = min(clear.get(key, 1e9), v)
     steps = np.abs(np.diff(np.degrees(q_rad), axis=0)).max(axis=1) if len(q_rad) > 1 else np.zeros(1)
     t_ours = float(np.sum(np.maximum(dt[1:], steps / DEG_LIMIT))) if len(dt) > 1 else float(dt.sum())

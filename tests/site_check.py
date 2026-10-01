@@ -35,7 +35,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 
 import fake_kortex as fk  # noqa: E402
 
-SITE = Path(sys.argv[1]) if len(sys.argv) > 1 and not sys.argv[1].startswith("--") and sys.argv[1].endswith(".yaml") else \
+SITE = Path(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].endswith(".yaml") else \
     ROOT / "tests" / "sites" / "site_20260930.yaml"
 RENDER = "--render" in sys.argv
 site = yaml.safe_load(SITE.read_text())
@@ -48,7 +48,8 @@ os.environ["RAMMP_NO_LOCAL"] = "1"
 os.environ["RAMMP_STATE_DIR"] = str(STATE)
 for k, v in site.get("profiles", {}).items():
     os.environ["RAMMP_" + k.upper()] = str(v)
-sets = dict(site.get("set", {}), **{"deployment.runs_dir": str(RUNS)})
+PLANNER = sys.argv[sys.argv.index("--planner") + 1] if "--planner" in sys.argv else "scripted"
+sets = dict(site.get("set", {}), **{"deployment.runs_dir": str(RUNS), "motion.planner": PLANNER})
 os.environ["RAMMP_SET"] = ",".join("%s=%s" % (k, json.dumps(v) if isinstance(v, list) else v) for k, v in sets.items())
 
 from settings import cfg  # noqa: E402
@@ -85,7 +86,14 @@ def depth_frame() -> np.ndarray:
     return out.astype(np.uint16)
 
 
+import urllib.request as _ur  # noqa: E402
+_REAL_URLOPEN = _ur.urlopen
+
+
 def fake_urlopen(url, timeout=None):
+    target = url if isinstance(url, str) else url.full_url
+    if ":%d/" % int(cfg.deployment.servers.planner_port) in target:     # the planner server: the real one
+        return _REAL_URLOPEN(url, timeout=timeout)
     b = io.BytesIO()
     np.save(b, depth_frame())
     return contextlib.closing(io.BytesIO(b.getvalue()))
@@ -170,8 +178,32 @@ def render(tag: str) -> None:
 SEQ, ACQ, DEL = "kinova.scripts.sequence", "kinova.scripts.acquire", "kinova.scripts.deliver"
 
 
+def start_planner():
+    """motion.planner: curobo -- the planner server, on this run's config and runs dir (a CUDA box: the
+    curobo-eval container). Returns the process; the bite waits until cuRobo is warm."""
+    import subprocess
+    import time
+    import urllib.request
+    log = open(WORK / "planner_server.log", "w")
+    proc = subprocess.Popen([sys.executable, "-m", "kinova.planner_server"], cwd=ROOT, env=dict(os.environ),
+                            stdout=log, stderr=subprocess.STDOUT)
+    url = "http://127.0.0.1:%d/ping" % int(cfg.deployment.servers.planner_port)
+    for _ in range(600):
+        try:
+            if b"ok" in urllib.request.urlopen(url, timeout=2).read():
+                print("  planner server warm (cuRobo)", file=sys.__stderr__)
+                return proc
+        except OSError:
+            if proc.poll() is not None:
+                raise SystemExit("the planner server died: %s" % (WORK / "planner_server.log"))
+        import threading
+        threading.Event().wait(1.0)              # REAL time: time.sleep is the fake controller's simulated clock here
+    raise SystemExit("the planner server did not come up in 600 s")
+
+
 def main() -> int:
-    print("site check: %s" % SITE.name, file=sys.__stderr__)
+    print("site check: %s  (planner: %s)" % (SITE.name, PLANNER), file=sys.__stderr__)
+    planner = start_planner() if PLANNER == "curobo" else None
     print("  bowl %s, table z %.3f, bowl top z %.3f, overlook camera %.2f m above the table, mouth %s" % (
         ws["bowl_xy"], ws["table_z"], ws["bowl_top_z"], float(cfg.workspace.overlook_camera_height_m),
         site["user"]["mouth_m"]), file=sys.__stderr__)
@@ -201,6 +233,8 @@ def main() -> int:
         ok = run(SEQ, ["home"]) == 0
     print("%s  (%d IK calls; record %s)" % ("THE BITE GOES THROUGH" if ok else "STOPPED: see the step above",
                                             ARM.ik_calls, WORK), file=sys.__stderr__)
+    if planner is not None:
+        planner.terminate()
     if "--dump" in sys.argv:                   # every executed move, for comparing planners (tests/curobo_eval.py)
         out = Path(sys.argv[sys.argv.index("--dump") + 1])
         from kinova.motion import tip_in_tool

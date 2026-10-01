@@ -40,8 +40,10 @@ deployment:
       mass_centre_m: [0.0, 0.0, 0.0473]
       tolerance: {transform_m: 0.002, rotation_deg: 0.5, mass_kg: 0.02}
   containers: {driver: "{name}_driver", vision: "{name}_vision", camera: "{name}_camera",
-               scene_camera: "{name}_scene_camera"}   # make driver / depth / camera
-  images: {driver: "{name}/driver:py310", vision: "{name}/kortex-vision:humble"}   # make driver-image / vision
+               scene_camera: "{name}_scene_camera", planner: "{name}_planner"}   # make driver / depth / camera / planner
+  images: {driver: "{name}/driver:py310", vision: "{name}/kortex-vision:humble",   # make driver-image / vision
+           planner: "{name}/curobo:0.7.8"}   # torch + cuRobo v0.7.8 + rammp_curobo (RAMMP-CuRobo's docker/, or
+                                             # docker/Dockerfile.curobo_eval on x86); our tree is mounted into it
   ros_domain_id: 0              # our ROS 2 traffic (the depth nodes); a box running other ROS 2 needs its own
   venvs: {detector: "{root}/venvs/la", face: "{root}/venvs/mp"}
   paths:
@@ -56,6 +58,7 @@ deployment:
     face_port: 8766             # MediaPipe
     camera_port: 8767           # the camera server (feeding/camera_server.py): depth medians, colour frames
     scene_camera_port: 8768     # ... the scene camera's
+    planner_port: 8769          # the cuRobo planner server (motion.planner: curobo; make planner)
     startup_timeout_s: 300      # make models waits this long for all three (2026-09-25: the detector took > 120 s)
 
 preflight:                      # make preflight (make feed runs it first): the arm as the calibration assumes it
@@ -95,6 +98,15 @@ features:                       # what to switch on and off
   utensil_cross_check: false    # also detect the utensil, to check its stored image region
 
 motion:
+  planner: scripted             # the free-space moves (detect, home, the swing's path, the retract's return):
+                                # scripted (our lift / swing / retrace) or curobo (collision-free paths from the planner
+                                # server, run through our guards; the plunge, scoop, approach and bite stay scripted)
+  planner_curobo:
+    activation_distance_m: 0.01 # cuRobo's soft standoff (its default 0.03 refuses a utensil over the bowl's rim)
+    world_padding_m: 0.01       # per side on every box (the bowl's pieces and the pedestal: none)
+    timeout_s: 30
+    path_step_deg: 4            # its dense path thinned to about this much on the furthest joint (run_path re-times it)
+  planner_user_mouth_m: [-0.277, 0.306, 0.397]   # the user in the planner's world until a delivery measures the mouth
   joint_accel_cap_dps2: 72.0    # per joint, every trajectory (the controller refuses above 80). Was 40, then 60:
                                 # with the faster speeds (2026-09-25) short moves would never reach cruise
   controller_accel_factor: 1.6  # the controller interpolates waypoints more sharply than the time scaling's own

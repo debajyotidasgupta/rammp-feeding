@@ -578,7 +578,14 @@ on the wrist) and scores both alike. The 2026-09-30 site, cascadilla's RTX 3070 
 | retract | 11.79 s, 5 legs + caches | 1.56 s, one plan, similar clearance from the user |
 | home | 4.86 s | 2.92 s |
 
-(cuRobo's durations are at its model's joint limits: retime to the arm's.) With the overlook at 0.40 m. At 0.35 m
+**Now an option of the stack: `motion.planner: curobo`** (the site Jetson's default; `scripted` everywhere else).
+`make planner` runs `kinova/planner_server.py` (cuRobo warm, the world from the scene camera's workspace, the last
+measured mouth, the wheelchair's boxes) in its own GPU container; detect, home (from anywhere), the swing's path and
+the retract's return ask it for a path, check our own tip floor at every waypoint, and run it through `run_path`
+(the arm's limits, the controller's validation, the torque watch). The bite on the site's geometry, cuRobo's paths
+(`site_check --planner curobo`, cascadilla): 9 moves in 33.1 s of motion, against 18 in 43.3 s scripted (the swing
+2.6 s, the retract 5.7 s in one path). The scripted lift / swing / retrace stay until cuRobo has run on the arm.
+(cuRobo's own durations are at its model's limits: run_path re-times every path to the arm's.) With the overlook at 0.40 m. At 0.35 m
 cuRobo refuses it: the spoon head hangs within its 5 mm buffer of the bowl's rim. Holding the spoon's orientation
 (cuRobo's partial pose cost) is refused for the swing in v0.7.8; unconstrained, start and goal being level kept it
 within 3.4 deg. The plunge, scoop, approach, bite and back-off are prescribed paths, not free-space moves: they stay.

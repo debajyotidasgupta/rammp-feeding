@@ -9,10 +9,6 @@ capped by them, and a joint move asked to go faster is refused (INVALID_DURATION
 it replaces to the run record (runlog), and prints them, so they can be put back:
 
     RAMMP_SET="deployment.arm.soft_limits.joint_speed_dps=40" python -m kinova.scripts.arm_limits --apply
-
-History: 2026-09-25 the trajectory modes read 40 deg/s (joystick 50), set by whoever configured the arm before
-this repo (nothing here had written them); raised to 70 deg/s at the user's request (hard limits: 80 J1-J4,
-70 J5-J7).
 """
 
 from __future__ import annotations
@@ -38,7 +34,7 @@ def read(conn) -> dict:
     cc = _client(conn)
     names = {v: k for k, v in CC.ControlMode.items()}
     h = cc.GetKinematicHardLimits()
-    # the hard limits come back mixed: joint speeds in deg/s, accelerations in rad/s^2 (80 / 70 and 5.2 / 10)
+    # the hard limits come back mixed: joint speeds in deg/s, accelerations in rad/s^2
     out = dict(hard=dict(joint_speed_dps=list(h.joint_speed_limits),
                          joint_accel_dps2=[math.degrees(v) for v in h.joint_acceleration_limits],
                          twist_linear_mps=h.twist_linear, twist_angular_dps=h.twist_angular), soft={})

@@ -7,11 +7,9 @@ At the delivery pose the camera sits beside the level utensil, so the image come
 (world-up is image-left). It is rotated upright before detection; boxes are reported in the upright frame,
 pixels and camera coordinates in the original one.
 
-- depth is the NEAREST surface at each point (20th percentile), not the median: a median once read the mouth
-  67 mm behind the nose, off the face's edge.
-- the "mouth" query has returned a full-frame box with the mouth in plain view; when the box is not
-  anatomically plausible (small, just below the nose), it is retried as "lips". deliver.py makes the
-  final call on what is usable.
+- depth is the NEAREST surface at each point (20th percentile), not the median, which can fall off the face's edge.
+- when the "mouth" box is not anatomically plausible (small, just below the nose), it is retried as "lips".
+  deliver.py makes the final call on what is usable.
 """
 
 from __future__ import annotations
@@ -24,8 +22,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from feeding.locate_anything import LocateAnything
-from settings import cfg
-from feeding.camera import COLOUR_URL, CXC, CXD, CYC, CYD, FXC, FXD, FYC, FYD, T_D2C, corrected
+from feeding.camera import CXC, CXD, CYC, CYD, FXC, FXD, FYC, FYD, T_D2C, corrected
 
 
 

@@ -81,7 +81,8 @@ def tip_in_flange(tip_tool=None) -> np.ndarray:
 
 
 def camera_in_flange() -> np.ndarray:
-    return np.array(cfg.camera.mount.camera_in_tool_m, float) + np.array([0.0, 0.0, 0.12])
+    from feeding.camera import CAM_IN_TOOL                  # the profile's mount, or the file it names
+    return np.asarray(CAM_IN_TOOL, float) + np.array([0.0, 0.0, 0.12])
 
 
 def _quat_z(yaw: float) -> list[float]:

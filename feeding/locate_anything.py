@@ -1,19 +1,15 @@
 """Open-vocabulary detection with nvidia/LocateAnything-3B.
 
-Two jobs in the feeding stack, and they have very different duty cycles
-(docs/feeding-architecture.md Sec. 2):
+Two jobs in the feeding stack, with very different duty cycles:
 
   food   -- once per bite cycle, ~every 15 s. Latency barely matters.
   face   -- continuously during TRANSPORT/PRESENT. Latency is the whole game.
 
-Whether one model can do both is an empirical question about this hardware, not
-a design decision, so `benchmark()` exists to answer it before anything depends
-on the answer. If the face path cannot hit ~10 Hz, food detection still uses
-this model and face tracking uses something small; the architecture already
-keeps perception out of the control loop, so a slow detector degrades the rate
-at which goals are refreshed rather than stalling a trajectory.
+The face is MediaPipe's (features.face_detector), with this model as its fallback: it does not reach the face
+path's rate on this hardware. Perception stays out of the control loop, so a slow detector delays the next goal
+rather than stalling a trajectory.
 
-Notes that cost time if you rediscover them:
+Model facts:
 
   * Coordinates come back as normalised integers in [0, 1000] inside
     `<box><x1><y1><x2><y2></box>`, NOT pixels. Scale by the image size.
@@ -22,25 +18,19 @@ Notes that cost time if you rediscover them:
     irregular. "fast" is parallel-only and can truncate.
   * MagiAttention is Hopper/Blackwell only. On Orin we fall back to PyTorch
     SDPA -- functional, slower for the multi-token-prediction path.
-  * TensorRT / TensorRT-LLM / Triton are NOT supported by this model yet, so
-    the INT4-via-TRT-LLM route does not exist. On a 61 GB unified-memory Orin
-    that is fine: BF16 weights are 7.7 GB and quantisation is a latency
-    optimisation, not a memory requirement. That is a change from Sec. 7 of the
-    architecture, which was written against triphammer's 12 GB card.
+  * TensorRT / TensorRT-LLM / Triton are NOT supported by this model, so it
+    runs as BF16 (7.7 GB of weights; fine on the 61 GB unified-memory Orin).
 """
 from __future__ import annotations
 
 import re
-import time
 from dataclasses import dataclass
 
 MODEL_ID = "nvidia/LocateAnything-3B"
 BOX_RE = re.compile(r"<box><(\d+)><(\d+)><(\d+)><(\d+)></box>")
 # The model tags each category before its boxes:
 #   <ref>food pieces</ref><box>..</box><box>..</box><ref>bowl</ref><box>..</box>
-# Matching only <box> throws that away and leaves every detection sharing one
-# label, which is useless downstream -- the arm has to know which box is food
-# and which is the bowl. Walk both tokens in order instead.
+# walk both tokens in order so each box keeps its category.
 TOKEN_RE = re.compile(
     r"<ref>(.*?)</ref>|<box><(\d+)><(\d+)><(\d+)><(\d+)></box>")
 
@@ -71,14 +61,7 @@ def _iou(a: Box, b: Box) -> float:
 
 
 def dedupe(boxes: list[Box], iou_thresh: float = 0.5) -> list[Box]:
-    """Greedy NMS.
-
-    The model emits the same object many times over: a single query for "face"
-    came back with 341 boxes, ~2000 tokens, which is exactly the generation cap.
-    Nearly all of them were duplicates of a handful of real detections. Without
-    this, box counts are meaningless AND latency is dominated by emitting
-    redundant coordinates rather than by the model's actual speed.
-    """
+    """Greedy NMS: the model emits the same object many times over."""
     kept: list[Box] = []
     for b in sorted(boxes, key=lambda z: -z.area):
         if all(_iou(b, k) < iou_thresh for k in kept):
@@ -172,10 +155,10 @@ class LocateAnything:
     def _stop_on_repeat(self, iou_thresh: float = 0.3, width: int = 1280, height: int = 720):
         """While active, end generation at the first box that repeats an earlier one.
 
-        Past the real instances the model keeps emitting near-copies of one box until max_new_tokens (80
-        boxes for 4 berries; ~4 of 5.6 s spent that way). Its loop has no stopping hook, but every
-        multi-token step goes through the module-level handle_pattern(); returning its own 'im_end' there
-        ends generation exactly as the model would. Restored on exit."""
+        Past the real instances the model keeps emitting near-copies of one box until max_new_tokens. Its
+        loop has no stopping hook, but every multi-token step goes through the module-level handle_pattern();
+        returning its own 'im_end' there ends generation exactly as the model would. Slivers (< 20 px or
+        aspect > 3) also stop it. Restored on exit."""
         import contextlib
         import sys as _sys
         mod = _sys.modules[type(self.model).__module__]
@@ -238,38 +221,13 @@ class LocateAnything:
                         **kw) -> list[tuple[str, list[Box]]]:
         """Multi-category detection, keeping which box belongs to which category.
 
-        Categories are joined with the model's own "</c>". A comma-joined string
-        is read as one long phrase instead and the model falls back to emitting
-        regions -- measured 9 boxes, 6 of them junk, against 4 correct ones.
-
-        Category ORDER matters, and not for the reason you would guess. The
-        model can get stuck repeating one box: asked for
-        "food pieces</c>bowl</c>fork" it emitted the bowl ~60 times, exhausted
-        max_new_tokens, and never reached "fork" at all. Dedupe hides the
-        repeats but cannot recover the category that was starved. So put what
-        you actually need FIRST, and give it room.
+        Categories are joined with the model's own "</c>" (a comma-joined string
+        reads as one long phrase). Order matters: the model can repeat one box
+        until max_new_tokens and never reach a later category, so put what you
+        need FIRST and give it room.
         """
         answer = self.predict(
             image, "Locate all the instances that matches the following description: %s."
             % "</c>".join(categories), **kw)
         return parse_labelled(answer, image.width, image.height)
 
-    # -------------------------------------------------------------- measuring
-    def benchmark(self, image, phrase: str = "face", n: int = 5,
-                  generation_mode: str = "hybrid") -> dict:
-        """Latency over n runs, first run reported separately.
-
-        The first call pays warm-up and is not representative; quoting it as the
-        steady-state rate would overstate the cost several-fold.
-        """
-        times = []
-        for i in range(n + 1):
-            t0 = time.perf_counter()
-            boxes = self.locate_one(image, phrase, generation_mode=generation_mode)
-            self.torch.cuda.synchronize()
-            times.append(time.perf_counter() - t0)
-        warm, steady = times[0], sorted(times[1:])
-        med = steady[len(steady) // 2]
-        return dict(warmup_s=warm, median_s=med, min_s=steady[0], max_s=steady[-1],
-                    hz=1.0 / med if med else float("inf"), found=boxes is not None,
-                    mode=generation_mode)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """cuRobo, kept warm behind one HTTP port: collision-free paths for the free-space moves.
 
-Runs where torch + cuRobo are (the planner container, `make planner`; on an x86 box docker/Dockerfile.curobo_eval):
+Runs where torch + cuRobo are (the planner container, `make planner`; on an x86 box docker/Dockerfile.planner_x86):
 
     python3 -m kinova.planner_server [--port 8769]
 

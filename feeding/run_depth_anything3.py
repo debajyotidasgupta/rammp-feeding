@@ -14,17 +14,11 @@ network sees it, so fx must be scaled by the same factor or the whole map is
 off by that ratio. Upsampled back to the colour size afterwards so it lines up
 pixel-for-pixel with the detector's boxes.
 
-process_res defaults to 504 upstream, which turns 1280x720 into ~504x284 and
-throws away exactly the resolution this is for. 1008 (a multiple of the 14 px
-ViT patch) keeps berry-scale detail.
+process_res 1008 (a multiple of the 14 px ViT patch, vs upstream's 504) keeps
+berry-scale detail.
 
-The metric scale is a MODEL ESTIMATE. depth_fusion.py fits it to the depth
-sensor rather than trusting it.
-
-Install note (aarch64): upstream pins xformers, open3d, pycolmap, moviepy and
-friends. None are needed for inference and xformers has no aarch64 wheel, so
-install with --no-deps, add einops/omegaconf/safetensors/imageio/addict/evo/
-scipy, and make utils/export/__init__.py's imports lazy.
+The metric scale is a MODEL ESTIMATE: feeding/depth_fill.py fits it to the
+depth sensor rather than trusting it. Installed by setup_jetson.sh.
 """
 
 from __future__ import annotations

@@ -8,14 +8,11 @@ Reports, along the utensil tip's vertical line:
   floor  the bowl floor just beside it, m from the camera
   plus the tip's clearance to each, using the calibrated camera-to-tip.
 
-Read at close range on purpose. Every approach today re-measured at a ~30 mm
-hover and found the food 4.7-6.7 mm closer than the overlook reading predicted;
-a reading taken from where the arm now is beats one taken 150 mm further away.
+Read from where the arm now is (a close reading beats the overlook's), or with --target from the overlook
+frame: what will be under the tip once OVER has slid it there.
 
-The vertical line is projected through the image of TRUE vertical
-(camera profile: colour.vertical_vp) and the MEASURED tip pixel
-(utensil profile: tip_px) -- not the utensil box's centre, which
-was ~10 mm off for a fork.
+The vertical line is projected through the image of TRUE vertical (camera profile: colour.vertical_vp) and
+the MEASURED tip pixel (utensil profile: tip_px), not the utensil box's centre.
 """
 
 from __future__ import annotations

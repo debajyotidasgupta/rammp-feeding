@@ -4,9 +4,8 @@
     ~/venvs/la/bin/python -m feeding.detector_server          # start (make detector), stays up
     from feeding.detector_server import connect; la = connect()   # a client, or a local model if none is up
 
-Loading LocateAnything took 13.6 s -- on EVERY `make perceive`, i.e. every bite (user, 2026-09-24: "keep it
-on"); Depth Anything 3 takes 10.4 s to load and 0.8 s for its first inference, then ~0.1 s. The server loads
-both once (8.5 GB of the Jetson's 61 GB together), runs a warm-up inference on each, and only then answers:
+Loading takes ~14 s (LocateAnything) + ~10 s (DA3), so the server loads both once (8.5 GB together), runs a
+warm-up inference on each, and only then answers:
   /locate, /locate_one   LocateAnything; the client has the same methods, so perceive.py does not care
   /depth                 DA3 metric depth of a colour image, written to an .npy (metres, colour resolution)
 """
@@ -14,7 +13,6 @@ both once (8.5 GB of the Jetson's 61 GB together), runs a warm-up inference on e
 from __future__ import annotations
 
 import json
-import sys
 import time
 import urllib.request
 from pathlib import Path
@@ -60,7 +58,7 @@ def da3_depth(image_path: str, out_path: str) -> bool:
 
 
 def connect():
-    """The running server if there is one, else the model loaded here (the old behaviour)."""
+    """The running server if there is one, else the model loaded here."""
     try:
         with urllib.request.urlopen("http://%s:%d/ping" % (HOST, PORT), timeout=2) as r:
             if r.read() == b"ok":

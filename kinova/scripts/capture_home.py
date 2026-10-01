@@ -4,14 +4,9 @@
 Read-only: it commands no motion and never touches the gripper (the utensil is
 held in a closed 2F-85; opening it drops the tool).
 
-Every feeding sequence begins from this pose, so it is a fixed constant of the
-system rather than something re-derived per run. That matters more than it
-used to: the face camera is mounted on the wheelchair armrest at deployment and
-carries ~100 mm of error, so it cannot seed a pose -- the start of the motion
-has to be frozen and known, not perceived.
+Every feeding sequence begins from this pose: a fixed constant, captured once, not perceived per run.
 
-Averages over a short window because the arm is holding position under gravity
-and the encoders dither by a few millidegrees.
+Averages over a short window: holding under gravity, the encoders dither by a few millidegrees.
 
     python -m kinova.scripts.capture_home [--seconds 2] [--out calibration/home_pose.json]
 """
@@ -76,9 +71,7 @@ def main() -> int:
     def col(key, i):
         return [s[key][i] for s in samples]
 
-    # Joint angles are reported in [0, 360). Averaging across the wrap would
-    # produce a pose 180 deg from the real one, so fold to (-180, 180] first --
-    # joints 1/3/5/7 are continuous and legitimately sit near 0/360.
+    # joint angles come in [0, 360): fold to (-180, 180] before averaging, or a joint near 0/360 averages to 180
     def fold(d):
         return (d + 180.0) % 360.0 - 180.0
 

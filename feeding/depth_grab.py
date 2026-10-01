@@ -3,7 +3,7 @@
 
     python -m feeding.depth_grab OUT.npy [--frames 15]
 
-The caller falls back to depth_probe.py in the vision container (the old ~5 s path).
+The caller falls back to depth_probe.py in the vision container (~5 s).
 """
 import argparse
 import io
@@ -29,7 +29,7 @@ def fetch(frames: int, since: float | None = None) -> np.ndarray | None:
             with urllib.request.urlopen(url, timeout=wait + 5) as r:
                 return np.load(io.BytesIO(r.read()))
         except Exception as e:  # noqa: BLE001
-            print("depth server (try %d/%d): %s" % (k + 1, tries, e), file=sys.stderr)
+            print("camera server (try %d/%d): %s" % (k + 1, tries, e), file=sys.stderr)
     return None
 
 

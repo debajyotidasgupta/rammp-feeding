@@ -12,7 +12,7 @@ against tests/mujoco_kortex.py (the Gen3's kinematics: IK / FK anywhere, unlike 
 recorded deployment) and a site file: the cameras, where the bowl and table are (as the scene camera would
 report them), the overlook height, where the user's mouth is. Prints each step's outcome and the line that
 says why; exit 1 if the bite does not go through. --render: a MuJoCo twin frame of the overlook and the
-presented pose (sim/out/site_check_*.png).
+presented pose (out/sim/site_check_*.png).
 
 What it cannot tell: anything about contact, the food, or the cameras' images (the depth it feeds the stages is
 synthetic, consistent with the site's numbers). It is the geometry: reachability, joint limits, every path check.
@@ -88,7 +88,7 @@ def _conn():
 def depth_frame() -> np.ndarray:
     """What the wrist camera would see from wherever the arm is now: the table, the bowl floor, one food piece
     under the utensil's vertical line (consistent with the site's heights)."""
-    from kinova.motion import R_from_kortex
+    from kinova.frames import R_from_kortex
     from feeding.camera import CAM_IN_TOOL
     c, d = cfg.camera.colour, cfg.camera.depth
     p = ARM.pose
@@ -152,7 +152,7 @@ def write(path: Path, obj) -> None:
 
 def face_fixture(name: str) -> list[str]:
     """A face as the delivery's look would report it, the mouth where the site says, seen from the arm's pose now."""
-    from kinova.motion import R_from_kortex
+    from kinova.frames import R_from_kortex
     from feeding.camera import CAM_IN_TOOL
     p = ARM.pose
     R = R_from_kortex(*p[3:])
@@ -188,7 +188,7 @@ def render(tag: str) -> None:
         opt.geomgroup[1] = opt.geomgroup[2] = 1
         cam = mujoco.MjvCamera(); cam.lookat[:] = (0.05, 0.1, 0.25); cam.distance, cam.azimuth, cam.elevation = 1.8, 150, -20
         r.update_scene(d, camera=cam, scene_option=opt)
-        out = ROOT / "sim" / "out" / ("site_check_%s.png" % tag); out.parent.mkdir(parents=True, exist_ok=True)
+        out = ROOT / "out" / "sim" / ("site_check_%s.png" % tag); out.parent.mkdir(parents=True, exist_ok=True)
         Image.fromarray(r.render()).save(out); print("    rendered %s" % out, file=sys.__stderr__)
     except Exception as e:  # noqa: BLE001
         print("    (no render: %s)" % e, file=sys.__stderr__)
@@ -261,7 +261,8 @@ def main() -> int:
     ok = run(SEQ, ["detect", "--plan"]) == 0 and run(SEQ, ["detect"]) == 0
     render("overlook")
     if ok:
-        from kinova.motion import R_from_kortex, tip_in_tool
+        from kinova.frames import R_from_kortex
+        from kinova.motion import tip_in_tool
         p = ARM.pose
         tip = np.array(p[:3]) + R_from_kortex(*p[3:]) @ tip_in_tool()
         goal = [p[0] + ws["bowl_xy"][0] - tip[0], p[1] + ws["bowl_xy"][1] - tip[1], p[2]]   # the tip over the bowl
@@ -285,7 +286,7 @@ def main() -> int:
                                             ARM.ik_calls, WORK), file=sys.__stderr__)
     if planner is not None:
         planner.terminate()
-    if "--dump" in sys.argv:                   # every executed move, for comparing planners (tests/curobo_eval.py)
+    if "--dump" in sys.argv:                   # every executed move, for sim/compare_planners.py
         out = Path(sys.argv[sys.argv.index("--dump") + 1])
         from kinova.motion import tip_in_tool
         out.write_text(json.dumps(dict(site=str(SITE), workspace=ws, user=site["user"], tip_in_tool=list(tip_in_tool()),

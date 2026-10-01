@@ -1,0 +1,365 @@
+# History: the stack's measurements and decisions, as they were recorded (until 2026-10-01)
+
+Moved out of the README on 2026-10-01 so the README describes the stack as it is. Dated; nothing here is a current instruction unless the README repeats it. The scripted free-space moves are gone (docs/notes/motion.md).
+
+
+## The frozen acquisition (2026-09-24)
+
+Frozen 2026-09-24 (tag `acquire-v1`): two consecutive full runs, fork on strawberries, both picked up and held ("the most perfect scoop"). Run to run: OVER 82/81 mm, punch 45.3/44.3 mm down, scoop 6.3/6.2 s, rise 164.5/163.8 mm, 1.0/1.0 mm off vertical.
+
+## Acquisition: why each piece is the way it is
+
+| step | what | measured |
+|---|---|---|
+| OVER | translate at the overlook height until the tip's vertical line meets the food | 82 mm, aim user-confirmed at the hover |
+| PLUNGE | **one smooth move** from the overlook to the **measured bowl floor** (nominal; really ~5–10 mm above it): 20 mm/s, easing to 5 mm/s from 20 mm above the food top | 2026-09-24: 173 mm in 20.2 s, same end depth as the stepped punch |
+| SCOOP | food rises while the utensil turns vertical -> horizontal (+Y); the turn **starts the moment the food lifts** (90°·s^0.8). With the bowl in front of the user it also **backs off to the old scoop end** (`scoop_end`, 206 mm), mostly after the first 20% |  6.3 s at 20 °/s; rose 164.5 mm, 1.0 mm off vertical; berry held |
+
+**Packed food** (`acquisition.plunge.no_floor`, 2026-09-25). When no bowl floor shows beside the target -- the
+floor ring reads the neighbouring pieces, so the food looks under 10 mm tall, or there is no floor reading at
+all, or the "floor" is more than 25 mm above the table (`floor_max_above_table_m`: a real bowl floor sits a few mm
+above it) -- the plunge goes `depth_below_top_m` (25 mm) below the target's top instead of to the floor, never closer
+than 10 mm to the table (`workspace.table_height_m`: shortened to that, refused if that leaves < 10 mm in the
+food), and never on a top read from the Depth Anything 3 fallback. The scoop then takes the tip as the piece's
+bottom. The torque guard still stops the plunge on contact.
+
+**Why one plunge, not steps.** The stepped route stopped at 30 and 10 mm to re-measure, because the overlook
+reads the food TOP 4–7 mm high. But the punch aims at the FLOOR, and the overlook's floor reading matched the
+close re-measures to within 1 mm on every run (e.g. 172.3 mm, then 65.3 after 107 mm down: predicted 65.3).
+The slow zone starts 20 mm above the top reading, which covers its error. The stepped route stays for aim
+checks at a 10 mm hover (STOP_AFTER=hover10).
+
+How it got here (2026-09-23/24), each change the user's call:
+- the first full run **dropped the berry**: a 25 s scoop, and the food slid off while the fork was steep ->
+  **20 °/s with a smooth speed profile** (sin² ease in/out over 25% each end; giving every waypoint full
+  speed was refused at any speed as INVALID_JOINT_ACCELERATION);
+- the fork rose near-vertical before turning -> the turn **starts the moment the food lifts** (exponent 1.6 -> 0.8);
+- the punch was shallow -> floor + h/3, then + 7, + 2, and now **the measured floor, nominal**;
+- the aim -> **+5 mm X** (into the bulk of the flesh past the tines) and **−6 mm Y** (the fork head's curve),
+  `aim_offset_base_m`, fork-specific.
+
+**No camera roll after the scoop** (user, 2026-09-24): rolling the fork 90° to put the camera on top turns the food's
+curvature from facing up to facing sideways, which makes the bite harder. The fork stays as the scoop leaves it.
+
+**After the scoop** (until the feed-the-user stages exist): take the food off, then lift **80 mm** with the
+utensil horizontal and joint-move to food_detect_start. A straight joint move from the scoop end dips the
+tip 94 mm over the bowl, and turning the utensil back down about its tip is unreachable (IK fails 40–60% in).
+
+Why each piece is the way it is:
+- **Re-measure at every stage, from where the arm is.** At a 30 mm hover the food was
+  4.7–6.7 mm closer than the overlook reading predicted, every time.
+- **The scoop is a joint-space path, not a Cartesian move.** As one straight Cartesian
+  rotation it is unreachable past ~57°: J6 hits its limit. The end pose is reachable in
+  hundreds of other arm shapes, so the arm reshapes (J1 ~80°, J2 ~75°) while the food
+  holds its vertical line. It is planned live from the actual punch pose, IK-checked,
+  validated by the controller, and run as one smooth trajectory.
+- **The scoop pivots on the utensil tip in the arm's tool frame,** computed from
+  calibration only: Kinova's camera position on the wrist + camera-to-tip + the tip's
+  pixel. For the fork, (0, 9, 142) mm.
+
+## The demo (2026-09-24, recorded)
+
+`make feed` from feeding_start, bowl in front of the user: **3 bites, 126–130 s each, no stops, no retries**;
+the loop saw the bowl empty and went home. Per bite: perceive ~12 s (resident detector), plunge + scoop
+flowing together, one-trajectory swing, open-mouth wait, approach to 80 mm, bite at 1.0–1.7 s (2.5–3.2 N),
+fast retract.
+
+## The demo (2026-09-25, recorded): 6 of 6
+
+Packed fruit cubes (melon, apple, pineapple) in a clear container, fork: `make feed BITES=6` --
+**6 of 6 eaten, no stops, 73-85 s a bite** (perceive 6-9 s, acquire 21-25 s, deliver 46-57 s), then one more
+in an unlimited run. What changed since 2026-09-24, each in its section below:
+
+- **Aim**: the fork's tip pixel re-measured (the power-cycle re-seats it: check at a 10 mm hover after one),
+  the fork's tine offset in the tip model, the aim on the piece's **top surface** (depth), not the box centre.
+- **Food**: food profiles (`config/food/`), the generic prompt `piece of food`, fallback prompts, grapes and
+  the background never targeted; packed food plunges 25 mm below its top; "empty" confirmed by depth.
+- **Speed**: the arm's soft limits 70 (J1-J4) / 63 (J5-J7) deg/s, every move planned under them and under the
+  controller's own acceleration measure -- a bite 126-130 s -> ~78 s.
+- **Robustness**: depth from two staggered RTSP sessions (no dropouts), a resident colour stream, a stale
+  depth server killed with -9, braking on arrival not taken for contact, a mouth depth that is not a face
+  never approached.
+
+
+## Delivery as built (2026-09-24)
+
+Built 2026-09-24, leg by leg, with the user at the arm; ran end to end once (swing, present, one bite, retract)
+as scratch scripts before being moved here. **Not yet run from these files.**
+
+| step | what | why |
+|---|---|---|
+| SWING | **one trajectory**: lift **175 mm**, J1 −90° toward the user **while** retracting the utensil along its axis (120 mm, as far as the joints allow) | +60 mm touched the bowl; retraction in parallel, not after, keeps the tip from leading into the user |
+| PRESENT | capture → face/nose/mouth → straight approach to the tip **80 mm short** of the mouth, **10 mm below** it, 20 mm/s | 80 mm suits any cube-sized piece; the stop felt nearer the nose |
+| BITE | read-only: tool-force estimate > **1 N** for 0.1 s, against a baseline at rest | one bite peaked 5.7 N; J4/J5/J6 carry it, J7 barely (0.11 N·m) |
+| RETRACT | back off along the utensil → reverse swing → down to scoop end + 80 mm → joint move to food_detect_start; **fast** (60 mm/s, 25/20/15 °/s) | no food, moving away |
+
+- **No camera roll.** Rolling the utensil to put the camera on top turns the food sideways for the bite. The
+  image is rolled 90° instead and rotated upright in software.
+- **Detection: MediaPipe face landmarks first** (`feeding/detect_mouth_mp.py`, ~25 ms a frame on the CPU, in
+  `~/venvs/mp`); LocateAnything (30–40 s) only if MediaPipe finds no face. On 8 saved frames MediaPipe found the
+  face every time — including two where LocateAnything's "mouth" was the whole frame — and its depths agreed
+  with LocateAnything's to 1–6 mm. Depth comes from many face points with the food (~250 mm nearer) dropped,
+  so food covering the mouth or nose no longer blinds it.
+- **Detected from 50 mm to the user's right** (the swing ends there) so the food is not in the line of sight.
+  If the mouth is still unusable: sidestep further (twice), then the nose estimate.
+- **Waits for an open mouth by default** (`WAIT_OPEN=` to skip): approach only once the user opens their mouth (lip gap / mouth width > 0.20 for 0.3 s;
+  closed reads ≤ 0.02), up to 60 s — a "ready" signal.
+- **Only a fresh detection moves the arm.** A stale second file once let an approach run to an old reading
+  (it happened to stop further away, because the user had moved back). The approach now reads only the
+  detection made at its pose, newer than its capture, under 2 min old.
+- **Retract does not stop on torque while backing off** — stopping could leave the food in the mouth — and
+  steers the arm back into the scoop's own shape before the joint move home: without that, the joint move
+  dipped the utensil tip to the bowl floor (222 mm); with it, never below ~340 mm.
+- The 1 N bite threshold sits at the level of non-bite bumps (1.0–1.1 N: leaning in, lips on the food); the
+  0.1 s hold rejects spikes, not a sustained touch. One recorded bite so far.
+
+### The open-mouth wait and the face (2026-09-25)
+
+The wait reads the resident colour stream (frames arrive with ~0 s age; the camera itself lags reality by
+**0.4 s**, `feeding/camera_latency.py`), writes a live readout to `runs_dir/open_wait_live.txt` every 0.25 s,
+and keeps a snapshot every 0.5 s (`look_N/wait_frames/`). A detection is registered within ~0.3 s of the mouth
+opening. The mouth's depth must be a face at the fork -- 0.25-0.75 m and within 80 mm of the face box's depth
+(`delivery.mouth_check`) -- else the approach exits 5 without moving and one fresh look is taken: after a
+depth stall the stream once delivered a stale frame (mouth "921 mm"; the face was 0.52 m).
+
+## Calibration incidents
+
+Both breakages on 2026-09-23 came from one wrong number: camera-to-tip taken as
+105/115 mm (inches read as centimetres) when it is ~260 mm.
+
+**The e-stop does not hold the arm.** Three times today the arm moved 100–160 mm after an
+e-stop. Near the bowl, an e-stop can itself push things around.
+
+## The scripted motions (until 2026-10-01)
+
+```
+feeding_start ──[one smooth vertical lift, 337 mm]──> top of lift
+              ──[joint swing, via its midpoint]─────> food_detect_start
+```
+
+`make start` is exactly that backwards, then a joint snap onto the pose.
+
+- **Up first.** feeding_start sits *below table height*, parked beside it. Going
+  straight up first puts the whole swing ~300 mm above the bowl.
+- **Smooth**, not a staircase: one straight-line Cartesian move each way.
+- **The swing goes via its midpoint**, which makes the direction of travel
+  explicit. The short way for J1 goes round the *back*, away from the table.
+- **home is a retrace.** It re-uses the recorded waypoints, and refuses to start
+  from any pose it doesn't recognise rather than improvising a path.
+
+Measured: both directions run cleanly, utensil never more than 1.2° off
+vertical; two consecutive round trips land the camera view within **1 px**
+(≈0.3 mm at berry depth) of each other.
+
+### Speed and the arm's limits (2026-09-25)
+
+The arm's own **soft limits** (Kinova ControlConfig, `make limits`) were 40 deg/s; raised at the user's request to
+**70 deg/s J1-J4, 63 deg/s J5-J7** (hard limits 80 / 70; `deployment.arm.soft_limits`, the old values saved to
+the run record). Every speed is kept under them at runtime (`motion.capped`): asking more is refused, not
+clamped, and the retries went slower than asked. Transit moves run at 61 deg/s, the lift at 0.22 m/s, the
+descent into feeding_start 0.13 (at 0.22 its braking read as contact); the plunge is unchanged.
+
+Trajectories are planned for the **controller's acceleration measure** (it sees ~1.6x the time scaling's):
+`controller_accel_factor`, and a plan still refused on acceleration is rescaled by the controller's own
+measured/limit ratio and validated again at the same speed (`accel_retries`) -- never above a limit, never
+halved. A joint move the controller refuses as too short is re-sent at its stated minimum. A torque-step stop
+with the arm already at its target is its own **braking**, not contact (J2 steps 2.7-3.2 N.m at 61 deg/s);
+the swings and the retract's move home use 6 N.m guards.
+
+### Every move goes through `safe_move.py`
+
+Each check exists because its absence cost something on this arm:
+
+| check | why |
+|---|---|
+| **utensil stays down** | Tool pitch is set by the sum J2+J4+J6 ≈ −180°. Moving *one* of them alone swung the fork 79° off vertical (2026-09-23). Only complete 7-joint targets are accepted. |
+| **joint-torque contact abort** | The fork was then broken by its own wrist — tines dragged across the joint-6 housing — with the tool *angle* legal throughout. There is no self-collision model yet, so a torque step is the only thing that notices contact. |
+| **time-synchronised joint moves** | A per-joint *speed* constraint makes a joint with a sliver of travel accelerate and stop within it; the controller refuses with a bare `METHOD_FAILED`. The real reason (`INVALID_JOINT_ACCELERATION`) is only in `GetTrajectoryErrorReport()`, now read on every abort. A *duration* constraint fixes it — and is also what actually keeps J2+J4+J6 interpolating linearly. |
+| **joint limits pre-checked** | Kortex silently ignores a target past a limit. |
+| **fail fast** | If nothing moves within 3 s, stop and report the controller's reason. |
+
+Don't infer a refused move's cause from the arm state: it reads
+`SERVOING_MANUALLY_CONTROLLED` for a while after *any* trajectory, ours included.
+Several wrong theories (the gamepad, angle-wrap encoding, the deprecated API)
+were tested and disproved before the error report was read. **Read the report
+first.**
+
+## Perception
+
+Runs on the jetson host; results go to the run record (`~/rammp_runs/<session>/bite_NN/perceive/`), **outside**
+the synced tree. Refuses unless the arm is at food_detect_start, because the
+image→motion mapping was measured in exactly that orientation.
+
+1. **Detect** (`perceive.py`, LocateAnything-3B) — **one query per category.** A
+   combined prompt gets stuck repeating one category and silently drops the
+   rest, and *which* one repeats isn't stable. Food must lie inside the bowl
+   box; a bowl box that merged with the utensil is squared. **The utensil is
+   not detected** — it's fixed to the arm, as is the camera, so it occupies the
+   same pixels every time (`utensil_px` in `food_detect_pose.json`). A `spoon`
+   query once returned the whole bowl and suppressed every berry.
+2. **Depth** (sensor, 20-frame median) — read *at each detection*, not by
+   segmenting the bowl: the floor is concave, so no single floor level separates
+   berries from the wall. Measured berries 23–31 mm tall. A berry hidden under
+   the utensil has no return and is skipped, not guessed.
+3. **Registration check** against the frozen colour principal point
+   (`calibration/colour_intrinsics.json`). It's a camera constant, so it's
+   calibrated once and each run only checks agreement (typically a few px, where
+   1 px ≈ 0.34 mm).
+4. **Target** (`locate_target.py`) — the most central visible berry. With the
+   camera vertical, the utensil tip's vertical line lands at
+   `p* = pp + (p_tip − pp)·Z_tip/Z_berry`, and the tool translates until the
+   berry sits there. No hand–eye calibration needed.
+
+### Food detection and the aim (2026-09-25)
+
+- **Prompt per food profile** (`config/food/<name>.yaml`): cubes ask for `piece of food` -- on packed cubes one box
+  per piece, as good as `fruit cube` and generic for steak / chicken; `food pieces`, `food cube`, `bite-sized
+  piece` merged pieces or boxed the whole container.
+- **Fallback prompts** (`fallback_prompts`, cubes: `fruit cube`), asked only when no box is usable.
+- **Never targeted** (`exclude_grapes`): a box whose centre is red with little green (a grape -- it rolls off
+  the fork) or blue (the mat, the bowl's wall).
+- **The aim** is the centre of the uppermost piece's top inside the chosen box (depth pixels within 6 mm of its
+  nearest point, the largest patch; `perception.aim_top_surface`) -- a merged box or a seam still aims at one
+  piece. The box centre once sent the fork into the gap between a piece and a grape.
+- **Packed food** (`acquisition.plunge.no_floor`): when the "floor" beside the piece reads food (under 10 mm
+  "tall", no reading, or more than 25 mm above the table) the plunge goes 25 mm below the piece's top, never
+  closer than 10 mm to the table.
+- **"Empty" is confirmed by depth**: with no usable box, a quadratic fitted to the bowl's own surface (flat
+  container or round bowl) -- under 5% of its inner area standing 15 mm clear of it is empty (exit 3), else
+  "food left, none pickable" (exit 5): `make feed` stops saying so instead of finishing.
+
+### Speed of perception (2026-09-25, offline on saved frames; the robot was off)
+
+| step | before | now | how |
+|---|---|---|---|
+| colour frame | 22 s | 1.5 s | `grab_frame.py` reads the stream; gst recorded until a timeout |
+| depth frame | ~5 s | ~0.5 s (expected) | `depth_server.py` keeps the stream open in kinova_vision; median of fresh frames |
+| berry query | 5.6 s | **~1.0 s** | on the bowl crop only (0.5x image-reading), the model's `fast` mode, stop at the first repeated / sliver box -- same berries on 8/8 frames after the filters |
+| bowl query | 1.8 s / bite | once per session | the bowl does not move; `make feed` clears the cache |
+| OVER -> plunge | ~15 s standing still | ~3 s | `acquire pick`: OVER, fresh depth, plan, plunge, scoop in one arm program |
+
+Tried and NOT used: re-using the overlook depth for the plunge (off by 11 and 5 mm on 2 of 17 runs); int8 weight-only
+quantization (1.79 s vs 1.17 s, different boxes -- no fused kernels); int4 (torchao's kernels unsupported with this
+PyTorch). The PyTorch build warns it is not built for the Orin (sm 8.7) but runs bf16 GEMM at 34 TFLOPS, near peak.
+
+### Depth fallback: Depth Anything 3 fills what the sensor misses
+
+`feeding/depth_fill.py` runs after every depth capture (perceive, the plunge's floor reading, the face). Sensor
+pixels are kept as measured; holes -- or a whole missing frame (an RGB-only camera) -- are filled from DA3,
+projected into the sensor's frame, fitted to the sensor (global scale/offset, then the fit's own error around
+each hole spread into it), with `depth_filled_mask.npy` marking what was filled.
+
+Measured on 4 saved frames with two 40x40 px holes cut out and compared with the sensor's own values: median
+error -0.6 to -1.9 mm, but 90% within 23-29 mm and up to ~60 mm -- the LEVEL is right, the local SHAPE is not.
+So: fine for finding and ranking food; the plunge REFUSES if more than half its floor reading is filled, or if
+the depth is raw DA3 (no sensor at all: ~300 mm off); the approach stands 40 mm further off (120 mm) if the
+mouth's depth is filled.
+
+**Models stay resident** (`make models`, run by `make feed` first; `make models-stop`): LocateAnything-3B and
+Depth Anything 3 in one GPU server (8.5 GB of 61 GB), the MediaPipe face landmarker in its own; each runs a
+warm-up inference before it answers -- all up and warm in ~21 s.
+
+| model | size | resident memory | warm inference |
+|---|---|---|---|
+| LocateAnything-3B | 7.2 GB | ~7.2 GB | berries 4.5-6 s, bowl 1.8 s |
+| Depth Anything 3 (DA3METRIC-LARGE) | 0.33 B params, 1.3 GB | 1.25 GB | ~0.1 s |
+| MediaPipe face landmarker | 3.7 MB | CPU | ~25 ms |
+
+### Which depth source
+
+**The depth stream itself** (2026-09-25): the arm ends each RTSP depth session every ~62 s, whatever the client
+sends (an explicit keep-alive and a longer tcp-timeout changed nothing), and recovery took 10-20 s -- 20-26 s
+lost per capture that landed in a gap. `make depth` runs two depth nodes 31 s apart (`/camera` and `/camera2`)
+and the depth server merges both (`camera.streams.depth_topics`): 30 of 30 requests answered over 150 s while
+the sessions paused 6 and 8 times. Captures take frames since the arm stopped (5 s buffered), so a brief gap
+costs nothing. Stop the depth server with `pkill -9` (`make models` does): rclpy swallows SIGTERM and leaves a
+stale server holding the port.
+
+Scored against checks independent of all of them (a flat table; a strawberry is
+~25–35 mm tall):
+
+| | table noise | berry heights |
+|---|---|---|
+| **sensor** | 5.1 mm | **32, 31, 31 mm** |
+| Depth Anything 3 raw | 12.4 mm, invents a 39 mm tilt | 88, 58, 74 mm |
+| DA3 fused to the sensor | 2.1 mm | 13, 9, 14 mm — smooth and wrong |
+
+**The sensor is the truth.** DA3 is available as an optional cross-check
+(`STAGE1_DA3=1`) and is only worth anything where the sensor returns nothing.
+
+## Poses
+
+| file | pose |
+|---|---|
+| `home_pose.json` | **feeding_start** — J1 −90° (arm swung clear of the user), utensil straight down, tool (0.0236, −0.1766, 0.2082) |
+| `lift_pose.json` | top of the lift — feeding_start's xy, z 0.545, J6 3.6° off its limit |
+| `food_detect_pose.json` | **food_detect_start** — over the bowl, **in front of the user** (2026-09-24), camera straight down, tool (0.2205, 0.2826, 0.5344); named by `config/bowl/front.yaml`. The old pose (bowl to the user's right) is kept as `previous_pose` |
+| `colour_intrinsics.json` | colour principal point, measured -- the record; the values used are in `config/camera/kinova_wrist.yaml` |
+| `depth_480x270.ini` | this depth sensor's own intrinsics, not the package default |
+
+**food_detect_start leans J2 ~+8° toward the table**, not −9.7° back. The camera
+orientation is identical either way (J4 compensates; J2+J4 doesn't change), but
+the camera sits ~120 mm nearer the base: no berry is hidden behind the utensil,
+J2 holding torque roughly halves, and J6 has 5.4° to its limit (was 1.1°). The
+rim's top sits at the image edge — at this bowl size (~560 px) the full rim and
+a clear view past the utensil (~460 px) can't both fit.
+
+**Orientation is the same at every stage** — utensil straight down (0.5°) — so
+stages differ only in position, and nothing ever needs a wrist rotation. The
+0.5° residual is in a direction J2/J4/J6 can't reach (they all pitch in one
+plane).
+
+**J1 and J3 are stored as intended exact values** (−90.000, 0.000), not as
+measured: commanding −90.000000 lands at −89.998138 every time. If you ever
+`make capture`, restore those two by hand.
+
+## Known open (2026-09-25)
+
+- **Mixed plates.** Packed cubes detect one box per piece; a pile of grapes, slices and small pieces often comes
+  back as one box on the wrist camera (the loop then stops "food left, none pickable", exit 5). It is the
+  image: the same container photographed sharper gives one box per piece with the same model and prompt
+  (`out/captures/camera_quality_vs_detection.jpg`, sharpness 254 vs 828). Stock YOLO11 / YOLO-World were worse
+  and a Real-ESRGAN upscale changed nothing (`out/captures/yolo_vs_locateanything.jpg`). The options: even light
+  over the bowl; the camera's 1080p mode (needs a colour recalibration); splitting a pile box by depth.
+- **A new food: test its prompt first** on a saved frame (`config/food/<name>.yaml`); only fruit was tested.
+- **The bite reads 0.0-0.3 s** on most bites: the force is often already over 1 N when the wait starts (the
+  user leaning in); harmless (the retract follows the bite) but it is not a measured bite time.
+- **A spoon** needs its own utensil profile (camera-to-tip, tip pixel, tine offset) before use.
+- **No self-collision model.** Torque is the only contact detector.
+- **Disk is at 93%** on the jetson (3.8 GB free, 2026-09-24, after removing the Depth Anything V2 weights and
+  the pip/apt caches). The rest is the OS/JetPack (~9 GB), LocateAnything-3B (7.2 GB), `~/venvs/la` (5.7 GB)
+  and the Docker images (3.3 GB), all in use. Depth Anything 3 (1.3 GB) is the depth fallback (see Depth fallback) -- keep it.
+- The tool frame is the **configured** one (120 mm, 0.831 kg), not the flange.
+- The user-facing camera can **abort** motion but never drive it: ~100 mm error,
+  and on the armrest its extrinsic to the arm isn't fixed.
+
+## cuRobo for the free-space moves? (evaluated 2026-10-01, `tests/curobo_eval.py`)
+
+`tests/site_check.py --dump` records every move the bite makes on real kinematics; `tests/curobo_eval.py` (a CUDA
+box, `docker/Dockerfile.planner_x86`: RAMMP-CuRobo on cuRobo v0.7.8) plans the same start / goal joints with cuRobo
+in the site's world (table, a HOLLOW bowl, the user's head and torso, the pedestal; the spoon and the food as spheres
+on the wrist) and scores both alike. The 2026-09-30 site, cascadilla's RTX 3070 (planning 0.06 s a move):
+
+| move | ours | cuRobo |
+|---|---|---|
+| detect | 3.03 s, tip peak z 0.146 | 2.96 s, peak 0.127, same clearances |
+| swing (food) | 6.72 s | 1.32 s, the spoon within 3.4 deg of level, 30 % less joint travel |
+| retract | 11.79 s, 5 legs + caches | 1.56 s, one plan, similar clearance from the user |
+| home | 4.86 s | 2.92 s |
+
+**Now an option of the stack: `motion.planner: curobo`** (the site Jetson's default; `scripted` everywhere else).
+`make planner` runs `kinova/planner_server.py` (cuRobo warm, the world from the scene camera's workspace, the last
+measured mouth, the wheelchair's boxes) in its own GPU container; detect, home (from anywhere), the swing's path and
+the retract's return ask it for a path, check our own tip floor at every waypoint, and run it through `run_path`
+(the arm's limits, the controller's validation, the torque watch). The bite on the site's geometry, cuRobo's paths
+(`site_check --planner curobo`, cascadilla): 9 moves in 33.1 s of motion, against 18 in 43.3 s scripted (the swing
+2.6 s, the retract 5.7 s in one path). The scripted lift / swing / retrace stay until cuRobo has run on the arm.
+(cuRobo's own durations are at its model's limits: run_path re-times every path to the arm's.) With the overlook at 0.40 m. At 0.35 m
+cuRobo refuses it: the spoon head hangs within its 5 mm buffer of the bowl's rim. Holding the spoon's orientation
+(cuRobo's partial pose cost) is refused for the swing in v0.7.8; unconstrained, start and goal being level kept it
+within 3.4 deg. The plunge, scoop, approach, bite and back-off are prescribed paths, not free-space moves: they stay.
+
+## Before the reset
+
+Everything before the reset — MuJoCo testbed, earlier perception and skill work,
+architecture and poster documents — is in `a85881d` and nothing else.

@@ -3,8 +3,6 @@
 
     ~/venvs/mp/bin/python -m feeding.grab_frame OUT.jpg
 
-Replaces recording the RTSP stream through gst-launch until a 22 s timeout killed it and keeping the last
-frame: that cost 22 s on every perceive (user, 2026-09-24: 'why is the detection taking so much time').
 First asks the resident colour stream (the face server, make models) for a fresh frame -- no stream set-up;
 else opens the stream itself and skips the first few decoded frames so the H.264 decoder has a full picture.
 """

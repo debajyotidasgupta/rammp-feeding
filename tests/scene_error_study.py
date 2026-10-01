@@ -96,7 +96,8 @@ def main() -> int:
     fk.install_clock()
     from kinova import scene
     from kinova.curobo_world import world
-    from kinova.motion import R_from_kortex, tip_in_tool
+    from kinova.frames import R_from_kortex
+    from kinova.motion import tip_in_tool
     from kinova.planner_server import Planners
     from feeding.camera import CAM_IN_TOOL, FXC
     arm = mk.KinematicArm(tool_z=float(cfg.deployment.arm.tool.transform_m[2]))

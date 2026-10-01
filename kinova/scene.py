@@ -18,7 +18,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from feeding.camera import CAM_IN_TOOL
-from kinova.motion import R_from_kortex, homotopy, margin
+from kinova.frames import R_from_kortex
+from kinova.motion import homotopy, margin
 from kinova.scripts.safe_move import Joints, MoveError
 from kinova.workspace import workspace
 from settings import cfg

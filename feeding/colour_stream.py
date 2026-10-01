@@ -2,9 +2,7 @@
 every time the camera goes quiet.
 
 Owned by the resident face server (feeding/detect_mouth_mp.py --serve): the open-mouth wait reads frames as they
-arrive, and GET /frame hands a fresh JPEG to feeding/grab_frame.py. Opening the RTSP stream for each use cost
-~1.6 s a look, and on 2026-09-25 the colour stream stopped delivering for over a minute with the RTSP server still
-answering -- a per-use open cannot tell that from a slow start; a resident reader logs it.
+arrive, and GET /frame hands a fresh JPEG to feeding/grab_frame.py.
 
 Dropout log (config perception.colour_stream): runs_dir/colour_stream.jsonl, one JSON object per event --
 {"t": unix s, "kind": "connected" | "gap" | "lost" | "reconnect", "seconds": ...}.

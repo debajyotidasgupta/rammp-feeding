@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Food acquisition, one step at a time. Frozen 2026-09-23 after it ran end to end.
+"""Food acquisition, one step at a time.
 
     python -m kinova.scripts.acquire pick                       # the default: over + re-measure + plunge + scoop
     python -m kinova.scripts.acquire over    --target /tmp/target.json
@@ -8,33 +8,20 @@
     python -m kinova.scripts.acquire descend --under /tmp/under.json --to-above 0.030   # the stepped route
     python -m kinova.scripts.acquire punch   --under /tmp/under.json
 
-feeding/acquire.sh runs them in order with a depth re-measure between each, and
-is what `make acquire` calls. Every motion goes through safe_move / motion.
+feeding/acquire.sh (`make acquire`) runs them. Every motion goes through safe_move / motion.
 
   over     at the overlook height, translate until the utensil tip's vertical
            line passes through the target food. Refuses unless at
            food_detect_start and the move is small and level.
-  plunge   from OVER straight down through the food to the bowl floor in ONE
-           smooth trajectory (fast, easing to slow above the food).
-  scoop    the food rises while the utensil turns vertical -> horizontal about
-           it, pointing +Y (toward the user), backing off to the bowl's scoop
-           end. Planned as a continuous joint path (a single Cartesian move is
-           unreachable: J6 hits its limit), validated by the controller, run as
-           one trajectory.
+  plunge   from OVER straight down through the food to the bowl floor (or, packed food with no floor seen,
+           a fixed depth below its top) in one trajectory: fast, easing to slow above the food.
+  scoop    the food rises while the utensil turns vertical -> horizontal about it, pointing +Y (toward the
+           user), backing off to the bowl's scoop end. A continuous joint path (a single Cartesian move is
+           unreachable: J6 hits its limit), validated by the controller, run as one trajectory.
   pick     over -> fresh depth -> plunge -> scoop in this one process.
-  descend  (stepped route) straight down until the tip is --to-above over the
-           food's TOP, using a depth reading taken from WHERE THE ARM IS.
+  descend  (stepped route) straight down until the tip is --to-above over the food's top, from a depth
+           reading taken where the arm is.
   punch    (stepped route) straight down to the bowl floor, slowly.
-
-Measured on the arm, 2026-09-23, fork on a strawberry:
-  over     berry lands 1.2 mm from the fork's vertical line
-  approach 30 mm hover re-measured, final stop 10 mm above: user-confirmed
-  punch    35.0 mm down, stopped ~11 mm above the floor as planned
-  scoop    berry point rose 155.7 mm, 0.2 mm off vertical, fork horizontal.
-           Geometry "perfectly correct" (user). The berry FELL: the scoop
-           was too slow (25 s) -- food slides under gravity as the utensil
-           tilts. The user also placed the aim 5 mm off along Y (applied in
-           OVER from calibration) and said the punch can go deeper: floor + 5.
 """
 
 from __future__ import annotations
@@ -54,10 +41,9 @@ import numpy as np
 import runlog
 from kinova import scene
 from kinova.connection import kinova_connection
-from kinova.motion import (A_MAX, CAM_IN_TOOL, LIMITS, WATCH_EXTRA_S, _time_scale)  # noqa: F401 -- A_MAX, CAM_IN_TOOL,
-                                                                                   # LIMITS, _time_scale: re-exported
-from kinova.motion import (R_from_kortex, _ik, _waypoints, kortex_from_R, margin, max_step, record_plan, rot_x,
-                           tip_in_tool, validate, waypoint_list)
+from kinova.frames import R_from_kortex, kortex_from_R, rot_x
+from kinova.motion import (WATCH_EXTRA_S, _ik, _waypoints, margin, max_step, record_plan, tip_in_tool, validate,
+                           waypoint_list)
 from kinova.scripts.safe_move import (Joints, MoveError, TorqueGuard, _events, check_tool, fold, goto_cartesian,
                                       joints, tilt_deg, tool_pose)
 from settings import cfg
@@ -70,11 +56,11 @@ log = runlog.get("acquire")
 A_ = cfg.acquisition
 MAX_OVER_M = float(A_.over_max_m)             # OVER stays inside the bowl, never a transit
 BACKOFF_FROM = float(A_.scoop.backoff_from)   # fraction of the scoop before the back-off starts
-PUNCH_FLOOR_M = float(cfg.utensil.punch_floor_margin_m)   # nominal; really ~5-10 mm (camera_to_tip stored long)
+PUNCH_FLOOR_M = float(cfg.utensil.punch_floor_margin_m)   # m above the bowl floor the tip stops (nominal)
 PLUNGE_FAST = float(A_.plunge.fast_mps)            # m/s down to SLOW_ABOVE the food top
 PLUNGE_SLOW = float(A_.plunge.slow_mps)            # m/s through the food, to the floor
-SLOW_ABOVE = float(A_.plunge.slow_above_food_m)    # the overlook reads the food top 4-7 mm high; this covers it
-SCOOP_TORQUE_NM = float(cfg.guards.torque_step_nm.scoop)   # 2.5 tripped on the arm's own acceleration
+SLOW_ABOVE = float(A_.plunge.slow_above_food_m)    # slow from this far above the food top (the overlook reads it high)
+SCOOP_TORQUE_NM = float(cfg.guards.torque_step_nm.scoop)   # looser: the scoop's own acceleration steps the torque
 
 STATE_DIR = Path(os.environ.get("RAMMP_STATE_DIR", "/tmp"))   # what the steps hand each other (the shell copies in/out)
 PUNCH_DONE = STATE_DIR / "punch_done.json"    # the food piece on the tip, for a scoop run as its own step
@@ -128,10 +114,9 @@ class FoodOnTip:
 
 @dataclass
 class ScoopSettings:
-    speed_dps: float = float(A_.scoop.speed_dps)   # fast on purpose: at 6 deg/s (25 s) the berry slid off
+    speed_dps: float = float(A_.scoop.speed_dps)   # fast on purpose: food slides off a slowly tilting utensil
     rot_exp: float = float(A_.scoop.rot_exp)       # turn angle = 90 * s**rot_exp
     waypoints: int = int(A_.scoop.waypoints)
-    ramp: float = float(A_.scoop.ramp)
 
 
 @dataclass
@@ -265,8 +250,7 @@ def _check_plunge(u: Under, floor_m: float) -> float:
         raise MoveError("the floor under the tip was measured on RAW Depth Anything 3 (no sensor depth to fit it to) "
                         "-- not accurate enough to stop at the bowl floor; nothing moved")
     if u.filled_floor > float(A_.plunge.refuse_if_floor_filled_over):
-        # the fallback gets the level right (median ~1 mm) but its local shape can be 25-60 mm off: never stop
-        # a plunge on it
+        # the fallback gets the level right but its local shape can be tens of mm off: never stop a plunge on it
         raise MoveError("%.0f%% of the floor reading under the tip is the Depth Anything 3 fallback -- its local "
                         "error (up to ~60 mm) is too large to stop at the bowl floor; nothing moved" % (100 * u.filled_floor))
     down = u.gap_floor - floor_m
@@ -337,13 +321,11 @@ def _run_watched(conn: KinovaConnection, wl: Any, total: float, label: str, on_s
 
 def plunge(conn: KinovaConnection, under: str | Under, floor_m: float, scoop_with: ScoopSettings | None = None,
            validate_only: bool = False) -> None:
-    """OVER -> punch in ONE smooth move (user, 2026-09-24: no stopping on the way down).
+    """From OVER straight down to the depth _plunge_depth picks, in one move with no stop on the way.
 
-    Aimed at the FLOOR read from the overlook, which matched the later close re-measures to within 1 mm
-    on every run (the food TOP read 4-7 mm high -- why the stepped route re-measured; the slow zone
-    starts SLOW_ABOVE the top to cover that). One joint trajectory along the vertical, fast then easing
-    to 5 mm/s through the food, validated by the controller, watched for torque. With `scoop_with`, the
-    scoop is planned before the plunge starts and runs straight after it: no pause at the bottom."""
+    One joint trajectory along the vertical, fast then easing to PLUNGE_SLOW from SLOW_ABOVE the food top,
+    validated by the controller, watched for torque. With `scoop_with`, the scoop is planned before the plunge
+    starts and runs straight after it: no pause at the bottom."""
     t_plan = time.time()
     u = under if isinstance(under, Under) else Under.load(under)     # a path: measured by the shell
     p = tool_pose(conn)
@@ -399,17 +381,16 @@ def plunge(conn: KinovaConnection, under: str | Under, floor_m: float, scoop_wit
 
 def pick(conn: KinovaConnection, target_path: str, under_path: str, floor_m: float, scoop_with: ScoopSettings,
          validate_only: bool = False) -> None:
-    """OVER -> fresh depth from the resident depth server -> plan plunge + scoop -> plunge -> scoop, all in
-    THIS process: no program restarts, no reconnection, so the arm does not stand still between them
-    (user, 2026-09-25). The floor is still re-measured from above the berry after OVER: read from the overlook
-    frame instead it disagreed by up to 11 mm on 2 of 17 runs."""
+    """OVER -> fresh depth from the camera server -> plan plunge + scoop -> plunge -> scoop, all in this
+    process (no restart or reconnection, so the arm does not stand still between them). The floor is
+    re-measured from above the food after OVER: the overlook frame's reading is less reliable."""
     from feeding.depth_grab import fetch
     from feeding.measure_under import measure
     over(conn, target_path)
     t = time.time()                                  # the arm has stopped at OVER: frames from now on count
     d = fetch(int(cfg.perception.depth_frames), since=t)
     if d is None:
-        raise DepthUnavailable("depth server: no fresh frames after %d tries" % int(cfg.perception.depth_tries))
+        raise DepthUnavailable("camera server: no fresh frames after %d tries" % int(cfg.perception.depth_tries))
     runlog.save_arrays("depth_at_over", depth_mm=d)
     try:
         u = measure(d, float(A_.over_depth_guess_m))
@@ -425,8 +406,7 @@ def pick(conn: KinovaConnection, target_path: str, under_path: str, floor_m: flo
     else:
         log.info("  under the tip: top %.1f mm (tip %.1f mm above it), no floor visible beside it   [fresh depth in %.1f s]",
                  1000 * u["top"], 1000 * u["gap_top"], time.time() - t)
-    # Handed on in memory: under_path belongs to the shell (it copies its measurements there, host-owned, and the
-    # container's root may not overwrite them -- 2026-09-25, the first feed after a stepped-route test stopped here)
+    # handed on in memory, not via under_path: that file is the shell's (host-owned; the container may not write it)
     try:
         (STATE_DIR / "under_over.json").write_text(json.dumps(u))       # feeding/acquire.sh copies it to the bite
     except OSError as e:
@@ -526,7 +506,7 @@ def run_scoop(conn: KinovaConnection, st: ScoopSettings, plan: ScoopPlan, valida
     """Validate and run a planned scoop, watching the food point: off its path or dropping = stop."""
     path = [joints(conn)] + plan.path[1:]                    # start from where the arm actually is
     # one smooth trajectory, validated by the controller; slower only if refused
-    wl, speed = _waypoints(conn, path, st.speed_dps, st.ramp, "scoop")
+    wl, speed = _waypoints(conn, path, st.speed_dps, "scoop")
     total = sum(w.angular_waypoint.duration for w in wl.waypoints)
     log.info("    scoop at %.0f deg/s: %.1f s", speed, total)
     if validate_only:
@@ -581,17 +561,15 @@ def main() -> int:
     ap.add_argument("--to-above", type=float, default=float(A_.stepped.approach_stop_m), help="descend: stop this far above the food top")
     ap.add_argument("--floor-m", type=float, default=PUNCH_FLOOR_M, help="punch: stop this far above the bowl floor")
     ap.add_argument("--speed", type=float, default=float(A_.scoop.speed_dps),
-                    help="scoop: deg/s. Fast on purpose -- at 6 deg/s (25 s) the berry slid off")
+                    help="scoop: deg/s. Fast on purpose: food slides off a slowly tilting utensil")
     ap.add_argument("--rot-exp", type=float, default=float(A_.scoop.rot_exp),
-                    help="scoop: turn angle = 90 * progress**rot_exp. <1 starts turning the moment the food lifts "
-                         "(user, 2026-09-24: at 1.6 it rose steep first and gravity works on the food)")
+                    help="scoop: turn angle = 90 * progress**rot_exp. <1 starts turning the moment the food lifts")
     ap.add_argument("--n", type=int, default=int(A_.scoop.waypoints), help="scoop waypoints")
-    ap.add_argument("--ramp", type=float, default=float(A_.scoop.ramp), help="scoop: (kept for the callers; unused)")
     ap.add_argument("--validate-only", action="store_true", help="scoop: plan and let the controller validate; do not move")
     ap.add_argument("--then-scoop", action="store_true", help="plunge: plan the scoop first and run it straight after")
     a = ap.parse_args()
     log_ = runlog.setup("acquire")
-    st = ScoopSettings(speed_dps=a.speed, rot_exp=a.rot_exp, waypoints=a.n, ramp=a.ramp)
+    st = ScoopSettings(speed_dps=a.speed, rot_exp=a.rot_exp, waypoints=a.n)
     steps: dict[str, Callable[[KinovaConnection], None]] = dict(
         over=lambda c: over(c, a.target),
         descend=lambda c: descend(c, a.under, a.to_above),

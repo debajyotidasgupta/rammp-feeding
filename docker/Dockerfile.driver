@@ -1,6 +1,6 @@
 # The driver container: what the arm scripts (kinova/, via `make` INARM) need and nothing else.
-# Python 3.10 (Ubuntu 22.04), numpy as on the 2026-09 deployment (the golden arm trace is float-exact against it),
-# and the Kortex Python API -- 2.8.0, the last line that speaks TCP to this firmware (requirements.txt says why).
+# Python 3.10 (Ubuntu 22.04), pinned numpy, and the Kortex Python API 2.8.0: the last line that speaks TCP to
+# this firmware (requirements.txt says why).
 #
 #   make driver-image     # -> deployment.images.driver
 FROM ubuntu:22.04

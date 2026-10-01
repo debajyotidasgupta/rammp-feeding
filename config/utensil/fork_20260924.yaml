@@ -2,9 +2,8 @@
 # (a robot restart re-initialises the gripper; on 2026-09-24 it pivoted the fork by (-14, -65) px).
 # A new utensil: copy this file (e.g. spoon.yaml), measure, select it in rammp.yaml (profiles.utensil).
 
-# THE FORK'S CALIBRATION UNTIL 2026-09-25 -- kept for the tests (tests/regress.sh, tests/arm_trace.py pin it) and
-# for the record. Superseded by fork.yaml: its tip pixel put the tine tips 34.5 mm off the camera's vertical; they
-# are ~49 mm off (measured in the colour image, 2026-09-25).
+# THE FORK'S CALIBRATION UNTIL 2026-09-25 -- kept for tests/regress.sh (it pins it on the saved runs) and the
+# record. Superseded by fork.yaml.
 
 name: fork_20260924
 camera_to_tip_m: 0.265          # measured 260-261 (ruler to bare table + depth; camera case + 6.7 mm); stored long on

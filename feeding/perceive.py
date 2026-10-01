@@ -5,31 +5,20 @@
 
 Writes <out>.json (pixel boxes, per category) and <out>.jpg (overlay).
 
-ONE QUERY PER CATEGORY. Asking for several categories at once
-("food pieces</c>bowl</c>spoon") is faster in principle and unreliable in
-practice: the model gets stuck repeating one category's box until it exhausts
-max_new_tokens, and every category after it is silently dropped. Which category
-repeats is not stable -- on one frame it was the bowl, on the next the spoon,
-then the food. Reordering only moves the casualty around. Separate queries cost
-a few seconds and remove the failure outright.
+ONE QUERY PER CATEGORY: a multi-category query can repeat one category's box
+until max_new_tokens and silently drop the rest.
 
-  food     multi-instance -- there are several pieces
-  bowl     single-instance -- one container; this path was 2.4 s and within
-           ~12 px of the rim
-  utensil  NOT detected for use. It is fixed to the arm, and so is the camera,
-           so at food_detect_start it occupies the same pixels every time; that
-           region is stored in config/utensil/<name>.yaml. A 'spoon'
-           query once returned the whole bowl box, which then suppressed every
-           berry. It is still queried, only to warn if the stored region looks
-           stale (utensil changed or re-gripped).
+  food     multi-instance, on the bowl crop (features.food_detector)
+  bowl     single-instance, once per session (--bowl-cache)
+  utensil  NOT detected for use: fixed to the arm like the camera, it occupies
+           the same pixels at food_detect_start every time, stored in
+           config/utensil/<name>.yaml (image_region_px). Queried only with
+           --check-utensil, to warn if the stored region looks stale.
 
-Boxes that cannot be a real object are dropped: a 10x310 px sliver came back as
-'food pieces' on the same frame as three correct berries.
-
-Food boxes lying mostly INSIDE the utensil box are dropped too. The spoon's
-head is white and rounded and the detector reads it as food -- it was returned
-as a fourth 'food piece' at (660,466)-(756,620), squarely inside the spoon.
-The utensil is in every frame from this pose, so this is not a corner case.
+Food boxes are dropped when they are implausible slivers, mostly inside the
+utensil region (the utensil head reads as food), outside or too big for the
+bowl, or an excluded colour; with none left the food profile's fallback
+prompts are tried.
 """
 
 from __future__ import annotations
@@ -43,7 +32,6 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-from feeding.locate_anything import LocateAnything
 
 PALETTE = [(239, 68, 68), (34, 197, 94), (59, 130, 246), (234, 179, 8),
            (168, 85, 247), (20, 184, 166), (249, 115, 22)]
@@ -84,7 +72,7 @@ FD = cfg.features.food_detector
 def excluded_colour(img, b) -> bool:
     """A box whose centre is not food we pick (food profile exclude_grapes): red / purple with little green -- a
     grape, which rolls off a fork -- or blue -- the mat or the bowl's wall. Melon (G ~170) and pineapple (G ~200)
-    are not. 2026-09-25: a brightness test let a lit red grape through; the green channel does not."""
+    are not."""
     if not cfg.food.get("exclude_grapes", False):
         return False
     w, h = b.x2 - b.x1, b.y2 - b.y1
@@ -125,9 +113,9 @@ def main() -> int:
         b = la.locate_one(img, phrase)
         return ([b] if b and plausible(b) else []), time.perf_counter() - t
 
-    # The bowl does not move between bites: detect it once per session (make feed clears the cache) and reuse
-    # its box -- 1.8 s a bite saved. Its uses: food outside it is not food; the most central berry has the
-    # most rim clearance; and the berry query can be run on it alone.
+    # the bowl does not move between bites: detect it once per session (make feed clears the cache) and reuse its
+    # box. Its uses: food outside it is not food; the most central piece has the most rim clearance; and the food
+    # query can be run on it alone.
     from feeding.locate_anything import Box
     cache = Path(a.bowl_cache) if a.bowl_cache else None
     if cache and cache.exists():
@@ -138,9 +126,8 @@ def main() -> int:
         if cache and bowl:
             cache.write_text(json.dumps(dict(box=[bowl[0].x1, bowl[0].y1, bowl[0].x2, bowl[0].y2], image=a.image)))
 
-    # Berries: on the BOWL only (half the image-reading time), in the model's "fast" mode, ending at the first
-    # repeated or sliver box. Measured on 8 saved frames: the same berries as the full frame in hybrid mode at
-    # 128 tokens, 5.6 s -> 1.0 s. (Past the real pieces the model repeats itself; at 512 tokens, 80 boxes.)
+    # food: on the BOWL crop only, with features.food_detector's mode / token cap, ending at the first repeated or
+    # sliver box
     t0 = time.perf_counter()
     crop_at = (0, 0)
     if bowl and FD.crop_to_bowl:
@@ -162,8 +149,7 @@ def main() -> int:
     t_food = time.perf_counter() - t0
     used_prompt = a.food
 
-    # the utensil is not detected (its region is stored); the cross-check query cost ~2 s a bite and is
-    # now only run on request
+    # the utensil is not detected (its region is stored); the cross-check query runs only on request
     seen, t_ute = one(a.utensil) if a.check_utensil else ([], 0.0)
 
     ux1, uy1, ux2, uy2 = cfg.utensil.image_region_px
@@ -190,10 +176,8 @@ def main() -> int:
     else:
         n_utensil = 0
 
-    # A bowl is round, seen from straight above. When its box comes back much
-    # taller than wide, the extra is the utensil merging in at the bottom edge
-    # (measured 549x644 against the true 549x544), which drags the bowl centre
-    # down. Keep the width and the top edge, which are reliable.
+    # a bowl is round, seen from straight above: a box much taller than wide has the utensil merged in at the
+    # bottom edge. Keep the width and the top edge, which are reliable.
     bowl_fixed = False
     if bowl:
         bb = bowl[0]
@@ -201,17 +185,14 @@ def main() -> int:
         if h > 1.08 * w:
             bb.y2 = bb.y1 + w
             bowl_fixed = True
-        # Food outside the bowl is not food we will pick: a 47x108 px object
-        # at the image edge came back as 'food pieces' with three real berries.
+        # food outside the bowl is not food we will pick, and no single piece is a large fraction of its bowl
         n0 = len(food)
-        # ...and no single piece of food is a large fraction of its bowl: a
-        # 599x484 px 'food pieces' box once covered most of a 585x432 bowl.
         in_bowl = lambda b: (inside_frac(b, bb) > cfg.perception.food_inside_bowl_min      # noqa: E731
                              and b.area < cfg.perception.food_max_frac_of_bowl * bb.area)
         food = [b for b in food if in_bowl(b)]
         n_outside = n0 - len(food)
-        # Nothing usable (a pile drawn as one bowl-sized box, 2026-09-25): ask again in the food profile's other
-        # words, keeping the same checks -- plausible shape, not the utensil, inside the bowl, not a grape.
+        # nothing usable (e.g. a pile drawn as one bowl-sized box): ask again in the food profile's other words,
+        # keeping the same checks -- plausible shape, not the utensil, inside the bowl, not a grape.
         for phrase in ([] if food else list(cfg.food.get("fallback_prompts", []))):
             more = [b for b in ask(phrase) if plausible(b) and not excluded_colour(img, b) and in_bowl(b)
                     and (not ute or inside_frac(b, ute[0]) < cfg.perception.inside_utensil_max)]

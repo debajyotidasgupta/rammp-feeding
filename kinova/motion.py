@@ -1,8 +1,8 @@
 """Motion building blocks shared by every stage: frames, IK, continuous IK paths, time scaling, validated
 trajectories, forward kinematics. Numbers come from config/ (motion.*, guards.*, the camera and utensil profiles).
 
-Used by acquire.py (over / plunge / scoop / pick) and deliver.py (swing / approach / retract); a new stage should
-be built from these rather than copying them.
+Used by acquire.py (plunge / scoop), deliver.py (approach / back-off), scene.py and curobo_client.travel (which
+runs every free-space cuRobo path through run_path); a new stage should be built from these rather than copying them.
 
 Conventions: joint vectors are 7 angles in degrees folded to (-180, 180]; poses are Kortex's (x y z m, theta
 x y z deg, fixed-frame XYZ Euler); R is a 3x3 rotation, base <- tool; a tool "axis" is where the utensil
@@ -20,8 +20,9 @@ from kortex_api.autogen.messages import Base_pb2
 
 import runlog
 from settings import cfg
-from feeding.camera import CAM_IN_TOOL, FXC, VP, cam_to_tool
-from kinova.scripts.safe_move import Joints, MoveError, TorqueGuard, _events, check_tool, fold
+from feeding.camera import FXC, VP, cam_to_tool
+from kinova.frames import R_from_kortex, fold, kortex_from_R
+from kinova.scripts.safe_move import Joints, MoveError, TorqueGuard, _events, check_tool
 
 if TYPE_CHECKING:
     from kinova.connection import KinovaConnection
@@ -59,41 +60,6 @@ def tip_in_tool() -> np.ndarray:
     return cam_to_tool([d[0], d[1], zt]) + tine
 
 
-def rot_x(deg: float) -> np.ndarray:
-    """Rotation about x by `deg`."""
-    t = math.radians(deg)
-    c, s = math.cos(t), math.sin(t)
-    return np.array([[1, 0, 0], [0, c, -s], [0, s, c]])
-
-
-def Rz(deg: float) -> np.ndarray:
-    """Rotation about z by `deg` (about the base's vertical: J1's direction)."""
-    t = math.radians(deg)
-    c, s = math.cos(t), math.sin(t)
-    return np.array([[c, -s, 0], [s, c, 0], [0, 0, 1.0]])
-
-
-def R_from_kortex(tx: float, ty: float, tz: float) -> np.ndarray:
-    """Kortex theta x y z (deg) -> R = Rz @ Ry @ Rx."""
-    tx, ty, tz = (math.radians(v) for v in (tx, ty, tz))
-    Rx = np.array([[1, 0, 0], [0, math.cos(tx), -math.sin(tx)], [0, math.sin(tx), math.cos(tx)]])
-    Ry = np.array([[math.cos(ty), 0, math.sin(ty)], [0, 1, 0], [-math.sin(ty), 0, math.cos(ty)]])
-    Rz_ = np.array([[math.cos(tz), -math.sin(tz), 0], [math.sin(tz), math.cos(tz), 0], [0, 0, 1]])
-    return Rz_ @ Ry @ Rx
-
-
-def kortex_from_R(R: np.ndarray) -> tuple[float, float, float]:
-    """R -> Kortex theta x y z (deg)."""
-    ty = math.degrees(math.asin(max(-1.0, min(1.0, -R[2, 0]))))
-    return (math.degrees(math.atan2(R[2, 1], R[2, 2])), ty,
-            math.degrees(math.atan2(R[1, 0], R[0, 0])))
-
-
-def axis(R: np.ndarray) -> np.ndarray:
-    """Where the utensil points (tool +z) in base coordinates."""
-    return R @ np.array([0, 0, 1.0])
-
-
 def margin(q: Sequence[float]) -> float:
     """Smallest distance (deg) from any limited joint to its limit."""
     return min(LIMITS[i] - abs(q[i]) for i in LIMITS)
@@ -127,7 +93,7 @@ def fk_tip(conn: KinovaConnection, q: Sequence[float]) -> np.ndarray:
         j = ja.joint_angles.add()
         j.joint_identifier = i
         j.value = v % 360.0
-    for attempt in range(5):             # has failed once (METHOD_FAILED) right after a trajectory
+    for attempt in range(5):             # can fail (METHOD_FAILED) right after a trajectory
         try:
             p = conn.base.ComputeForwardKinematics(ja)
             break
@@ -142,8 +108,8 @@ def homotopy(conn: KinovaConnection, q0: Joints, at: PoseAt, n: int,
              toward: Sequence[float] | None = None) -> tuple[list[Joints] | None, str | None]:
     """Continuous IK path along at(s) -> (tool xyz, R), s = 1/n .. 1: (path including q0, None), or (None, why).
 
-    The 7th DoF is steered away from J2/J4/J6 limits (without it the swing only fits 60 mm of retraction), or
-    the IK guess is blended `toward` a known arm shape. A step over MAX_STEP_DEG on any joint is a jump.
+    The 7th DoF is steered away from J2/J4/J6 limits, or the IK guess is blended `toward` a known arm shape. A step
+    over MAX_STEP_DEG on any joint is a jump.
     """
     prev, path = q0, [q0]
     for k in range(1, n + 1):
@@ -170,10 +136,8 @@ def homotopy(conn: KinovaConnection, q0: Joints, at: PoseAt, n: int,
 # ------------------------------------------------------------------ trajectories
 
 def _time_scale(path: Sequence[Sequence[float]], vmax: float | Sequence[float], amax: float = A_MAX) -> list[float]:
-    """Segment durations so that EVERY joint's speed stays under vmax and changes by at most amax -- from
-    rest and back to rest. The earlier leading-joint profile let a joint that barely moved in one segment
-    lead the next: J1 went from ~0 (the lift) to full speed (the swing) in one segment, 628 deg/s^2, and
-    the controller refused the lift+swing trajectory at every speed down to 7 deg/s."""
+    """Segment durations so that every joint's speed stays under vmax and changes by at most amax, from rest
+    and back to rest (per joint: a joint idle in one segment and fast in the next is held to amax too)."""
     D = np.array([[fold(x - y) for x, y in zip(q, p)] for p, q in zip(path, path[1:])])
     n = len(D)
     vcap = np.full(n, vmax) if np.isscalar(vmax) else np.asarray(vmax, float)
@@ -250,10 +214,10 @@ def record_plan(label: str, wl: Base_pb2.WaypointList, **info) -> None:
                           durations=[w.angular_waypoint.duration for w in wl.waypoints], **info))
 
 
-def _waypoints(conn: KinovaConnection, path: Sequence[Sequence[float]], top_speed: float, ramp: float,
+def _waypoints(conn: KinovaConnection, path: Sequence[Sequence[float]], top_speed: float,
                what: str) -> tuple[Base_pb2.WaypointList, float]:
     """The joint path as one WaypointList the controller has validated, and the speed it took; slower if
-    refused. (`ramp` is kept for the callers; the time scaling now bounds acceleration itself.)"""
+    refused."""
     raw = [x.position for x in conn.base_cyclic.RefreshFeedback().actuators]
     asked = top_speed
     top_speed, amax = capped(conn, top_speed)
@@ -269,9 +233,8 @@ def _waypoints(conn: KinovaConnection, path: Sequence[Sequence[float]], top_spee
                 record_plan(what, wl, speed_dps=speed, top_speed_dps=top_speed, accel_dps2=a_try)
                 return wl, speed
             e = errs[0]
-            # Refused on acceleration: the controller says what it measured and its limit -- rescale only the
-            # acceleration by that and ask again at the SAME speed (a fixed factor was not enough for every path:
-            # the retract's measured 93-97 vs 80 with 1.6, 2026-09-25). Anything else: the next, slower speed.
+            # Refused on acceleration: the controller reports what it measured and its limit -- rescale only the
+            # acceleration by that ratio and ask again at the same speed. Anything else: the next, slower speed.
             if getattr(e, "error_type", None) != Base_pb2.TRAJECTORY_ERROR_TYPE_INVALID_JOINT_ACCELERATION \
                     or not getattr(e, "error_value", 0) > 0:
                 break
@@ -281,7 +244,7 @@ def _waypoints(conn: KinovaConnection, path: Sequence[Sequence[float]], top_spee
 
 
 def run_path(conn: KinovaConnection, path: Sequence[Sequence[float]], dps: float, label: str, go: bool,
-             torque_stop: bool = True, ramp: float = 0.25, from_here: bool = True,
+             torque_stop: bool = True, from_here: bool = True,
              torque_limit: float = float(cfg.guards.torque_step_nm.default)) -> None:
     """Validate a joint path with the controller; with go, execute it and watch it.
 
@@ -293,7 +256,7 @@ def run_path(conn: KinovaConnection, path: Sequence[Sequence[float]], dps: float
         log.info("    %-26s IK-continuous, joint margin >= %.1f deg  (controller validates it just before it runs)",
                  label, min(margin(q) for q in path))
         return
-    wl, sp = _waypoints(conn, path, dps, ramp, label)
+    wl, sp = _waypoints(conn, path, dps, label)
     total = sum(w.angular_waypoint.duration for w in wl.waypoints)
     log.info("    %-26s controller accepted at %.1f deg/s: %.1f s%s", label, sp, total, "" if go else "  (validate only)")
     if not go:

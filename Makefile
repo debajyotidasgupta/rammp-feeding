@@ -34,7 +34,6 @@ CAM_PORT   := $(shell $(SET) deployment.servers.camera_port)
 CAMERA     := $(shell $(SET) deployment.containers.camera)
 SCENE_CAM  := $(shell $(SET) deployment.containers.scene_camera)
 CAM_KIND   := $(shell $(SET) camera.streams.kind)
-DEPTH_TOPIC:= $(shell $(SET) camera.streams.depth_topics)
 DRIVER_IMG := $(shell $(SET) deployment.images.driver)
 VISION_IMG := $(shell $(SET) deployment.images.vision)
 DA3SRC     := $(shell $(SET) deployment.paths.da3_src)
@@ -199,7 +198,7 @@ locate-scene:
 locate-bowl:
 	@PYTHONPATH=. $(DETECT_PY) -m feeding.locate_bowl "$(or $(RUN),$$(readlink -f $(RUNS)/latest)/perceive)"
 
-# The digital twin (sim/, on the Mac): replay a recorded bite in MuJoCo -> sim/out/*.mp4. SESSION defaults to the
+# The digital twin (sim/, on the Mac): replay a recorded bite in MuJoCo -> out/sim/*.mp4. SESSION defaults to the
 # newest feed session under runs_dir (rsync it from the Jetson first); BITE=all for the whole session; STILL=<s>
 # for one frame; SPEED=1.5 to play faster. The person's meshes: once, `.venv/bin/python sim/pose_human.py`.
 TWIN_PY ?= .venv/bin/python

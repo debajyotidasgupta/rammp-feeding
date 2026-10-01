@@ -3,7 +3,7 @@
     from kinova.curobo_world import world, spoon_spheres
     w = world(workspace, mouth, wheelchair_boxes)        # RAMMP-CuRobo's world schema (obstacles: cuboids)
 
-Used by kinova/planner_server.py (the planning service) and tests/curobo_eval.py, so the two cannot drift.
+Used by kinova/planner_server.py (the planning service) and tests/scene_error_study.py.
   table      the workspace's table height over its footprint (workspace.table_extent_m)
   bowl       HOLLOW: a floor and 12 wall boxes round its rim (a solid box would put the overlook, the utensil over
              its opening, inside it)

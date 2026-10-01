@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The feeding digital twin: replay a recorded bite in MuJoCo, with the real camera frames beside it.
 
-    .venv/bin/python -m sim.twin render --bite 3                    # -> sim/out/twin_<session>_bite03.mp4
+    .venv/bin/python -m sim.twin render --bite 3                    # -> out/sim/twin_<session>_bite03.mp4
     .venv/bin/python -m sim.twin render --bite 3 --still 24         # one frame at t = 24 s (a PNG)
     .venv/bin/python -m sim.twin render --bite all --speed 1.5      # every bite of the session, one film
     .venv/bin/python -m sim.twin poses                              # the calibrated poses, one sheet
@@ -16,7 +16,6 @@ rendered with the real intrinsics, so the two line up.
 from __future__ import annotations
 
 import argparse
-import glob
 import json
 import math
 import os
@@ -28,14 +27,14 @@ from pathlib import Path
 
 import mujoco
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageFont
 
 from settings import cfg
 from sim.record import Bite, load_bite
 from sim.scene import Layout, arm_qpos_adr, build, new_data
 
 HERE = Path(__file__).parent
-OUT = HERE / "out"
+OUT = HERE.parent / "out" / "sim"
 W, H = 1920, 1080
 FPS = 30
 STAGE_RGB = {"perceive": (56, 189, 248), "acquire": (251, 191, 36), "deliver": (52, 211, 153)}

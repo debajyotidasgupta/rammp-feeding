@@ -4,14 +4,13 @@
     python -m kinova.scripts.preflight          # make preflight; make feed runs it first
     python -m kinova.scripts.preflight --fix    # make preflight FIX=1: also set our tool and speed limits
 
-Each check prints OK / WARN / FAIL; any FAIL exits 1 (make feed does not start). What it catches, and why:
-  tool          the arm's tool frame + mass (ControlConfig) are ours. Another user's tool shifts every cartesian
-                target (2026-09-30: a 200 mm frame, make detect's lift 80 mm off)                     FAIL
+Each check prints OK / WARN / FAIL; any FAIL exits 1 (make feed does not start):
+  tool          the arm's tool frame + mass (ControlConfig) are ours: another tool shifts every cartesian target FAIL
   other clients nothing else connected to the arm (another driver, a script, the web app)             FAIL
   faults        the arm's fault banks are clear                                                       FAIL
   kinematics    at feeding_start: the tool pose the arm reports matches the one captured there. Differing
-                at the same joints = the arm's kinematics or joint zeros changed (2026-09-30: 3.2 deg,
-                8 mm) -- the captured poses are stale: re-capture                                    FAIL
+                at the same joints = the arm's kinematics or joint zeros changed: the captured poses are
+                stale, re-capture                                                                     FAIL
   speed limits  the trajectory soft limits are ours (slower is safe, but every move takes longer)     WARN
   servers       the detector, face (with a live colour stream) and camera servers answer              WARN
 --fix sets the tool and the limits (make tool APPLY=1 / make limits APPLY=1: the arm's values are saved first).
@@ -64,8 +63,8 @@ def check_tool(conn, rep: Report, fix: bool) -> None:
 
 
 def check_clients(conn, rep: Report) -> None:
-    """Nobody else connected to the arm: two programs commanding one arm fight (2026-09-30: another project's
-    driver connected to it mid-session). The arm lists every session; ours is our socket, 127.0.0.1 its own."""
+    """Nobody else connected to the arm: two programs commanding one arm fight. The arm lists every session;
+    ours is our socket, 127.0.0.1 the arm's own."""
     try:
         ours = "%s;port=%d" % conn._tcp_transport.sock.getsockname()
         listed = conn._tcp_session.GetConnections().connection
@@ -101,7 +100,7 @@ def check_kinematics(conn, rep: Report) -> None:
     if off > 0.5:
         rep.add("OK", "kinematics", "skipped: not at feeding_start (%.1f deg away) -- checked there" % off)
         return
-    from kinova.motion import R_from_kortex
+    from kinova.frames import R_from_kortex
     b = conn.base_cyclic.RefreshFeedback().base
     t = home["tool_pose"]
     dp = 1000 * math.dist((b.tool_pose_x, b.tool_pose_y, b.tool_pose_z), (t["x_m"], t["y_m"], t["z_m"]))

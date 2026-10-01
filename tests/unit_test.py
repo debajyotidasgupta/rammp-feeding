@@ -172,7 +172,7 @@ class Scene(unittest.TestCase):
 
     def test_computed_overlook_puts_the_camera_over_the_bowl(self):
         from kinova import scene
-        from kinova.motion import R_from_kortex
+        from kinova.frames import R_from_kortex
         from feeding.camera import CAM_IN_TOOL
         t = scene.overlook_pose()["tool_pose"]
         cam = np.array([t["x_m"], t["y_m"], t["z_m"]]) + R_from_kortex(t["theta_x_deg"], t["theta_y_deg"],

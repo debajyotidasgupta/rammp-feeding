@@ -3,7 +3,7 @@
     from runlog import setup, event, save_json, save_arrays, Telemetry
 
     log = setup("deliver")          # in main(): console output, plus the record when one is active
-    log.info("    swing done")      # console exactly as before (info -> stdout, warning/error -> stderr)
+    log.info("    swing done")      # console: info -> stdout, warning/error -> stderr
     event("swing", retract_m=0.12)  # a structured event (events.jsonl), not printed
     save_json("face_goal", {...})   # a file in the record directory
 
@@ -29,6 +29,8 @@ from typing import Any
 
 import numpy as np
 
+from kinova.frames import fold
+
 _STAGE = "rammp"
 
 
@@ -48,7 +50,7 @@ def record_dir() -> Path | None:
 def setup(stage: str) -> logging.Logger:
     """Configure the `rammp` loggers for one program (call once, in main) and return this stage's logger.
 
-    Console: INFO and DEBUG-free, message only -- the text the operator and the shell scripts see is unchanged.
+    Console: INFO and up, message only (what the operator and the shell scripts read).
     Record (when active): DEBUG and up to log.txt, timestamped.
     """
     global _STAGE
@@ -147,10 +149,6 @@ def save_arrays(name: str, **arrays: Any) -> Path | None:
         return None
 
 
-def _fold(d: float) -> float:
-    return (d + 180.0) % 360.0 - 180.0
-
-
 class Telemetry:
     """Arm feedback during one move: whatever the move's watch loop already reads, so recording adds no
     controller calls and no delay. `add(fb)` per sample, `save(...)` once at the end (success or not).
@@ -175,7 +173,7 @@ class Telemetry:
             self._t0 = now
         b = fb.base
         self.t.append(now - self._t0)
-        self.q.append([_fold(a.position) for a in fb.actuators])
+        self.q.append([fold(a.position) for a in fb.actuators])
         self.dq.append([getattr(a, "velocity", float("nan")) for a in fb.actuators])
         self.tau.append([a.torque for a in fb.actuators])
         self.tool.append([b.tool_pose_x, b.tool_pose_y, b.tool_pose_z,

@@ -10,9 +10,9 @@
 # Runs ON THE JETSON. Writes OUTSIDE ~/rammp: that tree is a replica that
 # sync.sh overwrites with --delete, and results written into it are lost.
 #
-# Refuses unless the arm is at food_detect_start. locate_target's image->motion
-# mapping (+X_base moves the scene down, +Y_base moves it right, at f/Z) was
-# measured in exactly that orientation and is wrong in any other.
+# Refuses unless the arm is at food_detect_start: locate_target's image->motion
+# mapping (+X_base moves the scene down, +Y_base moves it right, at f/Z) holds
+# only in that orientation.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source feeding/lib.sh
@@ -41,9 +41,9 @@ print('%.4f %.4f %.4f' % tuple(p[:3]))
 echo "      tool at $TOOL"
 
 echo "$(date +%T) [2/4] capture colour + depth"
-# one frame in ~1 s (was: record the stream until a 22 s timeout, keep the last frame)
+# one frame in ~1 s
 PYTHONPATH=. "$MPY" -m feeding.grab_frame "$OUT/colour.jpg" || echo "      (no colour frame -- make camera / make models)"
-# the resident depth server (make models): fresh frames in ~0.5 s; else start a probe (~5 s)
+# the resident camera server (make models): fresh frames in ~0.5 s; else start a probe (~5 s)
 if ! PYTHONPATH=. "$PY" -m feeding.depth_grab "$OUT/depth.npy" --frames "$FRAMES" --since "$STILL_SINCE" | sed -u 's/^/      /' && [ "$CAM_KIND" = kinova_vision ]; then
   docker cp feeding/depth_probe.py "$VISION":/tmp/depth_probe.py >/dev/null
   docker exec "$VISION" bash -lc "source /opt/ros/humble/setup.bash; \

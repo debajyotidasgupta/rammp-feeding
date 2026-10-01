@@ -1,7 +1,7 @@
-# cuRobo for evaluation on an x86 GPU box (an x86 CUDA box: cascadilla RTX 3070, 2026-10-01): the RAMMP-CuRobo core on the pins of its
-#   docker build -f docker/Dockerfile.curobo_eval -t cornell/curobo-eval:0.7.8 <dir holding RAMMP-CuRobo/>   (git clone https://github.com/rammp-org/RAMMP-CuRobo)
-#   docker run --rm --gpus all -e PYTHONUTF8=1 -v <this tree>:/work -w /work cornell/curobo-eval:0.7.8 python3 tests/curobo_eval.py <motions.json>
-# Jetson Dockerfile (cuRobo v0.7.8 d64c4b0, warp 1.5.1, numpy 1.26.4), torch for CUDA 12.4, kernels for sm_86.
+# The cuRobo planner on an x86 CUDA box (cascadilla, RTX 3070): the RAMMP-CuRobo core on the pins of its Jetson
+# Dockerfile (cuRobo v0.7.8 d64c4b0, warp 1.5.1, numpy 1.26.4), torch for CUDA 12.4, kernels for sm_86.
+#   docker build -f docker/Dockerfile.planner_x86 -t cornell/curobo-eval:0.7.8 <dir holding RAMMP-CuRobo/>   (git clone https://github.com/rammp-org/RAMMP-CuRobo)
+#   docker run --rm --gpus all -e PYTHONUTF8=1 -v <this tree>:/work -w /work cornell/curobo-eval:0.7.8 python3 tests/site_check.py --planner curobo
 FROM nvidia/cuda:12.4.1-devel-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 PIP_NO_CACHE_DIR=1
 RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-pip python3-dev git git-lfs \

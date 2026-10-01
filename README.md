@@ -140,6 +140,9 @@ bash tests/regress.sh check          # (jetson) perception / measurement / face 
 python3 tests/arm_values.py          # (driver container) every arm-side constant and CLI default
 bash tests/record_smoke.sh           # (jetson) the run record end to end, into a scratch directory
 .venv/bin/python tests/twin_check.py # (mac) the twin's arm vs the controller's tool pose on a recorded session
+tests/offline.sh                     # (mac, ~20 s) unit tests + the golden trace + the site check: run before any sync
+.venv/bin/python tests/site_check.py [tests/sites/<site>.yaml]   # a site's whole bite on REAL kinematics (MuJoCo
+                                     # FK/IK, tests/mujoco_kortex.py): reachability, joint limits, every path check
 ```
 
 `tests/fake_kortex.py` stands in for the controller (IK / FK / validation / execution on a simulated clock), so

@@ -237,7 +237,8 @@ def _plunge_depth(u: Under, floor_m: float, tip_z: float) -> PlungeDepth:
                             % (1000 * (below + float(NF.min_tip_above_table_m))))
     lo, hi = A_.plunge.sane_range_m
     if not lo < down < hi:
-        raise MoveError("plunge of %.0f mm is outside the sane range (80-250) -- re-measure" % (1000 * down))
+        raise MoveError("plunge of %.0f mm is outside the sane range (%.0f-%.0f) -- re-measure"
+                        % (1000 * down, 1000 * float(lo), 1000 * float(hi)))
     log.info("    packed food (%s): plunging %.0f mm below its top", why, 1000 * below)
     return PlungeDepth(down, FoodOnTip(height=below, floor_m=0.0), "below top")
 
@@ -256,7 +257,8 @@ def _check_plunge(u: Under, floor_m: float) -> float:
     down = u.gap_floor - floor_m
     lo, hi = A_.plunge.sane_range_m
     if not lo < down < hi:
-        raise MoveError("plunge of %.0f mm is outside the sane range (80-250) -- re-measure" % (1000 * down))
+        raise MoveError("plunge of %.0f mm is outside the sane range (%.0f-%.0f) -- re-measure"
+                        % (1000 * down, 1000 * float(lo), 1000 * float(hi)))
     lo, hi = A_.plunge.food_height_range_m
     if not lo < u.height < hi:
         raise MoveError("food %.0f mm tall is implausible -- re-measure" % (1000 * u.height))

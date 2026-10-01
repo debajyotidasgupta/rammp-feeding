@@ -23,12 +23,9 @@ from kinova.connection import kinova_connection
 from kinova.scripts.safe_move import tool_mismatch
 from settings import cfg
 
+from kinova.scripts.arm_limits import _client  # noqa: E402 -- the ControlConfig client, one place
+
 log = runlog.get("arm_tool")
-
-
-def _client(conn):
-    from kortex_api.autogen.client_stubs.ControlConfigClientRpc import ControlConfigClient
-    return ControlConfigClient(conn._tcp_router)
 
 
 def read(conn) -> dict:

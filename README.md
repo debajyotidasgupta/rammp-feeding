@@ -542,6 +542,25 @@ third_party/                 kinova-gen3-ros2 (submodule)
 
 The gripper is **never commanded** anywhere in this tree.
 
+## Deployment day: a new site, in order
+
+Nothing moves until step 5; every motion is attended.
+
+1. **The machine.** `./setup_jetson.sh` (venvs, DA3, models under the root), `make local MACHINE=<name>` (its
+   `config/machines/<name>.yaml`: root, name, the arm's IP, the cameras, the overlook height), `make images driver`.
+2. **The arm's settings** (another user may have changed them): `make tool` / `make limits`; `APPLY=1` sets ours
+   (the replaced values are saved -- `make tool RESTORE=<file>` puts the other user's back).
+3. **The cameras.** The scene camera's extrinsic is the other stack's calibration (`calibrate_scene_camera.py`, read in
+   place). `make models` brings up the models and both camera servers.
+4. **`make site-ready`** -- the preflight (tool, other clients, faults, kinematics at feeding_start, limits, servers),
+   the bowl and table from the scene camera, and the plan for food_detect_start. A kinematics FAIL means the arm
+   changed: drive it to feeding_start (gamepad) and `make capture` (it writes calibration/ on the Jetson: pull it
+   back to the Mac before the next `sync.sh`). Off site, the same geometry can be checked on real kinematics:
+   `tests/site_check.py tests/sites/<site>.yaml` (write the site file from locate-scene's numbers).
+5. **Attended, slow:** `make start-direct SPEED=10` (to feeding_start from anywhere), `make detect` (the low, computed
+   overlook), `make perceive` (the wrist camera's detections), the 10 mm hover check (`make acquire STOP_AFTER=hover10`).
+6. `make feed BITES=1`, then `make feed`.
+
 ## The camera: any camera, behind the camera server (`make camera`)
 
 Nothing in the stack reads a camera directly: colour frames and depth medians come from

@@ -81,7 +81,8 @@ class Timeline:
 def panel_scene(dump: dict):
     ws, mouth = dump["workspace"], tuple(dump["user"]["mouth_m"])
     lay = Layout.from_config(mouth=mouth, bowl_xy=tuple(ws["bowl_xy"]),
-                             foods=[Food(tuple(ws["bowl_xy"]), 0.024, (0.95, 0.62, 0.30))], width=W, height=H)
+                             foods=[Food(tuple(ws["bowl_xy"]), 0.024, (0.95, 0.62, 0.30))], width=W, height=H,
+                             laptop=False, hair=False)
     lay.table_z = float(ws["table_z"])
     m = build(lay)
     return m, new_data(m)

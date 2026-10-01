@@ -58,6 +58,8 @@ class Layout:
     bowl_half: tuple[float, float] = (0.062, 0.074)     # the container's half extents (x, y) at its rim
     width: int = 1920
     height: int = 1080
+    laptop: bool = True                                  # the 2026-09-25 table's laptop
+    hair: bool = True                                    # False: the scalp's shape in skin (a bald head)
 
     @classmethod
     def from_config(cls, mouth: tuple[float, float, float], foods: list[Food] | None = None, **kw) -> "Layout":
@@ -241,7 +243,7 @@ def _room(s: mujoco.MjSpec, lay: Layout, floor_z: float) -> None:
             table.add_geom(type=mujoco.mjtGeom.mjGEOM_BOX, size=[0.018, 0.018, leg_h / 2],
                            pos=[sx * ((x1 - x0) / 2 - 0.05), sy * ((y1 - y0) / 2 - 0.05), floor_z + leg_h / 2],
                            material="frame", group=2)
-    # the food's clear clamshell on a blue mat, and a laptop to the user's left (as in the wrist camera's frame)
+    # the food's clear clamshell on a blue mat (and, on 2026-09-25, a laptop)
     bx, by = lay.bowl_xy
     wb.add_geom(name="mat", type=mujoco.mjtGeom.mjGEOM_BOX, size=[0.13, 0.12, 0.0008], pos=[bx + 0.03, by + 0.01, tz + 0.0008],
                 material="mat_blue", group=2)
@@ -250,6 +252,20 @@ def _room(s: mujoco.MjSpec, lay: Layout, floor_z: float) -> None:
     tub.inertia = mujoco.mjtMeshInertia.mjMESH_INERTIA_SHELL
     wb.add_geom(name="tub", type=mujoco.mjtGeom.mjGEOM_MESH, meshname="tub", pos=[bx, by, tz + 0.0016],
                 material="plastic_clear", group=2)
+    if lay.laptop:
+        _laptop(wb, bx, by, tz)
+    # lights: a warm key over the table (shadows), a cool rim from behind the user, a soft fill
+    wb.add_light(name="key", pos=[0.9, -0.6, 1.9], dir=[-0.45, 0.35, -1], diffuse=[0.95, 0.9, 0.82],
+                 specular=[0.5, 0.5, 0.45], castshadow=True, cutoff=48, exponent=6, attenuation=[1, 0, 0])
+    wb.add_light(name="rim", pos=[-1.2, 1.1, 1.5], dir=[1, -0.6, -0.55], diffuse=[0.35, 0.55, 0.85],
+                 specular=[0.3, 0.4, 0.6], castshadow=True, cutoff=50, exponent=4)
+    wb.add_light(name="fill", pos=[0.4, 1.6, 1.2], dir=[0, -1, -0.6], diffuse=[0.25, 0.25, 0.28], castshadow=False)
+    wb.add_light(name="table_glow", pos=[*lay.bowl_xy, tz + 0.9], dir=[0, 0, -1], diffuse=[0.35, 0.3, 0.25],
+                 castshadow=False, cutoff=22, exponent=12)
+
+
+def _laptop(wb, bx: float, by: float, tz: float) -> None:
+    """A laptop to the user's left (as in the 2026-09-25 wrist camera's frame)."""
     lx, ly = bx + 0.02, by + 0.30
     lap = wb.add_body(name="laptop", pos=[lx, ly, tz], quat=_quat_z(math.radians(-8)))
     lap.add_geom(type=mujoco.mjtGeom.mjGEOM_BOX, size=[0.105, 0.155, 0.007], pos=[0, 0, 0.007], material="alu", group=2)
@@ -261,14 +277,6 @@ def _room(s: mujoco.MjSpec, lay: Layout, floor_z: float) -> None:
                  group=2)
     lid.add_geom(type=mujoco.mjtGeom.mjGEOM_BOX, size=[0.0005, 0.145, 0.095], pos=[-0.0006, 0, 0.107],
                  material="screen", group=2)
-    # lights: a warm key over the table (shadows), a cool rim from behind the user, a soft fill
-    wb.add_light(name="key", pos=[0.9, -0.6, 1.9], dir=[-0.45, 0.35, -1], diffuse=[0.95, 0.9, 0.82],
-                 specular=[0.5, 0.5, 0.45], castshadow=True, cutoff=48, exponent=6, attenuation=[1, 0, 0])
-    wb.add_light(name="rim", pos=[-1.2, 1.1, 1.5], dir=[1, -0.6, -0.55], diffuse=[0.35, 0.55, 0.85],
-                 specular=[0.3, 0.4, 0.6], castshadow=True, cutoff=50, exponent=4)
-    wb.add_light(name="fill", pos=[0.4, 1.6, 1.2], dir=[0, -1, -0.6], diffuse=[0.25, 0.25, 0.28], castshadow=False)
-    wb.add_light(name="table_glow", pos=[*lay.bowl_xy, tz + 0.9], dir=[0, 0, -1], diffuse=[0.35, 0.3, 0.25],
-                 castshadow=False, cutoff=22, exponent=12)
 
 
 def _wheelchair(s: mujoco.MjSpec, pelvis: np.ndarray, floor_z: float) -> None:
@@ -348,7 +356,8 @@ def _person(s: mujoco.MjSpec, lay: Layout) -> tuple[np.ndarray, float]:
             mesh.inertia = mujoco.mjtMeshInertia.mjMESH_INERTIA_SHELL
             body, pos = (lower, [0, 0, 0]) if part in LOWER else (upper, list(off - hinge))
             body.add_geom(name="%s_%s" % (part, variant), type=mujoco.mjtGeom.mjGEOM_MESH,
-                          meshname=mesh.name, pos=pos, material=part, group=1 if part in LOWER else group)
+                          meshname=mesh.name, pos=pos, material="skin" if part == "hair" and not lay.hair else part,
+                          group=1 if part in LOWER else group)
     upper.add_site(name="mouth", pos=list(np.array(lay.mouth) - hinge), size=[0.004, 0, 0], group=5)
     return np.array(lm["closed"]["pelvis"]) + off, float(off[2])
 

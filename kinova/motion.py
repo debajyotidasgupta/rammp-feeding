@@ -20,7 +20,7 @@ from kortex_api.autogen.messages import Base_pb2
 
 import runlog
 from settings import cfg
-from feeding.camera import CAM_IN_TOOL, FXC, VP
+from feeding.camera import CAM_IN_TOOL, FXC, VP, cam_to_tool
 from kinova.scripts.safe_move import Joints, MoveError, TorqueGuard, _events, check_tool, fold
 
 if TYPE_CHECKING:
@@ -49,14 +49,14 @@ def tip_in_tool() -> np.ndarray:
 
     tip = camera + camera_to_tip along the axis + the tip's sideways offset,
     read off the image as (tip pixel - image of true vertical) scaled to that
-    distance. Image +u is tool -x and image +v is tool -y at the overlook
-    orientation (from motion probes). Plus the utensil's tine offset (tool frame: a curved fork head meets the
-    food off where the image puts its tip).
+    distance, turned into the tool frame by the camera's mount (feeding.camera: for the Kinova module and the
+    site D405 image +u is tool -x and image +v is tool -y, from motion probes). Plus the utensil's tine offset
+    (tool frame: a curved fork head meets the food off where the image puts its tip).
     """
     zt = float(cfg.utensil.camera_to_tip_m)
     d = (np.array(cfg.utensil.tip_px, float) - VP) * zt / FXC
     tine = np.array(cfg.get("utensil.tine_offset_tool_m", [0.0, 0.0, 0.0]), float)
-    return CAM_IN_TOOL + np.array([-d[0], -d[1], zt]) + tine
+    return cam_to_tool([d[0], d[1], zt]) + tine
 
 
 def rot_x(deg: float) -> np.ndarray:

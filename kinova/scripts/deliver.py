@@ -52,7 +52,7 @@ import runlog
 from kinova import scene
 from kinova.connection import kinova_connection
 from settings import cfg
-from feeding.camera import CAM_IN_TOOL, COLOUR_SIZE, CXC, CYC, FXC, FYC
+from feeding.camera import CAM_IN_TOOL, COLOUR_SIZE, CXC, CYC, FXC, FYC, cam_to_tool
 from kinova.motion import (R_from_kortex, Rz, _ik, axis, dps_for, fk_tip, homotopy, margin, max_step, run_path,
                            tip_in_tool)
 from kinova.scripts.safe_move import Joints, MoveError, fold, goto, goto_cartesian, joints, tool_pose
@@ -334,7 +334,7 @@ def approach(conn: KinovaConnection, face_path: str, colour_path: str, allow_nos
     ax = axis(R)
     if abs(ax[2]) > LEVEL_TOL:
         raise MoveError("utensil is not level -- run the swing first")
-    mouth = T0 + R @ (CAM_IN_TOOL + np.array([-cam[0], -cam[1], cam[2]]))
+    mouth = T0 + R @ cam_to_tool(cam)
     stop = STOP_M
     if f.get("mouth", {}).get("depth_filled"):
         stop += float(DL.stop_extra_if_depth_filled_m)   # the fallback's local error can reach ~60 mm: stand off

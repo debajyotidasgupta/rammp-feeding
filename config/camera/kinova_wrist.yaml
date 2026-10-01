@@ -34,4 +34,6 @@ depth:
 
 mount:
   camera_in_tool_m: [0.0, 0.05639, -0.12305]   # Kinova's URDF: colour camera in the TOOL frame (120 mm tool offset)
+  rotation_quat_xyzw: [0.0, 0.0, 1.0, 0.0]      # the optical frame in the tool frame: a half turn about the tool axis
+                                               # (image +u = tool -x, +v = tool -y); any mount works (feeding/camera.py)
   image_rotated_at_delivery: true              # at the delivery pose world-up is image-left: rotate 90 deg clockwise

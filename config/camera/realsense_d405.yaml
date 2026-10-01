@@ -36,4 +36,6 @@ mount:
   file: ""                      # a calibration file read in place (a machine's: local.yaml), e.g. the box-opening
                                 # stack's camera_d405_wrist.yaml (end_effector_link, measured 2026-08-25); it wins over
   camera_in_tool_m: [0.0, 0.075, -0.125]       # ... this, the same numbers (75 mm off-axis, lens ~ the flange plane)
+  rotation_quat_xyzw: [0.0, 0.0, 1.0, 0.0]      # the optical frame in the tool frame: a half turn about the tool axis
+                                               # (image +u = tool -x, +v = tool -y); any mount works (feeding/camera.py)
   image_rotated_at_delivery: true              # as mounted: world-up is image-left at the delivery pose

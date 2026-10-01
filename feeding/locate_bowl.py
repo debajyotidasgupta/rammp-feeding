@@ -22,7 +22,7 @@ from pathlib import Path
 import numpy as np
 
 from settings import cfg
-from feeding.camera import CAM_IN_TOOL, CXC, CYC, FXC, FYC, colour_to_depth, load_depth
+from feeding.camera import CXC, CYC, FXC, FYC, cam_to_tool, colour_to_depth, load_depth
 
 
 def R_from_kortex(tx: float, ty: float, tz: float) -> np.ndarray:
@@ -34,9 +34,9 @@ def R_from_kortex(tx: float, ty: float, tz: float) -> np.ndarray:
 
 
 def to_base(u: float, v: float, z: float, T: np.ndarray, R: np.ndarray) -> np.ndarray:
-    """Colour pixel (u, v) at colour-frame depth z -> base frame (camera x, y = -tool x, y)."""
+    """Colour pixel (u, v) at colour-frame depth z -> base frame (the camera's mount: feeding.camera.cam_to_tool)."""
     X, Y = (u - CXC) * z / FXC, (v - CYC) * z / FYC
-    return T + R @ (CAM_IN_TOOL + np.array([-X, -Y, z]))
+    return T + R @ cam_to_tool([X, Y, z])
 
 
 def depth_at(D: np.ndarray, box: tuple, z_guess: float) -> float | None:

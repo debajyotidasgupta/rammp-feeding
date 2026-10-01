@@ -47,9 +47,19 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from settings import cfg
-from feeding.camera import CXD, CYD, FXC, FXD, FYC, FYD, T_D2C, VP, corrected
+from feeding.camera import CAM_ROT, CXD, CYD, DEFAULT_MOUNT, FXC, FXD, FYC, FYD, T_D2C, VP, corrected
 FACTORY_PP = (620.914, 238.280)                             # colour, device-reported (for the registration report)
 MIN_FOOD_MM, MAX_FOOD_MM = 12.0, 60.0                       # food height above the floor
+
+
+def overlook_rotation() -> np.ndarray:
+    """The tool's orientation at food_detect_start (captured; a computed one keeps it): Kortex's Rz Ry Rx."""
+    t = cfg.overlook_pose()["tool_pose"]
+    tx, ty, tz = (np.radians(float(t[k])) for k in ("theta_x_deg", "theta_y_deg", "theta_z_deg"))
+    Rx = np.array([[1, 0, 0], [0, np.cos(tx), -np.sin(tx)], [0, np.sin(tx), np.cos(tx)]])
+    Ry = np.array([[np.cos(ty), 0, np.sin(ty)], [0, 1, 0], [-np.sin(ty), 0, np.cos(ty)]])
+    Rz = np.array([[np.cos(tz), -np.sin(tz), 0], [np.sin(tz), np.cos(tz), 0], [0, 0, 1]])
+    return Rz @ Ry @ Rx
 
 
 def colour_to_depth(u, v, z_m, cx, cy):
@@ -267,7 +277,10 @@ def main() -> int:
     pp = VP
     p_star = pp + (p_tip - pp) * (a.z_tip / zb)
     du, dv = p_star[0] - f["cx"], p_star[1] - f["cy"]
-    dX, dY = dv * zb / FYC, du * zb / FXC
+    if DEFAULT_MOUNT:                          # the half-turn mount at the overlook's orientation: the measured map
+        dX, dY = dv * zb / FYC, du * zb / FXC
+    else:                                      # any mount: the image offset through the camera and the tool rotation
+        dX, dY = (overlook_rotation() @ CAM_ROT @ np.array([-du * zb / FXC, -dv * zb / FYC, 0.0]))[:2]
     tgt = (a.tool[0] + dX, a.tool[1] + dY, a.tool[2])
     # sensitivity to the one unmeasured quantity
     lo = pp + (p_tip - pp) * ((a.z_tip - 0.025) / zb)

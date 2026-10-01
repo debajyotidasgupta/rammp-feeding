@@ -35,7 +35,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 
 import fake_kortex as fk  # noqa: E402
 
-SITE = Path(sys.argv[1]) if len(sys.argv) > 1 and not sys.argv[1].startswith("--") else \
+SITE = Path(sys.argv[1]) if len(sys.argv) > 1 and not sys.argv[1].startswith("--") and sys.argv[1].endswith(".yaml") else \
     ROOT / "tests" / "sites" / "site_20260930.yaml"
 RENDER = "--render" in sys.argv
 site = yaml.safe_load(SITE.read_text())
@@ -96,6 +96,7 @@ RESULTS: list[tuple[str, int, str]] = []
 
 def run(module: str, args: list[str], note: str = "") -> int:
     mod = __import__(module, fromlist=["main"])
+    ARM.step = "%s %s" % (module.split(".")[-1], " ".join(a for a in args if not a.startswith(str(WORK))))
     out, err = io.StringIO(), io.StringIO()
     with mock.patch.object(sys, "argv", [module] + args), mock.patch.object(mod, "kinova_connection", _conn), \
             mock.patch("urllib.request.urlopen", fake_urlopen), contextlib.redirect_stdout(out), \
@@ -200,6 +201,12 @@ def main() -> int:
         ok = run(SEQ, ["home"]) == 0
     print("%s  (%d IK calls; record %s)" % ("THE BITE GOES THROUGH" if ok else "STOPPED: see the step above",
                                             ARM.ik_calls, WORK), file=sys.__stderr__)
+    if "--dump" in sys.argv:                   # every executed move, for comparing planners (tests/curobo_eval.py)
+        out = Path(sys.argv[sys.argv.index("--dump") + 1])
+        from kinova.motion import tip_in_tool
+        out.write_text(json.dumps(dict(site=str(SITE), workspace=ws, user=site["user"], tip_in_tool=list(tip_in_tool()),
+                                       motions=ARM.motions), indent=1))
+        print("motions -> %s (%d)" % (out, len(ARM.motions)), file=sys.__stderr__)
     return 0 if ok else 1
 
 

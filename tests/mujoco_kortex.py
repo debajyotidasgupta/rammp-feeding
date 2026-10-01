@@ -36,6 +36,13 @@ class KinematicArm(fk.FakeArm):
         self.site = mujoco.mj_name2id(self.m, mujoco.mjtObj.mjOBJ_SITE, "pinch_site")
         self.tool_z = tool_z
         self.ik_calls = 0
+        self.motions: list[dict] = []        # every executed move: {step, start, points: [[q, dt], ...]}
+        self.step = ""
+
+    def _start(self, points, durations):
+        self.motions.append(dict(step=self.step, start=[float(v) for v in self.q],
+                                 points=[[[float(v) for v in q], float(dt)] for (q, _), dt in zip(points, durations)]))
+        super()._start(points, durations)
 
     # --- kinematics
     def _tool(self, q_rad: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

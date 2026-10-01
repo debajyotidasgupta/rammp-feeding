@@ -1,0 +1,19 @@
+# cuRobo for evaluation on an x86 GPU box (an x86 CUDA box: cascadilla RTX 3070, 2026-10-01): the RAMMP-CuRobo core on the pins of its
+#   docker build -f docker/Dockerfile.curobo_eval -t cornell/curobo-eval:0.7.8 <dir holding RAMMP-CuRobo/>   (git clone https://github.com/rammp-org/RAMMP-CuRobo)
+#   docker run --rm --gpus all -e PYTHONUTF8=1 -v <this tree>:/work -w /work cornell/curobo-eval:0.7.8 python3 tests/curobo_eval.py <motions.json>
+# Jetson Dockerfile (cuRobo v0.7.8 d64c4b0, warp 1.5.1, numpy 1.26.4), torch for CUDA 12.4, kernels for sm_86.
+FROM nvidia/cuda:12.4.1-devel-ubuntu22.04
+ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 PIP_NO_CACHE_DIR=1
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-pip python3-dev git git-lfs \
+      ca-certificates libgl1 libegl1 libosmesa6 && rm -rf /var/lib/apt/lists/*
+RUN python3 -m pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cu124
+ENV TORCH_CUDA_ARCH_LIST="8.6" MAX_JOBS=6
+RUN git clone https://github.com/NVlabs/curobo.git /opt/curobo && cd /opt/curobo && git checkout -q tags/v0.7.8 \
+    && test "$(git rev-parse HEAD)" = "d64c4b005459db10c5dd867d8b30a87d5bda9bdb" \
+    && python3 -m pip install -U "packaging>=24.1" "setuptools>=70,<80" "numpy==1.26.4" "warp-lang==1.5.1" ninja \
+    && python3 -m pip install --no-build-isolation /opt/curobo
+COPY RAMMP-CuRobo /opt/rammp_curobo_src
+RUN python3 -m pip install --no-build-isolation /opt/rammp_curobo_src/core \
+    && python3 -m pip install "mujoco==3.3.2" scipy pyyaml pillow "protobuf==3.20.0" \
+       "kortex_api @ https://artifactory.kinovaapps.com/artifactory/generic-public/kortex/API/2.8.0/kortex_api-2.8.0.post5-py3-none-any.whl"
+WORKDIR /work

@@ -564,6 +564,25 @@ Nothing moves until step 5; every motion is attended.
    overlook), `make perceive` (the wrist camera's detections), the 10 mm hover check (`make acquire STOP_AFTER=hover10`).
 6. `make feed BITES=1`, then `make feed`.
 
+## cuRobo for the free-space moves? (evaluated 2026-10-01, `tests/curobo_eval.py`)
+
+`tests/site_check.py --dump` records every move the bite makes on real kinematics; `tests/curobo_eval.py` (a CUDA
+box, `docker/Dockerfile.curobo_eval`: RAMMP-CuRobo on cuRobo v0.7.8) plans the same start / goal joints with cuRobo
+in the site's world (table, a HOLLOW bowl, the user's head and torso, the pedestal; the spoon and the food as spheres
+on the wrist) and scores both alike. The 2026-09-30 site, cascadilla's RTX 3070 (planning 0.06 s a move):
+
+| move | ours | cuRobo |
+|---|---|---|
+| detect | 3.03 s, tip peak z 0.146 | 2.96 s, peak 0.127, same clearances |
+| swing (food) | 6.72 s | 1.32 s, the spoon within 3.4 deg of level, 30 % less joint travel |
+| retract | 11.79 s, 5 legs + caches | 1.56 s, one plan, similar clearance from the user |
+| home | 4.86 s | 2.92 s |
+
+(cuRobo's durations are at its model's joint limits: retime to the arm's.) With the overlook at 0.40 m. At 0.35 m
+cuRobo refuses it: the spoon head hangs within its 5 mm buffer of the bowl's rim. Holding the spoon's orientation
+(cuRobo's partial pose cost) is refused for the swing in v0.7.8; unconstrained, start and goal being level kept it
+within 3.4 deg. The plunge, scoop, approach, bite and back-off are prescribed paths, not free-space moves: they stay.
+
 ## The camera: any camera, behind the camera server (`make camera`)
 
 Nothing in the stack reads a camera directly: colour frames and depth medians come from

@@ -1,0 +1,159 @@
+# The RAMMP wheelchair (MEBot base + rammp_seat + the right-rail arm mount) as cuRobo cuboids, in the
+# Kinova arm's base_link (Kortex base frame: +z up, origin = the bottom face of the arm base, +x = the chair's
+# forward, +y = toward the chair centre / the user, i.e. the arm is on the user's right). Metres, degrees.
+# position = box centre, dims = FULL extents. Read by kinova/curobo_world.py (key `boxes`; names get "chair_").
+#
+# SOURCES (all numbers come out of rammp-org's Unreal project; nothing here was measured on hardware)
+#  mount chain, UE5 Blueprint ramms-sim Content/Robots/BP_Mebot_Ramms.uasset (SCS tree decoded with UAssetAPI;
+#  UE cm, left-handed X fwd / Y right / Z up; every link has zero rotation):
+#    VehicleMesh (mebot skeletal mesh) socket "seat_base" on bone "mebot": (34.5, 0, 25.638)   [mebot_Skeleton]
+#      -> Seat = rammp_seat static mesh, rel 0
+#        -> socket "rail_r" on rammp_seat: (2, +26.5, 8.5)  ("rail_l": (2, -26.5, 8.5))       [rammp_seat]
+#          -> rail_r = rammp_mount_rail, rel 0 -> mount_arm = rammp_mount_arm, rel (14, 0, 2)
+#            -> ArmSkMesh (gen3_6dof skeletal mesh), rel (0, 0, 1.5)
+#    => arm base in the seat frame (16, 26.5, 12) cm UE; in the MEBot URDF "mebot" link frame
+#       (rammp_prototype_base.urdf, ROS axes): (+0.505, -0.265, +0.3764) m, no rotation.
+#    So  p_base_link = p_mebot_urdf + (-0.505, +0.265, -0.3764)
+#        p_base_link = ((X - 16)/100, -(Y - 26.5)/100, (Z - 12)/100)   for (X,Y,Z) in rammp_seat's frame (UE cm)
+#  arm axes: gen3_6dof's component frame IS Kortex base_link (its base mesh's connector boss at x -0.044..-0.036,
+#    z 0.079 matches Kortex base_link.stl exactly), and ArmSkMesh / mount_arm carry no rotation, so base_link
+#    axes = the chair's axes. Agrees with this repo's convention (user faces +x, arm on the user's right).
+#  mebot root bone ref pose (mebot_Skeleton): t = (-53.866, -0.256, 2.824) cm, scale 100 -> URDF frame verified
+#    against the CAD mesh (front casters reach x = 32.4 cm, floor z = -5.2 cm in the component).
+#  seat_* / backrest* / armrest_* / joystick_left: boxes round the rammp_seat CAD mesh (Oodle payload of the
+#    .uasset decompressed, FMeshDescription parsed; 0.5-99.5 percentile of area-sampled surface points per part).
+#  rail_*: rammp_mount_rail mesh extents.  base_*: envelopes of rammp_prototype_base.urdf collision boxes
+#    (the URDF is the exported MEBot physics asset; cylinders boxed).
+#  The floor is at z = -0.46 (MEBot wheels on the ground, lift at its CAD/ref pose).
+#
+# TRIMMED for the planner (cuRobo pads every chair box by world_padding 0.02; base_link/shoulder_link spheres sit
+#  on the joint-1 axis, r 0.075/0.065/0.07/0.072/0.062 + 0.005 buffer): every box keeps >= 3 mm beyond that.
+#    seat cushion: CAD side face is 7 mm off the arm base; cut back to y >= 0.105 beside the arm (|x| < 0.10)
+#    armrest_right: CAD front end x = -0.075; cut to -0.10 (the padded box hit the shoulder spheres)
+#    rail_right: only x <= -0.10 kept; rammp_mount_arm plate (z -0.021..-0.002 under the base) omitted: both are
+#    what curobo_world's own unpadded `pedestal` box stands for.  Not modelled: the LUCI sensor mounts on the
+#    rails (rammp_mount_luci, rel (16, 0, -1.5) on each rail, under/beside the arm), the Gemini cameras.
+#
+# ASSUMED / UNVERIFIED
+#  * That the deployed chair matches the UE model (seat, rail mount, MEBot lift height). THE HEIGHT IS SUSPECT:
+#    the UE chain puts the arm base 12 cm above the seat frame (cushion top +0.137, armrests +0.20..0.335, floor
+#    -0.46 in base_link). The sites disagree: 2026-09-30 table_z -0.024 would put the table BELOW this cushion
+#    and 0.44 m off the floor; the earlier table (+0.214) would cut through armrest_left; the mouth (z 0.397 /
+#    0.635) sits only 0.26-0.50 m above the cushion (a seated adult: ~0.65-0.75). All point to the real arm
+#    sitting ~0.2-0.3 m higher on the chair than in UE (or a different chair). Measure one chair point in
+#    base_link (cushion top or the left armrest's front end) and shift every box (and mount.*) by the error
+#    before trusting the z values; x/y (chair centre +0.265 m to the arm's left) are likelier right.
+#  * Seat/MEBot at their reference pose (no seat elevation/tilt, MEBot lift at CAD pose); the sim arm is the
+#    gen3_6dof model while the real arm is 7-DoF -- same base, so the mount transform carries over.
+#  * The UE chain's rotations (~1e-5 deg) are taken as zero.
+#
+# Meshes (same frame, transform = identity, CAD, UE units converted, y mirrored, CCW-outward faces):
+#   seat.obj (rammp_seat, 40k verts), mebot.obj (MEBot base, 213k verts), rail_r.obj, rail_l.obj, mount_arm.obj
+
+frame: base_link
+mount:
+  base_link_in_mebot_urdf_m: [0.505, -0.265, 0.3764]   # translation, rpy 0
+  base_link_in_seat_ue_cm: [16.0, 26.5, 12.0]
+  floor_z_m: -0.46
+meshes: [seat.obj, mebot.obj, rail_r.obj, rail_l.obj, mount_arm.obj]
+boxes:
+  - name: seat_cushion
+    position: [-0.188, 0.306, 0.049]
+    dims: [0.644, 0.403, 0.175]
+    rpy_deg: [0, 0, 0]
+    # seat mesh; y>=0.105 (trimmed: the cushion side is 7 mm from the arm base); clearance to padded arm-base spheres 5 mm
+  - name: seat_cushion_side_rear
+    position: [-0.305, 0.067, 0.049]
+    dims: [0.410, 0.077, 0.175]
+    rpy_deg: [0, 0, 0]
+    # seat mesh; the strip beside the arm, behind it; clearance to padded arm-base spheres 4 mm
+  - name: seat_cushion_side_front
+    position: [0.117, 0.067, 0.049]
+    dims: [0.034, 0.077, 0.175]
+    rpy_deg: [0, 0, 0]
+    # seat mesh; the strip beside the arm, in front of it; clearance to padded arm-base spheres 4 mm
+  - name: seat_frame
+    position: [-0.108, 0.266, -0.094]
+    dims: [0.612, 0.550, 0.106]
+    rpy_deg: [0, 0, 0]
+    # seat mesh (pan frame under the cushion); clearance to padded arm-base spheres 6 mm
+  - name: backrest
+    position: [-0.566, 0.266, 0.278]
+    dims: [0.131, 0.489, 0.367]
+    rpy_deg: [0, 0, 0]
+    # seat mesh; clearance to padded arm-base spheres 401 mm
+  - name: backrest_cushion
+    position: [-0.453, 0.265, 0.293]
+    dims: [0.094, 0.398, 0.304]
+    rpy_deg: [0, 0, 0]
+    # seat mesh; clearance to padded arm-base spheres 314 mm
+  - name: armrest_right
+    position: [-0.295, -0.023, 0.263]
+    dims: [0.390, 0.122, 0.145]
+    rpy_deg: [0, 0, 0]
+    # seat mesh; front end trimmed x<=-0.10 (CAD: -0.075) to clear the shoulder spheres + padding; clearance to padded arm-base spheres 3 mm
+  - name: armrest_left
+    position: [-0.126, 0.557, 0.267]
+    dims: [0.709, 0.118, 0.136]
+    rpy_deg: [0, 0, 0]
+    # seat mesh; clearance to padded arm-base spheres 401 mm
+  - name: joystick_left
+    position: [0.138, 0.557, 0.374]
+    dims: [0.194, 0.097, 0.078]
+    rpy_deg: [0, 0, 0]
+    # seat mesh (the control on the left armrest front); clearance to padded arm-base spheres 420 mm
+  - name: rail_right
+    position: [-0.217, 0.000, -0.035]
+    dims: [0.234, 0.040, 0.040]
+    rpy_deg: [0, 0, 0]
+    # rail mesh; only behind x<=-0.10 (the part under the arm is the pedestal box); clearance to padded arm-base spheres 28 mm
+  - name: rail_left
+    position: [-0.147, 0.530, -0.035]
+    dims: [0.375, 0.040, 0.040]
+    rpy_deg: [0, 0, 0]
+    # rail mesh; clearance to padded arm-base spheres 416 mm
+  - name: base_chassis
+    position: [-0.250, 0.265, -0.250]
+    dims: [0.588, 0.330, 0.315]
+    rpy_deg: [0, 0, 0]
+    # rammp_prototype_base.urdf (envelope of its collision boxes); clearance to padded arm-base spheres 87 mm
+  - name: base_drive_assembly_left
+    position: [-0.209, 0.501, -0.231]
+    dims: [0.515, 0.185, 0.321]
+    rpy_deg: [0, 0, 0]
+    # rammp_prototype_base.urdf (envelope of its collision boxes); clearance to padded arm-base spheres 330 mm
+  - name: base_drive_wheel_left
+    position: [-0.019, 0.566, -0.276]
+    dims: [0.368, 0.075, 0.368]
+    rpy_deg: [0, 0, 0]
+    # rammp_prototype_base.urdf (envelope of its collision boxes); clearance to padded arm-base spheres 451 mm
+  - name: base_drive_assembly_right
+    position: [-0.209, 0.024, -0.231]
+    dims: [0.515, 0.185, 0.321]
+    rpy_deg: [0, 0, 0]
+    # rammp_prototype_base.urdf (envelope of its collision boxes); clearance to padded arm-base spheres 35 mm
+  - name: base_drive_wheel_right
+    position: [-0.019, -0.042, -0.276]
+    dims: [0.368, 0.075, 0.368]
+    rpy_deg: [0, 0, 0]
+    # rammp_prototype_base.urdf (envelope of its collision boxes); clearance to padded arm-base spheres 57 mm
+  - name: base_front_caster_assembly
+    position: [0.083, 0.265, -0.239]
+    dims: [0.453, 0.417, 0.365]
+    rpy_deg: [0, 0, 0]
+    # rammp_prototype_base.urdf (envelope of its collision boxes); clearance to padded arm-base spheres 34 mm
+  - name: base_front_caster_wheels
+    position: [0.282, 0.265, -0.381]
+    dims: [0.152, 0.395, 0.152]
+    rpy_deg: [0, 0, 0]
+    # rammp_prototype_base.urdf (envelope of its collision boxes); clearance to padded arm-base spheres 329 mm
+  - name: base_rear_caster_assembly
+    position: [-0.575, 0.265, -0.212]
+    dims: [0.395, 0.295, 0.368]
+    rpy_deg: [0, 0, 0]
+    # rammp_prototype_base.urdf (envelope of its collision boxes); clearance to padded arm-base spheres 306 mm
+  - name: base_rear_caster_wheels
+    position: [-0.746, 0.265, -0.355]
+    dims: [0.202, 0.211, 0.202]
+    rpy_deg: [0, 0, 0]
+    # rammp_prototype_base.urdf (envelope of its collision boxes); clearance to padded arm-base spheres 637 mm

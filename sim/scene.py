@@ -378,12 +378,18 @@ def build(lay: Layout) -> mujoco.MjModel:
     _wheelchair(s, pelvis, floor_z)
     _arm(s)
     _food(s, lay)
-    m = s.compile()
-    for name, q in GRIP_CLOSED.items():                     # the fingers closed on the fork, for good
+    return s.compile()
+
+
+def new_data(m: mujoco.MjModel) -> mujoco.MjData:
+    """The scene's data with the fingers closed on the fork. (Not via qpos0: hinges are measured from qpos0, so a
+    closed qpos0 would still draw the model's open pose.)"""
+    d = mujoco.MjData(m)
+    for name, q in GRIP_CLOSED.items():
         j = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_JOINT, "arm_grip_" + name)
         if j >= 0:
-            m.qpos0[m.jnt_qposadr[j]] = q
-    return m
+            d.qpos[m.jnt_qposadr[j]] = q
+    return d
 
 
 def arm_qpos_adr(m: mujoco.MjModel) -> np.ndarray:

@@ -13,3 +13,4 @@ sim/assets/smplx/
 sim/assets/human/
 sim/out/
 MUJOCO_LOG.TXT
+sim/assets/wheelchair/*.obj

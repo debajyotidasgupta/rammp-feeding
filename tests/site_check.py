@@ -159,11 +159,11 @@ def render(tag: str) -> None:
     try:
         import mujoco
         from PIL import Image
-        from sim.scene import Food, Layout, arm_qpos_adr, build
+        from sim.scene import Food, Layout, arm_qpos_adr, build, new_data
         lay = Layout.from_config(mouth=tuple(site["user"]["mouth_m"]), bowl_xy=tuple(ws["bowl_xy"]),
                                  foods=[Food(tuple(ws["bowl_xy"]))], width=1280, height=720)
         lay.table_z = ws["table_z"]
-        m = build(lay); d = mujoco.MjData(m)
+        m = build(lay); d = new_data(m)
         d.qpos[arm_qpos_adr(m)] = np.radians(ARM.q); mujoco.mj_forward(m, d)
         r = mujoco.Renderer(m, 720, 1280); opt = mujoco.MjvOption(); opt.geomgroup[:] = 0
         opt.geomgroup[1] = opt.geomgroup[2] = 1

@@ -32,7 +32,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 from settings import cfg
 from sim.record import Bite, load_bite
-from sim.scene import Layout, arm_qpos_adr, build
+from sim.scene import Layout, arm_qpos_adr, build, new_data
 
 HERE = Path(__file__).parent
 OUT = HERE / "out"
@@ -204,7 +204,7 @@ class Twin:
         lay = Layout.from_config(mouth=b.mouth, foods=b.foods, bowl_xy=b.bowl_xy, bowl_half=b.bowl_half,
                                  width=W, height=H)
         self.m = build(lay)
-        self.d = mujoco.MjData(self.m)
+        self.d = new_data(self.m)
         self.adr = arm_qpos_adr(self.m)
         self.lean_adr = self.m.jnt_qposadr[mujoco.mj_name2id(self.m, mujoco.mjtObj.mjOBJ_JOINT, "lean")]
         self.tip_id = mujoco.mj_name2id(self.m, mujoco.mjtObj.mjOBJ_SITE, "arm_tip")
@@ -621,7 +621,7 @@ def poses(a: argparse.Namespace) -> int:
                              rgb=(0.95, 0.85, 0.35)), Food((0.26, 0.21), rgb=(0.95, 0.55, 0.3))],
                              bowl_xy=(0.240, 0.236), width=W, height=H)
     m = build(lay)
-    dd = mujoco.MjData(m)
+    dd = new_data(m)
     r = mujoco.Renderer(m, 540, 960)
     opt = mujoco.MjvOption()
     opt.geomgroup[:] = 0

@@ -21,7 +21,7 @@ import mujoco
 import numpy as np
 from PIL import Image, ImageDraw
 
-from sim.scene import Food, Layout, arm_qpos_adr, build
+from sim.scene import Food, Layout, arm_qpos_adr, build, new_data
 from sim.twin import CYAN, F, ball, seg
 
 W, H, FPS = 960, 720, 24
@@ -76,7 +76,7 @@ def panel_scene(dump: dict):
                              foods=[Food(tuple(ws["bowl_xy"]), 0.024, (0.95, 0.62, 0.30))], width=W, height=H)
     lay.table_z = float(ws["table_z"])
     m = build(lay)
-    return m, mujoco.MjData(m)
+    return m, new_data(m)
 
 
 def render_panel(r, m, d, tl: Timeline, t: float, title: str, trail: list, carry: dict) -> Image.Image:

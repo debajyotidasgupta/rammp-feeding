@@ -66,7 +66,7 @@ MOVELOG    = set -o pipefail; echo "== $$(date '+%F %T') make $@" >> $(RUNS)/mov
               docker exec -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/work -e RAMMP_SET="$$RAMMP_SET" -w /work $(DRIVER) python3 -u -m
 TO_MOVELOG := 2>&1 | while IFS= read -r l; do printf '%s\n' "$$l"; printf '%s %s\n' "$$(date +%T)" "$$l" >> $(RUNS)/moves.log; done
 
-.PHONY: start-direct tool preflight camera camera-server locate-scene sdk kortex driver-image vision images driver depth clean-depth status state start detect perceive over acquire deliver retract feed detector models models-stop capture review locate-bowl limits twin twin-poses
+.PHONY: local site-ready start-direct tool preflight camera camera-server locate-scene sdk kortex driver-image vision images driver depth clean-depth status state start detect perceive over acquire deliver retract feed detector models models-stop capture review locate-bowl limits twin twin-poses
 
 # --- the arm ----------------------------------------------------------------
 # Every motion goes through kinova/scripts/safe_move.py: utensil kept pointing
@@ -166,6 +166,18 @@ tool:
 
 review:
 	@PYTHONPATH=. $(FACE_PY) -m feeding.review "$(or $(RUN),$$(dirname $$(readlink -f $(RUNS)/latest)))" --write
+
+# A machine's own settings, versioned: config/machines/<MACHINE>.yaml -> config/local.yaml (which sync never touches)
+local:
+	@test -n "$(MACHINE)" || { echo "make local MACHINE=<name>: one of $$(ls config/machines | sed 's/.yaml//' | tr '\n' ' ')"; exit 1; }
+	@cp config/machines/$(MACHINE).yaml config/local.yaml && echo "config/local.yaml <- config/machines/$(MACHINE).yaml"
+
+# Ready to feed, nothing moves: the models + cameras, the preflight, the bowl from the scene camera, the detect plan
+site-ready:
+	@$(MAKE) -s models
+	@$(INARM) kinova.scripts.preflight
+	@if [ -n "$$($(SET) profiles.scene_camera)" ]; then $(MAKE) -s locate-scene; fi
+	@$(MAKE) -s detect PLAN=1
 
 # The COARSE bowl + table position from the fixed scene camera (profiles.scene_camera) -> runs_dir/scene_state.json:
 # where food_detect_start goes. No motion. make models brings its camera server up.

@@ -1,0 +1,30 @@
+# The shared site Jetson (abra@192.168.1.11, from 2026-09-30): this file IS its config/local.yaml
+# (make local MACHINE=abra_jetson copies it there). Only this machine's facts; everything else derives from
+# root / name (config/rammp.yaml). Other people run sheppy-* containers here: their ROS 2 is domain 0, foxglove
+# holds :8765, their calibration files are read in place.
+deployment:
+  root: ~/cornell
+  name: cornell
+  arm: {ip: 192.168.1.10}
+  servers: {detector_port: 8775}      # foxglove holds 8765
+  ros_domain_id: 42                   # our own ROS 2 (the Kinova vision nodes, if ever used here)
+
+profiles:
+  camera: realsense_d405              # the wrist D405, driven by sheppy-wrist_camera
+  scene_camera: orbbec_gemini336l     # the fixed Orbbec, driven by sheppy-scene_camera
+
+camera:
+  streams:
+    ros: {domain_id: 0, cyclonedds_uri: /home/abra/.config/rammp-bench/cyclonedds-local.xml}
+  mount:                              # the box-opening stack's measured D405 mount, read in place
+    file: /home/abra/RAMMP-box-opening/install/rammp_box_opening/share/rammp_box_opening/config/camera_d405_wrist.yaml
+
+scene_camera:
+  streams:
+    ros: {domain_id: 0, cyclonedds_uri: /home/abra/.config/rammp-bench/cyclonedds-local.xml}
+  extrinsic:                          # their calibration (base_link -> scene_camera_link), read in place
+    file: /home/abra/RAMMP-box-opening/install/rammp_box_opening/share/rammp_box_opening/config/camera_scene.yaml
+
+workspace:
+  overlook_camera_height_m: 0.35      # food_detect_start computed: the D405 35 cm above the table, over the bowl (user)
+  scoop_end_follows: table            # the swing stays where it was validated relative to the user

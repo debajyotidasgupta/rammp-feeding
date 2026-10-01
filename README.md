@@ -35,6 +35,8 @@ make models      every model loaded and warm (detector + DA3, face + colour stre
 make camera      the selected camera behind the camera server (make models starts it too)
 make depth       the Kinova vision nodes: two depth sessions, 31 s apart (the arm ends each every ~62 s)
 make limits      the arm's own speed limits (APPLY=1: set them from config deployment.arm.soft_limits)
+make site-ready  ready to feed, nothing moves: models + cameras, preflight, the bowl (scene camera), the detect plan
+make local       a machine's own settings: config/machines/<MACHINE>.yaml -> config/local.yaml
 make preflight   before any motion: tool, faults, kinematics vs the capture, speed limits, servers (FIX=1
                  sets our tool + limits). make feed runs it first; nothing moves
 make tool        the arm's tool frame + mass vs ours (APPLY=1: set ours, saving the arm's; RESTORE=<file>).
@@ -619,7 +621,7 @@ docker                 images cornell/driver:py310 (docker/Dockerfile.driver: Py
                        containers cornell_driver, cornell_vision; our ROS 2 on domain 42 (theirs is 0)
 ```
 
-Its `config/local.yaml` holds only its facts: `root: ~/cornell`, `name: cornell`, the arm at 192.168.1.10, the
+Its `config/local.yaml` (versioned as `config/machines/abra_jetson.yaml`: `make local MACHINE=abra_jetson`) holds only its facts: `root: ~/cornell`, `name: cornell`, the arm at 192.168.1.10, the
 detector on :8775, ROS domain 42. Set up from nothing: `./setup_jetson.sh` (the venvs, DA3, the models, all under
 the root; `decord2` because decord has no aarch64 wheel), then `make images driver depth models`. Clean up:
 

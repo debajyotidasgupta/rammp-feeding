@@ -32,6 +32,11 @@ if [ -n "$(S features.resident_models)" ]; then make -s models || { echo "models
 n=0
 # the arm as the calibration assumes it (tool, faults, kinematics, limits, servers): nothing moves if not
 $(arm_cmd preflight) || { echo "preflight failed -- not starting (make preflight shows why)"; finish preflight; exit 1; }
+# the bowl and the table from the fixed scene camera (when there is one): food_detect_start is placed over the bowl
+if [ -n "$(S profiles.scene_camera)" ]; then
+  PYTHONPATH=. "$PY" -m feeding.locate_scene --out "$RAMMP_SESSION/scene" \
+    || { echo "the scene camera found no reachable bowl -- not starting (see $RAMMP_SESSION/scene)"; finish no_bowl; exit 1; }
+fi
 if [ -z "${FROM_DETECT:-}" ]; then moves detect || { echo "could not reach food_detect_start"; finish no_detect; exit 1; }; fi
 while [ "$n" -lt "$BITES" ]; do
   bite_begin

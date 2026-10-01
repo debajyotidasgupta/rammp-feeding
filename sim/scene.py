@@ -56,6 +56,7 @@ class Layout:
     mouth: tuple[float, float, float]
     foods: list[Food] = field(default_factory=list)
     bowl_half: tuple[float, float] = (0.062, 0.074)     # the container's half extents (x, y) at its rim
+    bowl_round: tuple[float, float] | None = None       # (rim radius, height): a round bowl in place of the tub
     width: int = 1920
     height: int = 1080
     laptop: bool = True                                  # the 2026-09-25 table's laptop
@@ -250,11 +251,14 @@ def _room(s: mujoco.MjSpec, lay: Layout, floor_z: float) -> None:
     bx, by = lay.bowl_xy
     wb.add_geom(name="mat", type=mujoco.mjtGeom.mjGEOM_BOX, size=[0.13, 0.12, 0.0008], pos=[bx + 0.03, by + 0.01, tz + 0.0008],
                 material="mat_blue", group=2)
-    hx, hy = lay.bowl_half
-    tub = s.add_mesh(name="tub", file=str(P.tub_obj(hx, hy, TUB_HEIGHT_M)))
-    tub.inertia = mujoco.mjtMeshInertia.mjMESH_INERTIA_SHELL
-    wb.add_geom(name="tub", type=mujoco.mjtGeom.mjGEOM_MESH, meshname="tub", pos=[bx, by, tz + 0.0016],
-                material="plastic_clear", group=2)
+    if lay.bowl_round:
+        _round_bowl(wb, bx, by, tz, *lay.bowl_round)
+    else:
+        hx, hy = lay.bowl_half
+        tub = s.add_mesh(name="tub", file=str(P.tub_obj(hx, hy, TUB_HEIGHT_M)))
+        tub.inertia = mujoco.mjtMeshInertia.mjMESH_INERTIA_SHELL
+        wb.add_geom(name="tub", type=mujoco.mjtGeom.mjGEOM_MESH, meshname="tub", pos=[bx, by, tz + 0.0016],
+                    material="plastic_clear", group=2)
     if lay.laptop:
         _laptop(wb, bx, by, tz)
     # lights: a warm key over the table (shadows), a cool rim from behind the user, a soft fill
@@ -265,6 +269,26 @@ def _room(s: mujoco.MjSpec, lay: Layout, floor_z: float) -> None:
     wb.add_light(name="fill", pos=[0.4, 1.6, 1.2], dir=[0, -1, -0.6], diffuse=[0.25, 0.25, 0.28], castshadow=False)
     wb.add_light(name="table_glow", pos=[*lay.bowl_xy, tz + 0.9], dir=[0, 0, -1], diffuse=[0.35, 0.3, 0.25],
                  castshadow=False, cutoff=22, exponent=12)
+
+
+def _round_bowl(wb, bx: float, by: float, tz: float, r: float, h: float, n: int = 36) -> None:
+    """An opaque round bowl: a floor and n wall staves round the rim (what a depth camera sees of a ceramic one)."""
+    bowl = wb.add_body(name="bowl", pos=[bx, by, tz])
+    bowl.add_geom(type=mujoco.mjtGeom.mjGEOM_CYLINDER, size=[0.75 * r, 0.004, 0], pos=[0, 0, 0.004], material="shoes",
+                  group=2)
+    for k in range(n):
+        a = 2 * math.pi * k / n
+        rr = r * (0.75 + 0.25 * 0.5)                           # the staves lean out: centre between base and rim
+        bowl.add_geom(type=mujoco.mjtGeom.mjGEOM_BOX, size=[0.003, math.pi * r / n * 1.05, h / 2],
+                      pos=[rr * math.cos(a), rr * math.sin(a), h / 2], quat=_quat_y_about(a, math.atan2(0.25 * r, h)),
+                      material="shoes", group=2)
+
+
+def _quat_y_about(yaw: float, lean: float) -> list[float]:
+    """A stave at angle yaw round the bowl, leaning outward by `lean` (rad)."""
+    cz, sz, cy, sy = math.cos(yaw / 2), math.sin(yaw / 2), math.cos(lean / 2), math.sin(lean / 2)
+    # q = Rz(yaw) * Ry(lean): the stave's top tips out along +x before the turn
+    return [cz * cy, -sz * sy, cz * sy, sz * cy]
 
 
 def _laptop(wb, bx: float, by: float, tz: float) -> None:
@@ -379,7 +403,7 @@ def _food(s: mujoco.MjSpec, lay: Layout) -> None:
                    group=2)
 
 
-def build(lay: Layout) -> mujoco.MjModel:
+def build(lay: Layout, extra=None) -> mujoco.MjModel:
     s = mujoco.MjSpec()
     s.modelname = "rammp_twin"
     s.compiler.degree = False
@@ -390,6 +414,8 @@ def build(lay: Layout) -> mujoco.MjModel:
     _wheelchair(s, pelvis, floor_z)
     _arm(s, lay)
     _food(s, lay)
+    if extra is not None:                                   # a caller's additions (a scene camera, ...)
+        extra(s)
     return s.compile()
 
 

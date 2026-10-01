@@ -306,33 +306,38 @@ def compose(panels: list[Panel], root: Path, out: Path) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("left"); ap.add_argument("right")
-    ap.add_argument("--titles", nargs=2, default=["our scripted moves", "cuRobo's free-space moves"])
+    ap.add_argument("dumps", nargs="+", help="two or three site_check --dump recordings, one panel each")
+    ap.add_argument("--titles", nargs="+", default=["our scripted moves", "cuRobo's free-space moves", "BLAST"])
     ap.add_argument("--out", default="out/sim/compare_planners.mp4")
     ap.add_argument("--export", help="write the scene + poses for sim/blender_render.py into this folder")
     ap.add_argument("--compose", help="Blender's frames in this folder (left/, right/) + the HUD -> --out")
     a = ap.parse_args()
-    dumps = [json.loads(Path(p).read_text()) for p in (a.left, a.right)]
+    global W, H
+    if len(a.dumps) > 2:                          # three panels: each smaller, the film as wide
+        W, H = 640, 480
+    dumps = [json.loads(Path(p).read_text()) for p in a.dumps]
     panels = [Panel(dump, title) for dump, title in zip(dumps, a.titles)]
     frames = int((max(p.tl.duration for p in panels) + TAIL_S) * FPS)
     if a.export:
-        for p, side in zip(panels, ("left", "right")):
+        for p, side in zip(panels, ("left", "right", "third")):
             export(p, Path(a.export) / side, frames)
         return 0
     if a.compose:
         compose(panels, Path(a.compose), Path(a.out))
         return 0
     rs = [mujoco.Renderer(p.m, H, W, max_geom=8000) for p in panels]
-    trails = [[], []]
-    ff = ffmpeg(Path(a.out), 2 * W, H + TOP)
+    trails = [[] for _ in panels]
+    n = len(panels)
+    ff = ffmpeg(Path(a.out), n * W, H + TOP)
     for k in range(frames):
         t = k / FPS
-        frame = Image.new("RGB", (2 * W, H + TOP), (5, 7, 11))
+        frame = Image.new("RGB", (n * W, H + TOP), (5, 7, 11))
         for i, (p, r) in enumerate(zip(panels, rs)):
             frame.paste(render_panel(r, p, t, trails[i]), (i * W, TOP))
         dr = ImageDraw.Draw(frame)
         dr.text((24, 14), banner(dumps[0]["workspace"]), font=F["mid"], fill=(200, 212, 230))
-        dr.line([(W, TOP), (W, H + TOP)], fill=(30, 36, 48), width=3)
+        for i in range(1, n):
+            dr.line([(i * W, TOP), (i * W, H + TOP)], fill=(30, 36, 48), width=3)
         ff.stdin.write(np.asarray(frame).tobytes())
     ff.stdin.close(); ff.wait()
     print(a.out)

@@ -100,6 +100,15 @@ def circle_fit(xy: np.ndarray) -> tuple[np.ndarray, float]:
     return np.array([cx, cy]), float(np.sqrt(max(c + cx * cx + cy * cy, 0.0)))
 
 
+def table_height(z: np.ndarray) -> float:
+    """The table round the bowl: the most common height (1 cm bins), refined -- the dominant flat surface, not
+    the median of whatever else the ring takes in (an arm, a person, the floor past the table's edge)."""
+    lo = np.floor(z.min() * 100) / 100
+    counts = np.bincount(((z - lo) * 100).astype(int))
+    peak = lo + (int(np.argmax(counts)) + 0.5) / 100
+    return float(np.median(z[np.abs(z - peak) < 0.015]))
+
+
 def measure(bx: list[float], uv: np.ndarray, p_base: np.ndarray) -> dict:
     """One candidate box -> the bowl it holds: centre (a circle through the rim), top, table around it; or why not."""
     res = dict(box_px=[round(v, 1) for v in bx])
@@ -109,18 +118,26 @@ def measure(bx: list[float], uv: np.ndarray, p_base: np.ndarray) -> dict:
             & (uv[:, 1] <= bx[3] + 0.6 * h) & ~inside)
     if inside.sum() < 50 or ring.sum() < 50:
         return dict(res, rejected="too little depth at it (%d points) or around it (%d)" % (inside.sum(), ring.sum()))
-    table_z = float(np.median(p_base[ring, 2]))
+    table_z = table_height(p_base[ring, 2])
     b = p_base[inside]
-    above = b[b[:, 2] > table_z + 0.010]                        # the bowl, not the table seen through the box
+    max_h, gate = float(cfg.perception.scene.max_bowl_height_m), float(cfg.perception.scene.max_bowl_radius_m)
+    blocked = float(np.mean(b[:, 2] > table_z + max_h))
+    if blocked > float(cfg.perception.scene.max_blocked_frac):
+        return dict(res, rejected="something stands in front of the bowl (%.0f%% of its box is taller than a bowl)"
+                    % (100 * blocked))
+    above = b[(b[:, 2] > table_z + 0.010) & (b[:, 2] < table_z + max_h)]   # the bowl: not the table through the
+    if len(above) >= 30:                                        # box, not an arm or a head above or in front of it
+        mid = np.median(above[:, :2], axis=0)
+        above = above[np.hypot(*(above[:, :2] - mid).T) < gate]
     if len(above) < 30:
-        return dict(res, rejected="nothing standing above the table (z %.3f)" % table_z)
+        return dict(res, rejected="nothing bowl-sized standing on the table (z %.3f)" % table_z)
     lo, hi = np.percentile(above[:, :2], 5, axis=0), np.percentile(above[:, :2], 95, axis=0)
     top_z = float(np.percentile(above[:, 2], 95))
     # the centre: a circle through the RIM (the top 15 mm), which a side view sees on both the near and the far
     # edge -- the middle of the points' extent leans toward the camera (only the near wall is visible)
     rim = above[above[:, 2] > top_z - 0.015][:, :2]
     centre, radius = circle_fit(rim) if len(rim) >= 20 else ((lo + hi) / 2, None)
-    if radius is None or not 0.03 < radius < 0.15:
+    if radius is None or not 0.03 < radius < gate:
         centre, radius = (lo + hi) / 2, None                   # no believable rim: the extent's middle
     return dict(res, bowl_xy=[float(v) for v in centre], table_z=table_z, bowl_top_z=top_z,
                 bowl_extent_m=[round(float(v), 3) for v in hi - lo],

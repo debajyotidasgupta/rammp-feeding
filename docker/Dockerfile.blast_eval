@@ -1,0 +1,9 @@
+# BLAST (Dynamium Lab, ICRA 2026: B-spline trajectory optimization) on top of the x86 planner image, to compare
+# planners on the same moves (tests/planner_compare.py). BLAST needs AVX2 + FMA: x86 only (not the Jetson).
+#   docker build -f docker/Dockerfile.blast_eval -t cornell/blast-eval:fd12217 docker/
+FROM cornell/curobo-eval:0.7.8
+RUN python3 -m pip install cmake==3.30.5 ninja scikit-build-core nanobind
+RUN git clone https://github.com/Dynamium-Lab/blast.git /opt/blast && cd /opt/blast \
+    && git checkout -q fd12217b406455f58a600a89989b97157e19682f \
+    && python3 -m pip install --no-build-isolation . \
+    && python3 -c "import blast; print('blast', blast.__file__)"

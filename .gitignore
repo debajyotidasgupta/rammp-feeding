@@ -2,8 +2,6 @@
 __pycache__/
 *.py[cod]
 .DS_Store
-# Staged KORTEX SDK: architecture-specific, fetched with `make sdk`.
-docker/vendor/kortex_api_*
 presentation/data/
 presentation/out/
 config/local.yaml

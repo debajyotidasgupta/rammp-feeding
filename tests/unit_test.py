@@ -88,6 +88,18 @@ class Camera(unittest.TestCase):
 class SceneCamera(unittest.TestCase):
     """A synthetic scene ray-cast into the Orbbec's depth image through the same extrinsic: table + a bowl."""
 
+    def test_table_is_the_dominant_surface_and_a_blocked_bowl_is_refused(self):
+        import feeding.locate_scene as L
+        rng = np.random.default_rng(0)
+        z = np.concatenate([rng.normal(-0.024, 0.002, 3000), rng.uniform(0.1, 0.6, 2500), np.full(500, -0.8)])
+        self.assertAlmostEqual(L.table_height(z), -0.024, delta=0.002)   # not the arm above it, not the floor
+        n = 400                                         # a box full of an arm (0.3 m up), a few bowl points
+        box_pts = np.column_stack([np.full(n, 0.29), np.full(n, 0.158), np.where(np.arange(n) < 300, 0.3, 0.03)])
+        ring_pts = np.column_stack([rng.uniform(0.1, 0.5, 400), rng.uniform(0.0, 0.3, 400), np.full(400, -0.024)])
+        uv = np.vstack([np.tile([50.0, 50.0], (n, 1)), np.tile([30.0, 65.0], (400, 1))])   # in the box; the ring
+        m = L.measure([40, 40, 60, 60], uv, np.vstack([box_pts, ring_pts]))
+        self.assertIn("in front of the bowl", m.get("rejected", ""))
+
     def test_bowl_and_table_recovered(self):
         import feeding.locate_scene as L
         table_z, top_z, r, c = -0.024, 0.046, 0.054, np.array([0.290, 0.158])

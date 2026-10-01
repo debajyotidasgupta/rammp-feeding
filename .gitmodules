@@ -1,3 +1,0 @@
-[submodule "third_party/kinova-gen3-ros2"]
-	path = third_party/kinova-gen3-ros2
-	url = https://github.com/rammp-org/kinova-gen3-ros2.git

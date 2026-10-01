@@ -18,7 +18,7 @@
 #   make limits    the arm's own speed limits (APPLY=1: set them from config deployment.arm.soft_limits)
 #
 #   make capture   re-measure feeding_start from the parked arm (rarely: see README)
-#   make sdk / images / depth   build and run the containers
+#   make images / depth / planner   build and run the containers
 SHELL      := /bin/bash
 # deployment values come from config/ (settings.py); ARM_IP=... on the command line still wins
 SET        := python3 -m settings get
@@ -50,9 +50,6 @@ MODELS_WAIT:= $(shell $(SET) deployment.servers.startup_timeout_s)
 # the last frame -- so a consumer sees a gap, not a frozen image. Either way a
 # shorter outage is better. Hence tcp; override with RTSP_PROTOCOLS=udp.
 RTSP_PROTOCOLS ?= tcp
-SUBMODULE  := third_party/kinova-gen3-ros2
-ARCHTAG    := $(shell uname -m | sed 's/arm64/aarch64/; s/x86_64/x86-64/; s/amd64/x86-64/')
-SDK        := $(ROOTDIR)/kortex_api_2.8.0_$(ARCHTAG)
 # Arm commands run inside the driver container, which is where the KORTEX SDK
 # lives. It mounts this tree at /work, so an edit here is live immediately.
 # PYTHONDONTWRITEBYTECODE because the container runs as root: without it every
@@ -65,7 +62,7 @@ MOVELOG    = set -o pipefail; echo "== $$(date '+%F %T') make $@" >> $(RUNS)/mov
               docker exec -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/work -e RAMMP_SET="$$RAMMP_SET" -w /work $(DRIVER) python3 -u -m
 TO_MOVELOG := 2>&1 | while IFS= read -r l; do printf '%s\n' "$$l"; printf '%s %s\n' "$$(date +%T)" "$$l" >> $(RUNS)/moves.log; done
 
-.PHONY: planner local site-ready start-direct tool preflight camera camera-server locate-scene sdk kortex driver-image vision images driver depth clean-depth status state start detect perceive over acquire deliver retract feed detector models models-stop capture review locate-bowl limits twin twin-poses
+.PHONY: planner local site-ready start-direct tool preflight camera camera-server locate-scene driver-image vision images driver depth clean-depth status state start detect perceive over acquire deliver retract feed detector models models-stop capture review locate-bowl limits twin twin-poses
 
 # --- the arm ----------------------------------------------------------------
 # Every motion goes through kinova/scripts/safe_move.py: utensil kept pointing
@@ -218,14 +215,6 @@ capture:
 
 # --- build ------------------------------------------------------------------
 
-sdk:
-	./setup_kortex_sdk.sh
-
-# The ROS 2 C++ driver (the submodule), for work on it; the feeding stack does not use it.
-kortex:
-	@test -d "$(SDK)" || { echo "no SDK at $(SDK) -- run 'make sdk'"; exit 1; }
-	$(MAKE) -C $(SUBMODULE) build-real KORTEX_SRC=$(SDK)
-
 driver-image:
 	docker build -f docker/Dockerfile.driver -t $(DRIVER_IMG) docker/
 
@@ -280,7 +269,5 @@ clean-depth:
 
 status:
 	@echo "arch      : $$(uname -m)"
-	@echo "sdk       : $(SDK) $$([ -d "$(SDK)" ] && echo '(present)' || echo '(MISSING)')"
-	@echo "submodule : $$(git submodule status $(SUBMODULE) 2>/dev/null | tr -s ' ')"
 	@echo "containers:"; docker ps --format '  {{.Names}} {{.Image}} ({{.Status}})' 2>/dev/null || echo "  none"
 	@echo "arm       : $$(timeout 3 bash -c '(exec 3<>/dev/tcp/$(ARM_IP)/10000)' 2>/dev/null && echo 'TCP 10000 open' || echo unreachable)"

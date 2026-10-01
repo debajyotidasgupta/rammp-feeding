@@ -99,6 +99,18 @@ reading touched the truth in 1-3 of 25 plans per camera.
 Scripted, not planned: the moves that touch or must be straight (OVER, plunge, scoop, approach, back-off,
 sidestep) and `make start-direct`.
 
+**Where the bowl may be.** The scene camera finds the bowl to ~1 cm with its true extrinsic (5-6 cm p95 with the
+calibration's error), from the site's placement, across the table, high over it or low from the side; it refuses
+a view the arm or the user blocks rather than report a wrong bowl. Planned on those reports and judged on the truth
+(`tests/scene_localization_study.py` -> `tests/scene_error_study.py --reports`), the bite starts anywhere with the
+bowl at **x 0.28-0.50 m, y -0.05-0.40 m** of the arm's base; nearer the base, `make site-ready` says "no plan"
+before anything moves.
+
+**Against BLAST** (Dynamium Lab's trajectory optimizer, `tests/planner_compare.py`, docs/notes/planners.md): on the
+bite's four free-space legs cuRobo 13.2 s, BLAST 12.6 s, the old scripted moves 23.3 s, none touching the true
+scene; BLAST tilts the empty utensil up to 47 deg and lifts it to 39 cm (cuRobo 2 deg, 19 cm), plans in ~1 s on
+the CPU (cuRobo 65 ms on the GPU), and needs x86 AVX2: it does not build for the Jetson.
+
 ## Every move goes through `kinova/scripts/safe_move.py` / `kinova/motion.py`
 
 | guard | why |
@@ -182,7 +194,10 @@ Recording never raises and never slows a move; without `RAMMP_RECORD` everything
 tests/offline.sh                    (the Mac, ~1 min) the unit tests + the whole bite for every camera combination
 .venv/bin/python tests/site_check.py [tests/sites/<site>.yaml] [--planner stub|curobo] [--camera <p>]
                                     [--scene-camera <p>|none] [--dump motions.json] [--render]
-python3 tests/scene_error_study.py  (a CUDA box) plans on a mis-calibrated scene camera's report, judged on the truth
+.venv/bin/python tests/scene_localization_study.py   locate_scene on rendered scene-camera depth: five camera
+                                    placements x 16 bowl positions x sampled extrinsic errors -> out/studies/localization.json
+python3 tests/scene_error_study.py [--reports localization.json]   (a CUDA box) plans on each report, judged on the truth
+python3 tests/planner_compare.py scripted.json curobo.json      (cornell/blast-eval) scripted / cuRobo / BLAST, same legs
 bash tests/regress.sh check         (the Jetson) perception / measurement / face outputs on saved runs
 .venv/bin/python tests/twin_check.py   the twin's arm vs the controller's tool pose on a recorded session
 ```
@@ -269,7 +284,6 @@ sim/                         the twin and the film: scene, record, twin, compare
 docker/                      the driver, vision and x86 planner images
 docs/notes/                  the design history
 presentation/                the 2026-09 figures (their own README)
-third_party/                 kinova-gen3-ros2 (submodule; the ROS 2 driver, not used by the stack)
 ```
 
 ## Known open
@@ -278,6 +292,7 @@ third_party/                 kinova-gen3-ros2 (submodule; the ROS 2 driver, not 
 - **Mixed plates**: a pile of small pieces often detects as one box on the wrist camera ("food left, none
   pickable"); a sharper image fixes it (even light, a higher-resolution mode, or splitting a box by depth).
 - **A new food**: test its prompt on a saved frame first; only fruit cubes and strawberries have been fed.
+- **The bowl near the arm's base** (x < 0.28 m): often no plan; keep it in the region above.
 - **The wheelchair's height** in the planner's world is rough (ramms-sim's model); x / y likely right.
 - **The two cameras disagreed by 8 cm** on the bowl at the site (2026-09-30): a tape measurement settles which.
 - The bite often reads 0.0-0.3 s (the force is already over 1 N when the wait starts): harmless, not a bite time.

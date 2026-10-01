@@ -54,3 +54,19 @@
   "fruit cube"; "food pieces" / "food cube" / "bite-sized piece" merged pieces or boxed the whole container. The
   fallback prompt exists for a pile read as one box (2026-09-25).
 - cubes.yaml `aim_offset_base_m` 0: the strawberry offset put one side of the fork past a cube's corner (2026-09-25).
+
+# The scene camera's coarse localization (2026-10-01)
+
+tests/scene_localization_study.py rendered the Orbbec's depth in the twin (table, an opaque round bowl, the user,
+the wheelchair, the arm at feeding_start) for five camera placements x 16 bowl positions (x 0.20-0.50, y -0.05 to
+0.40 m) and ran locate_scene.measure() on it, the detector replaced by the bowl's true outline grown / shifted up to
+10 %. With the true extrinsic the bowl centre came out 8-12 mm off (median), the table and rim within 2 mm, from
+the site's placement, across the table, high over it, and low from the side; with 8 sampled 5 cm / 1.5 deg
+extrinsic errors each, the p95 error was 49-56 mm (the calibration's error, carried through). From behind the arm,
+the arm in front of the bowl made locate_scene report the bowl 33-72 cm off; it now keeps only points of a bowl's
+height near the cluster's middle (perception.scene.max_bowl_height_m / max_bowl_radius_m), reads the table as the
+ring's most common height, and refuses a box mostly taller than a bowl (max_blocked_frac): 12 of 16 refused, the
+4 it located 13 mm off. scene_error_study.py --reports then planned on every report (0.45 m, the 5 cm margin) and
+judged on the truth: 0 of 517 plans touched the true scene, the true bowl framed in all; every plan succeeded for
+the bowl at x 0.30-0.50, y -0.05 to 0.40 except the far corner (0.30, 0.40); at x 0.20 (beside the arm's base) many
+had no plan. The bowl may move freely in x 0.28-0.50 m, y -0.05-0.40 m of the arm's base.

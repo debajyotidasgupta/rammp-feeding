@@ -194,6 +194,9 @@ perception:
                                 # from the side a bowl reads as a dish)
     max_reach_m: 0.75           # a candidate further than this from the arm's base is not the bowl
     detect_width: 848           # detect on a copy this wide (the detector's time grows with the pixels)
+    max_bowl_height_m: 0.20     # inside the box, the bowl is what stands this high at most above the table ...
+    max_bowl_radius_m: 0.15     # ... within this of the points' middle (an arm or a head in front is not the bowl)
+    max_blocked_frac: 0.3       # more of the box than this taller than a bowl: the view is blocked, nothing located
   min_box_side_px: 25
   max_box_aspect: 3.0
   food_inside_bowl_min: 0.8     # fraction of a food box inside the bowl box

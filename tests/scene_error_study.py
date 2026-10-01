@@ -17,6 +17,10 @@ the REPORTED world (grown by the margin under test), our tip floor. Each plan is
 
 for margins 0 (the reading trusted) and error_m, at overlook heights 0.40 and 0.45. The site's own placement
 (the box-opening stack's calibration, 2026-09-24) is one of the cameras.
+
+--reports rows.json: the reports tests/scene_localization_study.py got from rendered depth -- the bowl anywhere on
+the table, five camera placements, locate_scene's own geometry -- each planned at the configured height and margin
+and judged on ITS truth; plus a table per bowl position (where on the table the bite can start).
 """
 
 from __future__ import annotations
@@ -91,6 +95,8 @@ def reported(c, rng, err_m) -> tuple[dict, float]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--trials", type=int, default=25)
+    ap.add_argument("--reports", help="tests/scene_localization_study.py's rows: plan on each report (the configured "
+                                      "overlook height and margin), judged on its own truth")
     ap.add_argument("--out", default=str(RUNS / "study.json"))
     a = ap.parse_args()
     fk.install_clock()
@@ -104,77 +110,105 @@ def main() -> int:
     conn = mk.KinematicConnection(arm)
     err_m = float(cfg.scene_camera.extrinsic.error_m)
     over_max = float(cfg.acquisition.over_max_m)
+    ext = cfg.workspace.table_extent_m
     state = RUNS / "scene_state.json"
     state.write_text(json.dumps(dict(TRUTH, t=time.time())))
     P = Planners()
     pl = P.by_load[False]
-    truth_world = world(dict(TRUTH, bowl_radius=TRUTH["rim_radius_m"], error_m=0.0), MOUTH,
-                        table_extent=dict(cfg.workspace.table_extent_m))["obstacles"]
     half_w = math.atan(float(cfg.camera.colour.width) / 2 / FXC)            # the wrist camera's half view, rad
 
     def tip(q):
         p = arm.fk_pose(q)
         return np.array(p[:3]) + R_from_kortex(*p[3:]) @ tip_in_tool()
 
-    def true_clearance(t) -> float:
-        bx, by = TRUTH["bowl_xy"]
-        ext = cfg.workspace.table_extent_m
-        if math.hypot(t[0] - bx, t[1] - by) < TRUTH["rim_radius_m"] + 0.02:
-            return t[2] - TRUTH["bowl_top_z"]
-        if ext.x[0] <= t[0] <= ext.x[1] and ext.y[0] <= t[1] <= ext.y[1]:
-            return t[2] - TRUTH["table_z"]
-        return math.inf
+    def judge(truth: dict, rep: dict, margin: float, row: dict) -> dict:
+        """Plan feeding_start -> food_detect_start -> feeding_start on the report; judge it on the truth."""
+        state.write_text(json.dumps(dict(rep, t=fk.clock.time(), error_m=margin)))
+        scene._RESOLVED.clear()
+        try:
+            qd = scene.overlook_joints(conn)
+        except Exception as e:  # noqa: BLE001
+            return dict(row, outcome="overlook unreachable: %s" % e)
+        P.refresh()
+        paths = {}
+        for leg, (s, g) in dict(detect=(HOME, qd), home=(qd, HOME)).items():
+            r = P.plan(s, list(np.asarray(s) + (np.asarray(g) - np.asarray(s) + 180) % 360 - 180), False)
+            paths[leg] = np.array(r["path"]) if r.get("ok") else None
+        if any(p is None for p in paths.values()):
+            return dict(row, outcome="no plan")
+        floor_ok = all(t[2] >= scene.tip_floor(t[0], t[1]) - 1e-6 for p in paths.values() for t in map(tip, p))
+        pl.update_world(world(dict(truth, bowl_radius=truth["rim_radius_m"], error_m=0.0), MOUTH,
+                              table_extent=dict(ext))["obstacles"])
+        dense = [q0 + (q1 - q0) * s for p in paths.values() for q0, q1 in zip(p, p[1:])
+                 for s in np.linspace(0, 1, 4, endpoint=False)]
+        collides = sum(not pl.check_state_valid(list(np.radians(q)))[0] for q in dense)
+        tips = [tip(q) for q in dense]
+
+        def clearance(t) -> float:
+            if math.hypot(t[0] - truth["bowl_xy"][0], t[1] - truth["bowl_xy"][1]) < truth["rim_radius_m"] + 0.02:
+                return t[2] - truth["bowl_top_z"]
+            if ext.x[0] <= t[0] <= ext.x[1] and ext.y[0] <= t[1] <= ext.y[1]:
+                return t[2] - truth["table_z"]
+            return math.inf
+        # at food_detect_start: where the lens points on the true rim plane, against the true bowl
+        pq = arm.fk_pose(qd)
+        R = R_from_kortex(*pq[3:])
+        lens = np.array(pq[:3]) + R @ CAM_IN_TOOL
+        ax = R[:, 2]
+        aim = lens + (truth["bowl_top_z"] - lens[2]) / ax[2] * ax
+        miss = math.hypot(aim[0] - truth["bowl_xy"][0], aim[1] - truth["bowl_xy"][1])
+        in_view = math.atan2(miss, lens[2] - truth["bowl_top_z"]) < half_w
+        return dict(row, outcome="ok", floor_ok=floor_ok, collides=int(collides),
+                    min_tip_clear_m=float(min(clearance(t) for t in tips)),
+                    peak_tip_m=float(max(t[2] for t in tips) - truth["table_z"]),
+                    aim_miss_m=float(miss), framed=bool(in_view and miss <= over_max),
+                    lens_above_table_m=float(lens[2] - truth["table_z"]))
 
     rows = []
-    rng = np.random.default_rng(7)
-    samples = {name: [reported(c, rng, err_m) for _ in range(a.trials)] for name, (c, _) in PLACEMENTS.items()}
-    for height in (0.40, 0.45):
-        cfg["workspace"]["overlook_camera_height_m"] = height
-        for margin in (0.0, err_m):
-            for name, trials in samples.items():
-                for rep, off in trials:
-                    state.write_text(json.dumps(dict(rep, error_m=margin)))
-                    scene._RESOLVED.clear()
-                    row = dict(camera=name, height=height, margin=margin, off_m=off)
-                    try:
-                        qd = scene.overlook_joints(conn)
-                    except Exception as e:  # noqa: BLE001
-                        rows.append(dict(row, outcome="overlook unreachable: %s" % e)); continue
-                    P.refresh()
-                    paths = {}
-                    for leg, (s, g) in dict(detect=(HOME, qd), home=(qd, HOME)).items():
-                        r = P.plan(s, list(np.asarray(s) + (np.asarray(g) - np.asarray(s) + 180) % 360 - 180), False)
-                        paths[leg] = np.array(r["path"]) if r.get("ok") else None
-                    if any(p is None for p in paths.values()):
-                        rows.append(dict(row, outcome="no plan")); continue
-                    floor_ok = all(t[2] >= scene.tip_floor(t[0], t[1]) - 1e-6 for p in paths.values() for t in map(tip, p))
-                    pl.update_world(truth_world)
-                    dense = [q0 + (q1 - q0) * s for p in paths.values() for q0, q1 in zip(p, p[1:])
-                             for s in np.linspace(0, 1, 4, endpoint=False)]
-                    collides = sum(not pl.check_state_valid(list(np.radians(q)))[0] for q in dense)
-                    tips = [tip(q) for q in dense]
-                    # at food_detect_start: where the lens points on the true bowl's rim plane, vs the true bowl
-                    pq = arm.fk_pose(qd)
-                    R = R_from_kortex(*pq[3:])
-                    lens = np.array(pq[:3]) + R @ CAM_IN_TOOL
-                    ax = R[:, 2]
-                    s_ = (TRUTH["bowl_top_z"] - lens[2]) / ax[2]
-                    aim = lens + s_ * ax
-                    miss = math.hypot(aim[0] - TRUTH["bowl_xy"][0], aim[1] - TRUTH["bowl_xy"][1])
-                    in_view = math.atan2(miss, lens[2] - TRUTH["bowl_top_z"]) < half_w
-                    rows.append(dict(row, outcome="ok", floor_ok=floor_ok, collides=int(collides),
-                                     min_tip_clear_m=float(min(true_clearance(t) for t in tips)),
-                                     peak_tip_m=float(max(t[2] for t in tips) - TRUTH["table_z"]),
-                                     aim_miss_m=float(miss), framed=bool(in_view and miss <= over_max),
-                                     lens_above_table_m=float(lens[2] - TRUTH["table_z"])))
+    if a.reports:                                  # the localization study's reports, each on its own truth
+        H = float(cfg.workspace.overlook_camera_height_m)
+        for lr in json.loads(Path(a.reports).read_text()):
+            if lr["outcome"] != "ok":
+                rows.append(dict(camera=lr["camera"], height=H, margin=err_m, off_m=float("nan"), bowl=lr["truth"]["bowl_xy"],
+                                 outcome="scene camera: " + lr["outcome"])); continue
+            for k, rep in enumerate(lr["reports"]):
+                row = dict(camera=lr["camera"], height=H, margin=err_m, bowl=lr["truth"]["bowl_xy"], exact=k == 0,
+                           off_m=float(np.hypot(rep.get("xy_err_m", np.nan), rep.get("table_err_m", np.nan))))
+                if "bowl_xy" not in rep:
+                    rows.append(dict(row, outcome="scene camera refused: %s" % rep.get("rejected"))); continue
+                rows.append(judge(lr["truth"], rep, err_m, row))
+            print("  %s %s done (%d rows)" % (lr["camera"], lr["truth"]["bowl_xy"], len(rows)), flush=True)
+    else:                                          # one bowl, synthetic errors, the heights and margins compared
+        truth = dict(TRUTH)
+        rng = np.random.default_rng(7)
+        samples = {name: [reported(c, rng, err_m) for _ in range(a.trials)] for name, (c, _) in PLACEMENTS.items()}
+        for height in (0.40, 0.45):
+            cfg["workspace"]["overlook_camera_height_m"] = height
+            for margin in (0.0, err_m):
+                for name, trials in samples.items():
+                    for rep, off in trials:
+                        rows.append(judge(truth, rep, margin, dict(camera=name, height=height, margin=margin, off_m=off)))
                 print("height %.2f margin %.2f done (%d rows)" % (height, margin, len(rows)), flush=True)
     Path(a.out).write_text(json.dumps(rows, indent=1))
     summary(rows)
+    if a.reports:
+        positions(rows)
     return 0
 
 
+def positions(rows) -> None:
+    """Per bowl position, over every camera and error: planned / touching the truth / framed."""
+    print("\nbowl position      plans   touch  framed   (every camera, every sampled error; the configured margin)")
+    for b in sorted({tuple(r["bowl"]) for r in rows}):
+        rs = [r for r in rows if tuple(r["bowl"]) == b]
+        ok = [r for r in rs if r["outcome"] == "ok"]
+        why = sorted({r["outcome"].split(":")[0] for r in rs if r["outcome"] != "ok"})
+        print("(%.2f, %+.2f)    %3d/%-3d  %4d  %4d/%-3d  %s" % (b[0], b[1], len(ok), len(rs), sum(r["collides"] > 0 for r in ok),
+                                                         sum(r["framed"] for r in ok), len(ok), ", ".join(why)))
+
+
 def summary(rows) -> None:
-    print("\n%-32s %5s %6s  %6s %8s %8s %8s %8s %8s" % ("camera", "H", "margin", "plans", "collide", "min tip",
+    print("\n%-32s %5s %6s  %7s %8s %8s %8s %8s %8s" % ("camera", "H", "margin", "plans", "collide", "min tip",
                                                        "peak tip", "framed", "off p95"))
     keys = sorted({(r["camera"], r["height"], r["margin"]) for r in rows}, key=lambda k: (k[1], k[2], k[0]))
     for k in keys:
@@ -185,7 +219,7 @@ def summary(rows) -> None:
         pk = max((r["peak_tip_m"] for r in ok), default=float("nan"))
         fr = sum(r["framed"] for r in ok)
         print("%-32s %5.2f %6.2f  %3d/%-3d %8d %8.3f %8.3f %5d/%-3d %7.3f" % (
-            k[0][:32], k[1], k[2], len(ok), len(rs), col, mt, pk, fr, len(ok), np.percentile([r["off_m"] for r in rs], 95)))
+            k[0][:32], k[1], k[2], len(ok), len(rs), col, mt, pk, fr, len(ok), np.nanpercentile([r["off_m"] for r in rs] + [np.nan], 95)))
 
 
 if __name__ == "__main__":

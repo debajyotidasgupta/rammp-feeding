@@ -7,7 +7,7 @@
   camera       the mount read from a calibration file; any rotation through cam_to_tool / the tip model
   scene cam    locate_scene's chain on a ray-cast synthetic scene: the bowl centre and the table recovered
   preflight    the tool check and the other-clients check, against stub controller answers
-  scene        the computed overlook, the lift top, the position-aware tip floor
+  scene        the computed overlook, the position-aware tip floor (with the scene camera's error)
 """
 
 from __future__ import annotations
@@ -174,18 +174,26 @@ class Scene(unittest.TestCase):
         from kinova import scene
         from kinova.motion import R_from_kortex
         from feeding.camera import CAM_IN_TOOL
-        self.assertTrue(scene.computed())
         t = scene.overlook_pose()["tool_pose"]
         cam = np.array([t["x_m"], t["y_m"], t["z_m"]]) + R_from_kortex(t["theta_x_deg"], t["theta_y_deg"],
                                                                         t["theta_z_deg"]) @ CAM_IN_TOOL
         self.assertTrue(np.allclose(cam, [0.29, 0.158, -0.024 + 0.35], atol=1e-9), cam)
-        self.assertAlmostEqual(scene.lift_z(), max(t["z_m"] + 0.03, -0.024 + 0.25))
 
-    def test_tip_floor_bowl_and_table(self):
+    def test_tip_floor_bowl_table_and_beside_it(self):
         from kinova import scene
-        self.assertAlmostEqual(scene.tip_floor(0.29, 0.158), 0.046 + 0.015)
-        self.assertAlmostEqual(scene.tip_floor(0.29 + 0.054 + 0.039, 0.158), 0.046 + 0.015)
-        self.assertAlmostEqual(scene.tip_floor(0.29 + 0.054 + 0.041, 0.158), -0.024 + 0.05)
+        e = 0.05                                             # scene_camera.extrinsic.error_m
+        self.assertAlmostEqual(scene.tip_floor(0.29, 0.158), 0.046 + 0.015 + e)
+        self.assertAlmostEqual(scene.tip_floor(0.29 + 0.054 + 0.039 + e, 0.158), 0.046 + 0.015 + e)
+        self.assertAlmostEqual(scene.tip_floor(0.29 + 0.054 + 0.041 + e, 0.158), -0.024 + 0.05 + e)
+        self.assertEqual(scene.tip_floor(0.058, -0.181), -np.inf)   # feeding_start: beside the table, below its top
+
+    def test_world_grows_by_the_error(self):
+        from kinova.curobo_world import world
+        ws = dict(bowl_xy=[0.29, 0.158], table_z=-0.024, bowl_top_z=0.046, bowl_radius=0.054)
+        a = {o["name"]: o for o in world(ws, [-0.277, 0.306, 0.397], chair=[])["obstacles"]}
+        b = {o["name"]: o for o in world(dict(ws, error_m=0.05), [-0.277, 0.306, 0.397], chair=[])["obstacles"]}
+        self.assertAlmostEqual(b["table"]["position"][2] - a["table"]["position"][2], 0.05)
+        self.assertAlmostEqual(b["bowl_wall_0"]["dims"][0] - a["bowl_wall_0"]["dims"][0], 0.10)
 
 
 class CuroboWorld(unittest.TestCase):

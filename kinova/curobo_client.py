@@ -1,12 +1,12 @@
-"""The arm side of motion.planner: curobo -- ask the planner server (kinova/planner_server.py) for a free-space path.
+"""Free-space moves: a collision-free path from the planner server (kinova/planner_server.py), run through our guards.
 
-    from kinova.curobo_client import enabled, plan
-    if enabled():
-        path = plan(start_deg, goal_deg, carrying=False)     # [[7 deg], ...] from start to goal; MoveError if none
+    from kinova.curobo_client import travel
+    travel(conn, goal_deg, "to food_detect_start")          # plan, floor-check, run, settle onto the goal
+    travel(conn, goal_deg, "swing", carrying=True)          # with a piece on the utensil
 
-The path is only geometry here: it is run through kinova.motion.run_path like every planned path (the arm's speed
-limits and the controller's validation set its timing; the torque watch and telemetry as always), and is
-thinned to the joint step the controller is happy with.
+The path is geometry only: kinova.motion.run_path times it under the arm's speed limits, has the controller validate
+it, and watches the torque on the way. Every waypoint's utensil tip must also clear our own floor
+(scene.tip_floor: above the table, above the bowl's top over the bowl) -- cuRobo's world is a model of the scene.
 """
 
 from __future__ import annotations
@@ -16,12 +16,12 @@ import urllib.request
 
 import numpy as np
 
-from kinova.scripts.safe_move import MoveError, fold
+import runlog
+from kinova.scripts.safe_move import MoveError, fold, goto, joints
 from settings import cfg
 
-
-def enabled() -> bool:
-    return str(cfg.motion.get("planner", "scripted")) == "curobo"
+log = runlog.get("curobo")
+FS = cfg.motion.free_space
 
 
 def _post(path: str, body: dict, timeout: float) -> dict:
@@ -32,7 +32,7 @@ def _post(path: str, body: dict, timeout: float) -> dict:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read())
     except OSError as e:
-        raise MoveError("the planner server is not answering (%s) -- make planner, or motion.planner: scripted" % e)
+        raise MoveError("the planner server is not answering (%s) -- make planner" % e)
 
 
 def refresh_world() -> None:
@@ -40,45 +40,57 @@ def refresh_world() -> None:
     _post("/world", {}, 60.0)
 
 
-def check_points(conn, path) -> tuple[float, float]:
-    """(highest, lowest) utensil tip z at a planned path's waypoints; refuses one below scene.tip_floor() -- cuRobo's
-    world is a model: this is our own floor (above the bowl's top over it, above the table elsewhere), checked."""
-    from kinova import scene
-    from kinova.motion import fk_tip
-    tips = [fk_tip(conn, q) for q in path]
-    for t in tips:
-        if t[2] < scene.tip_floor(t[0], t[1]) - 1e-6:
-            raise MoveError("the planned path takes the utensil tip to z %.3f at (%.3f, %.3f), below the floor there "
-                            "(z %.3f) -- not moving" % (t[2], t[0], t[1], scene.tip_floor(t[0], t[1])))
-    zs = [float(t[2]) for t in tips]
-    return max(zs), min(zs)
-
-
-def planned(conn, start, goal, label: str, dps: float, torque_limit: float, carrying: bool = False,
-            go: bool = True) -> list[list[float]]:
-    """A cuRobo path from start to goal, floor-checked, then validated and run by kinova.motion.run_path (the arm's
-    speed limits, the controller's validation, the torque watch, the telemetry)."""
-    import logging
-    from kinova.motion import run_path
-    path = plan(start, goal, carrying=carrying)
-    hi, lo = check_points(conn, path)
-    logging.getLogger("rammp.curobo").info("    %-26s cuRobo: %d waypoints, utensil tip z %.3f .. %.3f", label, len(path), lo, hi)
-    run_path(conn, path, dps, label, go, torque_limit=torque_limit)
-    return path
-
-
 def plan(start_deg, goal_deg, carrying: bool = False) -> list[list[float]]:
+    """A collision-free joint path from start to goal (deg), thinned to motion.free_space.path_step_deg."""
     start = [fold(v) for v in start_deg]
-    goal = [s + fold(g - s) for s, g in zip(start, (fold(v) for v in goal_deg))]   # the short way, as goto does
-    r = _post("/plan", dict(start=start, goal=goal, carrying=bool(carrying)), float(cfg.motion.planner_curobo.timeout_s))
+    goal = [s + fold(g - s) for s, g in zip(start, (fold(v) for v in goal_deg))]   # each joint the short way
+    r = _post("/plan", dict(start=start, goal=goal, carrying=bool(carrying)), float(FS.timeout_s))
     if not r.get("ok"):
         raise MoveError("cuRobo found no collision-free path (%s): %s" % (r.get("status"), r.get("error")))
     path = np.array(r["path"], float)
     path[0] = start                                          # exactly from here (the planner starts within 1e-4)
-    keep = [0]
-    step = float(cfg.motion.planner_curobo.path_step_deg)
-    for i in range(1, len(path) - 1):                        # thin to ~step deg on the furthest joint
+    keep, step = [0], float(FS.path_step_deg)
+    for i in range(1, len(path) - 1):
         if np.abs(path[i] - path[keep[-1]]).max() >= step:
             keep.append(i)
     keep.append(len(path) - 1)
     return [[float(v) for v in path[i]] for i in keep]
+
+
+def check_floor(conn, path) -> tuple[float, float]:
+    """(lowest, highest) utensil tip z at the path's waypoints; refuses one below scene.tip_floor()."""
+    from kinova import scene
+    from kinova.motion import fk_tip
+    tips = [fk_tip(conn, q) for q in path]
+    for t in tips:
+        floor = scene.tip_floor(t[0], t[1])
+        if t[2] < floor - 1e-6:
+            raise MoveError("the planned path takes the utensil tip to z %.3f at (%.3f, %.3f), below the floor there "
+                            "(z %.3f) -- not moving" % (t[2], t[0], t[1], floor))
+    zs = [float(t[2]) for t in tips]
+    return min(zs), max(zs)
+
+
+def travel(conn, goal, label: str, carrying: bool = False, go: bool = True, dps: float | None = None,
+           torque_limit: float | None = None, max_tilt: float | None = None) -> list[list[float]]:
+    """Plan from where the arm is to goal, check it, run it, settle exactly onto goal. go=False: plan and check only."""
+    from kinova.motion import max_step, run_path
+    q = joints(conn)
+    settle = dict(speed=float(cfg.motion.settle_dps), label="settle %s" % label)
+    if max_tilt is not None:
+        settle["max_tilt"] = max_tilt
+    if max_step(q, goal) <= float(cfg.motion.near_pose_deg):
+        if go:
+            goto(conn, goal, **settle)
+        return [q, list(goal)]
+    path = plan(q, goal, carrying=carrying)
+    lo, hi = check_floor(conn, path)
+    log.info("    %-26s planned: %d waypoints, utensil tip z %.3f .. %.3f%s", label, len(path), lo, hi,
+             "" if go else "  (plan only)")
+    runlog.event("planned", label=label, waypoints=len(path), tip_z=[lo, hi], carrying=carrying)
+    if not go:
+        return path
+    run_path(conn, path, float(dps or FS.dps), label, True,
+             torque_limit=float(torque_limit or cfg.guards.torque_step_nm.free_space))
+    goto(conn, goal, **settle)
+    return path

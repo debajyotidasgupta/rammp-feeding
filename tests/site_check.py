@@ -2,7 +2,10 @@
 """Is a site's geometry workable? The whole bite, planned and run against REAL kinematics, without the arm.
 
     .venv/bin/python tests/site_check.py                      # the 2026-09-30 site (tests/sites/site_20260930.yaml)
-    .venv/bin/python tests/site_check.py tests/sites/<x>.yaml [--render]
+    .venv/bin/python tests/site_check.py tests/sites/<x>.yaml [--render] [--dump motions.json]
+        [--planner stub|curobo]                               # stub (default): tests/stub_planner.py, no GPU;
+                                                              # curobo: the real planner server (a CUDA box)
+        [--camera <profile>] [--scene-camera <profile>|none]  # another wrist / scene camera than the site's
 
 The arm stages (sequence / acquire / deliver) run as on the robot -- their own checks, their own refusals --
 against tests/mujoco_kortex.py (the Gen3's kinematics: IK / FK anywhere, unlike fake_kortex, which only knows the
@@ -46,10 +49,25 @@ STATE, RUNS = WORK / "state", WORK / "runs"
 STATE.mkdir(); RUNS.mkdir()
 os.environ["RAMMP_NO_LOCAL"] = "1"
 os.environ["RAMMP_STATE_DIR"] = str(STATE)
-for k, v in site.get("profiles", {}).items():
+
+
+def _arg(name: str, default=None):
+    return sys.argv[sys.argv.index(name) + 1] if name in sys.argv else default
+
+
+profiles = dict(site.get("profiles", {}))
+profiles["camera"] = _arg("--camera", profiles.get("camera", "kinova_wrist"))
+profiles["scene_camera"] = _arg("--scene-camera", profiles.get("scene_camera", ""))
+if profiles["scene_camera"] == "none":
+    profiles["scene_camera"] = ""
+for k, v in profiles.items():
     os.environ["RAMMP_" + k.upper()] = str(v)
-PLANNER = sys.argv[sys.argv.index("--planner") + 1] if "--planner" in sys.argv else "scripted"
-sets = dict(site.get("set", {}), **{"deployment.runs_dir": str(RUNS), "motion.planner": PLANNER})
+PLANNER = _arg("--planner", "stub")
+sets = dict(site.get("set", {}), **{"deployment.runs_dir": str(RUNS)})
+if not profiles["scene_camera"]:                 # no scene camera: the site's workspace is the config's
+    sets.update({"workspace.table_height_m": site["workspace"]["table_z"],
+                 "workspace.bowl_centre_m": site["workspace"]["bowl_xy"],
+                 "workspace.bowl_height_m": round(site["workspace"]["bowl_top_z"] - site["workspace"]["table_z"], 4)})
 os.environ["RAMMP_SET"] = ",".join("%s=%s" % (k, json.dumps(v) if isinstance(v, list) else v) for k, v in sets.items())
 
 from settings import cfg  # noqa: E402
@@ -78,7 +96,8 @@ def depth_frame() -> np.ndarray:
     floor = cam_z - (ws["table_z"] + 0.007)
     top = cam_z - (ws["table_z"] + 0.007 + float(site["food"]["height_m"]))
     vp, tip, zt = np.array(c.vertical_vp, float), np.array(cfg.utensil.tip_px, float), float(cfg.utensil.camera_to_tip_m)
-    px = vp + (tip - vp) * zt / top
+    from feeding.camera import colour_to_depth
+    px = colour_to_depth(*(vp + (tip - vp) * zt / top), top)   # the colour pixel, in the depth frame
     yy, xx = np.mgrid[0:int(d.height), 0:int(d.width)]
     out = np.full((int(d.height), int(d.width)), 1000 * floor)
     r = float(site["food"]["size_m"]) / 2 * float(d.fx) / top
@@ -178,11 +197,41 @@ def render(tag: str) -> None:
 SEQ, ACQ, DEL = "kinova.scripts.sequence", "kinova.scripts.acquire", "kinova.scripts.deliver"
 
 
+def stub_via(start, goal, carrying):
+    """The stub planner's corners: up from the start, across, down onto the goal -- each corner the start's / goal's
+    tool position raised to above both (and the table's clearance), the orientation held, by this arm's IK."""
+    a, b = ARM.fk_pose(start), ARM.fk_pose(goal)
+    top = max(a[2], b[2], ws["table_z"] + 0.25) + 0.05
+
+    def ladder(p, q, k=6):                       # straight up in steps (a joint line between far poses bows)
+        out = []
+        for z in np.linspace(p[2], top, k + 1)[1:]:
+            q = ARM.solve([p[0], p[1], z] + p[3:], q)
+            if q is None:
+                break
+            out.append(q)
+        return out
+    up, down = ladder(a, start), ladder(b, goal)[::-1]
+    across = []
+    if up and down:                              # over at the top: the joint line's poses, held at that height
+        qa, qb = np.array(up[-1]), np.array(down[0])
+        for s in np.linspace(0, 1, 12)[1:-1]:
+            qs = qa + (qb - qa) * s
+            p = ARM.fk_pose(list(qs))
+            q = ARM.solve([p[0], p[1], top] + p[3:], list(qs))
+            if q is not None:
+                across.append(q)
+    return up + across + down
+
+
 def start_planner():
-    """motion.planner: curobo -- the planner server, on this run's config and runs dir (a CUDA box: the
-    curobo-eval container). Returns the process; the bite waits until cuRobo is warm."""
+    """--planner curobo: the planner server, on this run's config and runs dir (a CUDA box: the curobo-eval
+    container); stub: tests/stub_planner.py in a thread. The bite waits until it answers."""
+    if PLANNER == "stub":
+        import stub_planner
+        stub_planner.serve(int(cfg.deployment.servers.planner_port), stub_via)
+        return None
     import subprocess
-    import time
     import urllib.request
     log = open(WORK / "planner_server.log", "w")
     proc = subprocess.Popen([sys.executable, "-m", "kinova.planner_server"], cwd=ROOT, env=dict(os.environ),
@@ -202,8 +251,9 @@ def start_planner():
 
 
 def main() -> int:
-    print("site check: %s  (planner: %s)" % (SITE.name, PLANNER), file=sys.__stderr__)
-    planner = start_planner() if PLANNER == "curobo" else None
+    print("site check: %s  (planner: %s; camera %s, scene camera %s)" % (SITE.name, PLANNER, profiles["camera"],
+          profiles["scene_camera"] or "none"), file=sys.__stderr__)
+    planner = start_planner()
     print("  bowl %s, table z %.3f, bowl top z %.3f, overlook camera %.2f m above the table, mouth %s" % (
         ws["bowl_xy"], ws["table_z"], ws["bowl_top_z"], float(cfg.workspace.overlook_camera_height_m),
         site["user"]["mouth_m"]), file=sys.__stderr__)

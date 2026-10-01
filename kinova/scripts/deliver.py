@@ -7,29 +7,15 @@
     python -m kinova.scripts.deliver bite      [--timeout 60]
     python -m kinova.scripts.deliver retract   [--validate-only]
 
-Runs in the driver container. `feeding/deliver.sh` orchestrates it with the mouth detection on the host.
-Built 2026-09-24 with the user, one leg at a time; each choice below is theirs unless it says otherwise.
+Runs in the driver container; feeding/deliver.sh orchestrates it with the mouth detection on the host.
 
-swing     from the scoop end: lift 175 mm (so the swing clears the bowl -- at +60 mm it touched it, and the
-          user's head sat at the top of the image), then J1 -90 toward the user WHILE retracting the utensil
-          along its own axis (in parallel, never one then the other), as far as the arm allows (120 mm). The
-          utensil stays level, food side up: a 90 deg camera roll was tried and rejected -- it turns the food
-          sideways for the bite. The image is rolled 90 deg instead, and rotated upright in software.
-approach  (detected from 50 mm to the user's right -- the swing ends there) straight line, utensil orientation held,
-          to the utensil tip 80 mm short of the mouth (80, not 50:
-          safe for any cube-sized food piece) and 10 mm lower than the detection (it felt nearer the nose).
-          Computed ONLY from a detection made at this pose, newer than its capture, under 2 min old. A
-          stale second file once let an approach run to an old reading. Mouth: the mouth box when it is
-          anatomically plausible (the detector has returned a full-frame "mouth" with the mouth in plain
-          view); else exit 3 so the caller sidesteps and looks again; the nose estimate only when allowed.
-sidestep  horizontally AWAY from the user (-Y), orientation held, when the food hides the mouth.
-bite      read-only: the controller's tool-force estimate against a baseline at rest, above 1 N for 0.1 s
-          (user's threshold; one recorded bite peaked at 5.7 N, non-bite bumps reached 1.0-1.1 N).
-retract   (fast: no food, moving away) back off along the utensil to the swing's end pose (does NOT stop on a torque step: moving away
-          from the face is the safe direction, and stopping could leave the food in the mouth), reverse the
-          swing, go down to the scoop end + 80 mm steering the arm back into the scoop's own shape, then the
-          proven joint move to food_detect_start. Without the steering the joint move dips the tip to the
-          bowl floor (222 mm); with it, never below ~340 mm.
+swing     from the scoop end to the user, one cuRobo path carrying the piece (swing_goal: where it ends).
+approach  from a fresh detection made at this pose: a straight line, the utensil's orientation held, to the tip
+          delivery.stop_m short of the mouth and delivery.aim_dz_m below it. Exit 3 when the mouth is not usable
+          (sidestep and look again), 5 when its depth is not plausibly a face at the utensil.
+sidestep  horizontally away from the user (-Y), orientation held, when the food hides the mouth.
+bite      read-only: the tool-force estimate against a baseline at rest, above delivery.bite_n for bite_hold_s.
+retract   straight back from the mouth to the swing's end, then one cuRobo path to food_detect_start.
 
 Exit codes: 0 done, 1 stopped (nothing further moved), 3 mouth not usable (sidestep and look again), 4 no bite,
 5 the depth is not plausibly a face at the fork (look again from here).
@@ -39,12 +25,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 import time
-from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Sequence
+from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
 
@@ -52,11 +36,10 @@ import runlog
 from kinova import scene
 from kinova.connection import kinova_connection
 from settings import cfg
-from feeding.camera import CAM_IN_TOOL, COLOUR_SIZE, CXC, CYC, FXC, FYC, cam_to_tool
-from kinova.motion import (R_from_kortex, Rz, _ik, axis, dps_for, fk_tip, homotopy, margin, max_step, run_path,
-                           tip_in_tool)
+from feeding.camera import COLOUR_SIZE, CXC, CYC, FXC, FYC, cam_to_tool
+from kinova.motion import R_from_kortex, Rz, _ik, axis, dps_for, homotopy, margin, max_step, run_path, tip_in_tool
 from kinova import curobo_client
-from kinova.scripts.safe_move import Joints, MoveError, fold, goto, goto_cartesian, joints, tool_pose
+from kinova.scripts.safe_move import Joints, MoveError, goto_cartesian, joints, tool_pose
 
 if TYPE_CHECKING:
     from kinova.connection import KinovaConnection
@@ -64,197 +47,88 @@ if TYPE_CHECKING:
 log = runlog.get("deliver")
 
 DL, G = cfg.delivery, cfg.guards.torque_step_nm
-LIFT_M = float(DL.lift_m)                         # above the scoop end, before the swing (60 mm touched the bowl)
+LIFT_M = float(DL.lift_m)
 RETRACT_TRIES = tuple(float(x) for x in DL.retract_tries_m)
 SWING_DPS = float(DL.swing_dps)
 DETECT_SIDESTEP_M = float(DL.detect_sidestep_m) if cfg.features.detect_from_the_side else 0.0
-STOP_M = float(DL.stop_m)                         # utensil tip short of the mouth
-AIM_DZ = float(DL.aim_dz_m)                       # below the detected mouth
+STOP_M = float(DL.stop_m)
+AIM_DZ = float(DL.aim_dz_m)
 APPROACH_MPS = float(DL.approach_mps)
 MAX_APPROACH_M = float(DL.max_approach_m)
-MAX_SHIFT_S = float(DL.detection_max_age_s)       # detection must be this fresh
+MAX_SHIFT_S = float(DL.detection_max_age_s)
 NOSE_TO_MOUTH = float(DL.nose_to_mouth)
 MOUTH_BEHIND_NOSE = float(DL.mouth_behind_nose_m)
 BITE_N = float(DL.bite_n)
 BITE_HOLD_S = float(DL.bite_hold_s)
-# retract carries no food and moves away from the user: fast
 RETRACT_MPS = float(DL.retract.back_off_mps)
-RETRACT_SWING_DPS = float(DL.retract.swing_dps)
-RETRACT_DOWN_DPS = float(DL.retract.down_dps)
 RETRACT_HOME_DPS = float(DL.retract.home_dps)
 RETRACT_TORQUE_NM = float(G.retract)
 SWING_TORQUE_NM = float(G.swing)
 APPROACH_TORQUE_NM = float(G.approach)
-MIN_TIP_Z = scene.min_tip_z()                     # the return's joint move keeps the utensil tip above this (table-relative)
-UP_W, UP_H = COLOUR_SIZE[1], COLOUR_SIZE[0]      # the upright (rotated) image the face detector sees
+UP_W, UP_H = COLOUR_SIZE[1], COLOUR_SIZE[0]       # the upright (rotated) image the face detector sees
 MC = DL.mouth_check
 LEVEL_TOL = float(DL.level_tol)                   # |utensil axis z| below this = level
 POINTING_COS = float(DL.pointing_tol_cos)         # the utensil points along a direction: cos of the angle off it
 ARRIVED_M = float(DL.arrived_m)                   # closer than this to a goal = already there
-DESCEND_ABOVE_M = float(DL.retract.descend_to_above_scoop_end_m)   # the retract's descent ends this far above the
-                                                                   # scoop end; the lift's arm shape there steers it
 BITE_BASELINE_N = int(DL.bite_baseline_samples)
 
 STATE_DIR = Path(os.environ.get("RAMMP_STATE_DIR", "/tmp"))   # what the steps hand each other, across bites
-STATE = STATE_DIR / "deliver_state.json"
-# The scoop always ends on the calibrated scoop_end pose, so the swing -- and the retract's reverse swing and
-# descent -- are the same joint paths every time: planned once, then reused (planning cost ~10 s of stillness)
-SWING_CACHE = STATE_DIR / "deliver_swing_plan.json"
-RETRACT_CACHE = STATE_DIR / "deliver_retract_plan.json"
-
-
-# ------------------------------------------------------------------ what the steps hand each other
-
-@dataclass
-class DeliveryState:
-    """Written by the swing, read by the retract (STATE): how to retrace the way back."""
-    start_tool: list[float]        # tool xyz at the top of the lift, where the swing started
-    start_rpy: list[float]         # tool orientation there (the scoop end's)
-    retract_m: float               # how far the swing retracted the utensil along its axis
-    end_tool: list[float]          # tool xyz where the swing ended (the back-off returns here)
-    q80: Joints                    # the arm's shape 80 mm up the lift: the descent steers back into it
-    scoop_end_z: float             # tool z at the scoop end
-
-    def save(self) -> None:
-        STATE.write_text(json.dumps(asdict(self)))
-
-    @classmethod
-    def load(cls) -> "DeliveryState":
-        if not STATE.exists():
-            raise MoveError("no swing recorded (%s) -- cannot retrace" % STATE)
-        return cls(**json.loads(STATE.read_text()))
-
-
-def _cached(cache: Path, q_start: Sequence[float], tol: float) -> dict | None:
-    """A cached plan, if it was planned from (within tol deg of) q_start."""
-    try:
-        c = json.loads(cache.read_text())
-    except (OSError, ValueError):
-        return None
-    if max_step(c["q_start"], q_start) > tol:
-        return None
-    return c
-
-
-@dataclass
-class SwingPlan:
-    """The lift + swing + step-right joint path, cached (SWING_CACHE) for the next bite."""
-    q_start: Joints
-    path: list[Joints]
-    retract_m: float
-    q80: Joints
-
-    def save(self) -> None:
-        SWING_CACHE.write_text(json.dumps(asdict(self)))
-
-    @classmethod
-    def cached(cls, q_start: Joints) -> "SwingPlan | None":
-        c = _cached(SWING_CACHE, q_start, tol=float(DL.plan_cache_tol_deg.swing))
-        return cls(**c) if c else None
-
-
-@dataclass
-class RetractPlan:
-    """The reverse swing and the descent, cached (RETRACT_CACHE) for the next bite."""
-    q_start: Joints
-    path2: list[Joints]            # reverse swing
-    path3: list[Joints]            # down to the scoop end + 80 mm
-    lo: float                      # lowest utensil-tip z on the final joint move home
-
-    def save(self) -> None:
-        RETRACT_CACHE.write_text(json.dumps(asdict(self)))
-
-    @classmethod
-    def cached(cls, q_start: Joints) -> "RetractPlan | None":
-        c = _cached(RETRACT_CACHE, q_start, tol=float(DL.plan_cache_tol_deg.retract))
-        return cls(**c) if c else None
-
-
-def swing_tip(tipS: np.ndarray, axS: np.ndarray, retract_m: float, u: float) -> np.ndarray:
-    """The swing's utensil-tip path at progress u: +90 deg about world z (== J1 -90), retraction front-loaded."""
-    return Rz(90.0 * u) @ (tipS - retract_m * (1 - (1 - u) ** 2) * axS)
+STATE = STATE_DIR / "deliver_state.json"          # the swing's end: the retract backs off to it
+GOAL_CACHE = STATE_DIR / "deliver_swing_goal.json"   # the scoop always ends on the scoop end: its goal is reused
 
 
 # ------------------------------------------------------------------ swing
 
+def swing_tip(tipS: np.ndarray, axS: np.ndarray, retract_m: float, u: float) -> np.ndarray:
+    """The utensil tip at progress u of the turn toward the user: +90 deg about the base's z, retracting."""
+    return Rz(90.0 * u) @ (tipS - retract_m * (1 - (1 - u) ** 2) * axS)
+
+
+def swing_goal(conn: KinovaConnection, q0: Joints, T0: np.ndarray, R0: np.ndarray) -> Joints:
+    """Where the swing ends, the arm's shape included: from the scoop end, LIFT_M up, turned 90 deg toward the
+    user (the utensil level, food side up) retracted along itself as far as the joints allow, then
+    DETECT_SIDESTEP_M to the user's right (the food out of the camera's view of the mouth). Continuous IK along
+    that geometry -- the joints only, cuRobo plans the way there. Cached for the next bite."""
+    try:
+        c = json.loads(GOAL_CACHE.read_text())
+        if max_step(c["q_start"], q0) <= float(DL.goal_cache_tol_deg):
+            return c["goal"]
+    except (OSError, ValueError, KeyError):
+        pass
+    lift, err = homotopy(conn, q0, lambda s: (T0 + np.array([0, 0, LIFT_M * s]), R0), 35)
+    if lift is None:
+        raise MoveError("the %.0f mm lift is not reachable (%s) -- nothing moved" % (1000 * LIFT_M, err))
+    tip0, ax0, tip_t = T0 + np.array([0, 0, LIFT_M]) + R0 @ tip_in_tool(), axis(R0), tip_in_tool()
+    for retract_m in RETRACT_TRIES:
+        def at(s: float, r: float = retract_m) -> tuple[np.ndarray, np.ndarray]:
+            return swing_tip(tip0, ax0, r, s) - Rz(90.0 * s) @ R0 @ tip_t, Rz(90.0 * s) @ R0
+        turn, err = homotopy(conn, lift[-1], at, 60)
+        if turn and min(margin(q) for q in turn) >= min(3.0, margin(lift[-1]) - 0.5):
+            break
+    else:
+        raise MoveError("no swing toward the user from here -- nothing moved")
+    Ts, Rs = at(1.0)
+    side, _ = homotopy(conn, turn[-1], lambda s: (Ts - np.array([0, DETECT_SIDESTEP_M * s, 0]), Rs), 8)
+    goal = (side or turn)[-1]
+    log.info("    swing goal: lift %.0f mm, turn retracting %.0f mm, %.0f mm to the user's right", 1000 * LIFT_M,
+             1000 * retract_m, 1000 * DETECT_SIDESTEP_M if side else 0)
+    GOAL_CACHE.write_text(json.dumps(dict(q_start=q0, goal=goal)))
+    return goal
+
+
 def swing(conn: KinovaConnection, validate_only: bool = False) -> None:
-    """Lift, swing (retracting), and step to the user's right -- ONE continuous validated trajectory, no
-    stops between them (user, 2026-09-24: 'painfully slow ... these need not be waited for')."""
-    p = tool_pose(conn)
-    q0 = joints(conn)
+    """From the scoop end to the user, carrying the piece: one cuRobo path to swing_goal()."""
+    p, q0 = tool_pose(conn), joints(conn)
     R0 = R_from_kortex(*p[3:])
     if axis(R0)[1] < POINTING_COS:
         raise MoveError("utensil is not pointing at the user (+Y) -- run from the end of the scoop")
-    # The swing turns about the BASE axis: it was built and validated for scoops ending on the base's
-    # -Y side (y -0.04 .. -0.10). From a bowl in front of the user (+Y) the same turn would sweep the
-    # utensil through where the user's face is. Refuse anything outside the validated region.
-    y_lo, y_hi = cfg.bowl.swing_start_y_range_m
-    if not curobo_client.enabled() and not y_lo < p[1] < y_hi:     # cuRobo: the user is in its world instead
-        raise MoveError("scoop ended at y %+.3f, outside the region the swing was validated for (%.2f..%.2f): "
-                        "from here the swing could sweep into the user -- not moving" % (p[1], y_lo, y_hi))
-    plan = SwingPlan.cached(q0)
-    if plan:
-        plan.path = [q0] + plan.path[1:]
-        log.info("    lift + swing + step right: planned before, reused (joint margin >= %.1f deg)",
-                 min(margin(q) for q in plan.path))
-    else:
-        plan = _plan_swing(conn, q0, np.array(p[:3]), R0)
-        plan.save()
-    if curobo_client.enabled():               # the same end pose; the way there collision-free, with the food
-        plan.path = curobo_client.plan(q0, plan.path[-1], carrying=True)
-        curobo_client.check_points(conn, plan.path)
-        log.info("    lift + swing + step right: cuRobo, %d waypoints (carrying)", len(plan.path))
-    _run_swing(conn, plan, p, validate_only)
-
-
-def _plan_swing(conn: KinovaConnection, q0: Joints, T0: np.ndarray, R0: np.ndarray) -> SwingPlan:
-    # 1. lift: a steered joint path -- from a scoop that ends nearer the base, the controller's own straight
-    #    lift runs a joint out at +70 mm; steering the redundancy reaches 175
-    n_lift = 35
-    lift, err = homotopy(conn, q0, lambda s: (T0 + np.array([0, 0, LIFT_M * s]), R0), n_lift)
-    if lift is None:
-        raise MoveError("the %.0f mm lift is not reachable (%s) -- nothing moved" % (1000 * LIFT_M, err))
-    q80 = lift[round(n_lift * DESCEND_ABOVE_M / LIFT_M)]        # the return's arm shape, for retract
-    # 2. swing toward the user while retracting along the utensil, as far as the joints allow
-    tip0 = T0 + np.array([0, 0, LIFT_M]) + R0 @ tip_in_tool()
-    ax0 = axis(R0)
-    best = None
-    for retract_m in RETRACT_TRIES:
-        def at(s: float, r: float = retract_m) -> tuple[np.ndarray, np.ndarray]:
-            return swing_tip(tip0, ax0, r, s) - Rz(90.0 * s) @ R0 @ tip_in_tool(), Rz(90.0 * s) @ R0
-        path, err = homotopy(conn, lift[-1], at, 60)
-        if path and min(margin(q) for q in path) < min(3.0, margin(lift[-1]) - 0.5):
-            err = "joint-limit margin only %.1f deg" % min(margin(q) for q in path)
-            path = None
-        if path:
-            best = (retract_m, path)
-            break
-    if best is None:
-        raise MoveError("no swing toward the user from here -- nothing moved")
-    retract_m, swing_path = best
-    # 3. to the user's right, so the food is not between the camera and the mouth
-    Ts, Rs = (swing_tip(tip0, ax0, retract_m, 1.0) - Rz(90.0) @ R0 @ tip_in_tool(), Rz(90.0) @ R0)
-    side, err = homotopy(conn, swing_path[-1], lambda s: (Ts - np.array([0, DETECT_SIDESTEP_M * s, 0]), Rs), 8)
-    if side is None:
-        log.info("    (the %.0f mm step to the user's right is not reachable -- detecting from the swing's end)",
-                 1000 * DETECT_SIDESTEP_M)
-        side = [swing_path[-1]]
-    path = lift + swing_path[1:] + side[1:]
-    log.info("    lift %.0f mm + swing retracting %.0f mm + %.0f mm to the user's right: one trajectory, joint margin >= %.1f deg",
-             1000 * LIFT_M, 1000 * retract_m, 1000 * DETECT_SIDESTEP_M if len(side) > 1 else 0,
-             min(margin(q) for q in path))
-    return SwingPlan(q_start=q0, path=path, retract_m=retract_m, q80=q80)
-
-
-def _run_swing(conn: KinovaConnection, plan: SwingPlan, start: Sequence[float], validate_only: bool) -> None:
-    run_path(conn, plan.path, SWING_DPS, "lift + swing + step right", not validate_only, torque_limit=SWING_TORQUE_NM)
-    if validate_only:
-        return
-    end = tool_pose(conn)          # the retract's back-off returns here
-    st = DeliveryState(start_tool=[start[0], start[1], start[2] + LIFT_M], start_rpy=list(start[3:]),
-                       retract_m=plan.retract_m, end_tool=list(end[:3]), q80=plan.q80, scoop_end_z=start[2])
-    st.save()
-    runlog.event("swing", retract_m=plan.retract_m, end_tool=end)
+    goal = swing_goal(conn, q0, np.array(p[:3]), R0)
+    curobo_client.travel(conn, goal, "swing to the user", carrying=True, go=not validate_only, dps=SWING_DPS,
+                         torque_limit=SWING_TORQUE_NM, max_tilt=95.0)
+    if not validate_only:
+        end = tool_pose(conn)
+        STATE.write_text(json.dumps(dict(end_tool=list(end[:3]))))
+        runlog.event("swing", end_tool=end)
 
 
 # ------------------------------------------------------------------ present
@@ -303,12 +177,11 @@ def _mouth_box_problem(m: dict | None, n: dict, ncx: float, ncy: float, nw: floa
 
 
 def _keep_mouth(mouth: np.ndarray) -> None:
-    """The measured mouth, for the planner's world (motion.planner: curobo keeps the user in it)."""
+    """The measured mouth, for the planner's world (the user is an obstacle in it)."""
     try:
         runs = Path(os.path.expanduser(str(cfg.deployment.runs_dir)))
         (runs / "mouth_state.json").write_text(json.dumps(dict(mouth_base=[float(v) for v in mouth], t=time.time())))
-        if curobo_client.enabled():
-            curobo_client.refresh_world()
+        curobo_client.refresh_world()
     except (OSError, MoveError) as e:
         log.info("    (the mouth not kept for the planner: %s)", e)
 
@@ -441,150 +314,29 @@ def bite(conn: KinovaConnection, timeout_s: float) -> int:
 # ------------------------------------------------------------------ retract
 
 def retract(conn: KinovaConnection, validate_only: bool = False) -> None:
-    """Back along the way the swing came, then down and home to food_detect_start (see the module docstring)."""
-    st = DeliveryState.load()
+    """Away from the mouth straight back along the utensil to where the swing ended (never stopped on torque:
+    moving away is the safe direction, and stopping could leave the food in the mouth), then one cuRobo path to
+    food_detect_start."""
     go = not validate_only
-    p = tool_pose(conn)
-    q0 = joints(conn)
-    T0 = np.array(p[:3])
-    R0 = R_from_kortex(*p[3:])
-    if abs(axis(R0)[2]) > LEVEL_TOL:
-        raise MoveError("utensil is not level -- not at the user")
-    RS = R_from_kortex(*st.start_rpy)
-    axS = axis(RS)
-    TS = np.array(st.start_tool)
-    # resuming after legs 1-2 (utensil already turned back, at the swing's start): straight to leg 3.
-    # Leg 1 from here would "back off" toward the swing's END, i.e. toward the user.
-    resumed = axis(R0) @ axS > POINTING_COS and np.linalg.norm(T0 - TS) < float(DL.retract.resume_tol_m)
-    if not resumed and axis(R0) @ axS > 0.5:
-        raise MoveError("utensil is neither at the user nor back at the swing's start -- not guessing a path")
-    Te = np.array(st.end_tool)
-    L = 0.0 if resumed else np.linalg.norm(Te - T0)
-    if L > float(DL.retract.max_from_swing_end_m):
-        raise MoveError("%.0f mm from the swing's end -- not retracing from here" % (1000 * L))
-    # 1. back off along the utensil, to where the swing ended
-    if resumed:
-        log.info("    legs 1-2 already done (at the swing's start): going home")
-        q1 = q0
-    else:
-        q1 = _back_off(conn, q0, T0, R0, Te, L, go)
-    if curobo_client.enabled() and not resumed:   # 2+3. one collision-free path back to food_detect_start
-        qd = scene.overlook_joints(conn)
-        q_now = joints(conn) if go else q1
-        curobo_client.planned(conn, q_now, qd, "back to food_detect_start", RETRACT_HOME_DPS, RETRACT_TORQUE_NM,
-                              carrying=False, go=go)
-        if go:
-            goto(conn, qd, speed=float(cfg.motion.settle_dps), label="settle on food_detect_start")
-            STATE.unlink()
-            runlog.event("retracted", planner="curobo")
-        return
-    # 2. reverse the swing
-    rc = RetractPlan.cached(q1)
-    if resumed:
-        q2, path2 = q0, None
-    else:
-        q2, path2 = _reverse_swing(conn, st, q1, T0, R0, Te, L, RS, TS, rc, go)
-    # 3. down to the scoop end + 80 mm in the scoop's own arm shape, then the proven joint move
-    _down_and_home(conn, st, q1, q2, path2, RS, TS, rc, resumed, go)
-
-
-def _back_off(conn: KinovaConnection, q0: Joints, T0: np.ndarray, R0: np.ndarray, Te: np.ndarray, L: float,
-              go: bool) -> Joints:
-    """Leg 1: straight back along the utensil to the swing's end. Never stops on torque (moving away)."""
-    if L <= ARRIVED_M:
-        return q0
-    path, err = homotopy(conn, q0, lambda s: (T0 + (Te - T0) * s, R0), 40)
-    if path is None:
-        raise MoveError("back off " + err + " -- nothing moved")
-    run_path(conn, path, dps_for(path, L, RETRACT_MPS), "back off %.0f mm" % (1000 * L), go, torque_stop=False)
-    return joints(conn) if go else path[-1]
-
-
-def _reverse_swing(conn: KinovaConnection, st: DeliveryState, q1: Joints, T0: np.ndarray, R0: np.ndarray,
-                   Te: np.ndarray, L: float, RS: np.ndarray, TS: np.ndarray, rc: RetractPlan | None,
-                   go: bool) -> tuple[Joints, list[Joints]]:
-    """Leg 2: the swing backwards, from wherever along it the arm is (u0), absorbing any offset e."""
-    tipv_t = tip_in_tool()
-    tipS = TS + RS @ tipv_t
-    axS = axis(RS)
-    R1 = R0 if not go else R_from_kortex(*tool_pose(conn)[3:])
-    ax1 = axis(R1)
-    th = math.degrees(math.atan2(np.cross(axS, ax1)[2], axS @ ax1))
-    u0 = th / 90.0
-    tip1 = (Te if L > ARRIVED_M else T0) + R1 @ tipv_t
-    e = tip1 - swing_tip(tipS, axS, st.retract_m, u0)
-
-    def at2(s: float) -> tuple[np.ndarray, np.ndarray]:
-        u = u0 * (1 - s)
-        R = Rz(90.0 * u) @ RS
-        return swing_tip(tipS, axS, st.retract_m, u) + (1 - s) * e - R @ tipv_t, R
-    if rc:
-        path2 = [q1] + rc.path2[1:]
-        log.info("    reverse swing + descent: planned before, reused")
-        run_path(conn, path2, RETRACT_SWING_DPS, "reverse swing", go, from_here=go or L <= ARRIVED_M,
-                 torque_limit=RETRACT_TORQUE_NM)
-    else:
-        path2, err = homotopy(conn, q1, at2, 60)
-        if path2 is None:
-            raise MoveError("reverse swing " + err)
-        run_path(conn, path2, RETRACT_SWING_DPS, "reverse swing %.0f deg" % th, go, from_here=go or L <= ARRIVED_M,
-                 torque_limit=RETRACT_TORQUE_NM)
-    return (joints(conn) if go else path2[-1]), path2
-
-
-def _down_and_home(conn: KinovaConnection, st: DeliveryState, q1: Joints, q2: Joints, path2: list[Joints] | None,
-                   RS: np.ndarray, TS: np.ndarray, rc: RetractPlan | None, resumed: bool, go: bool) -> None:
-    """Leg 3: down to the scoop end + 80 mm steering into the lift's arm shape, then the joint move home --
-    refused if that joint move would take the utensil tip below MIN_TIP_Z."""
-    Ta = TS
-    Td = np.array([TS[0], TS[1], st.scoop_end_z + DESCEND_ABOVE_M])
-    qd = scene.overlook_joints(conn)
-    if rc and not resumed:
-        path3, lo = [q2] + rc.path3[1:], rc.lo
-    else:
-        path3, err = homotopy(conn, q2, lambda s: (Ta + (Td - Ta) * s, RS), 40, toward=st.q80)
-        if path3 is None:
-            raise MoveError("descent " + err)
-        q_to = scene.overlook_above_joints(conn) if scene.computed() else qd   # low overlook: arrive above it
-        tips = [fk_tip(conn, [fold(x + fold(y - x) * k / 20) for x, y in zip(path3[-1], q_to)]) for k in range(21)]
-        lo = min(float(t[2]) for t in tips)
-        if scene.computed():
-            # a computed overlook is LOW by design (over the bowl): the return's floor is where the tip passes --
-            # above the bowl's top over it, above the table elsewhere (scene.tip_floor), as for make detect's swing
-            low = next((t for t in tips if t[2] < scene.tip_floor(t[0], t[1]) - 1e-6), None)
-            if low is not None:
-                raise MoveError("the return would take the utensil tip to z %.3f at (%.3f, %.3f), below the floor there "
-                                "(z %.3f) -- stopped" % (low[2], low[0], low[1], scene.tip_floor(low[0], low[1])))
-        if not resumed and go:
-            RetractPlan(q_start=q1, path2=path2, path3=path3, lo=lo).save()
-    log.info("    return: utensil tip never below %.0f mm", 1000 * lo)
-    if lo < MIN_TIP_Z and not scene.computed():
-        raise MoveError("the return would dip the utensil tip to %.0f mm -- stopped" % (1000 * lo))
-    run_path(conn, path3, RETRACT_DOWN_DPS, "down to scoop end + 80 mm", go, from_here=go or resumed,
-             torque_limit=RETRACT_TORQUE_NM)
-    if not go:
-        return
-    if scene.computed():                         # a low overlook: above it by joints, then straight down onto it
-        goto(conn, scene.overlook_above_joints(conn), speed=RETRACT_HOME_DPS, label="-> above food_detect_start",
-             max_tilt=95.0, torque_limit=RETRACT_TORQUE_NM)
-        t = scene.overlook_pose()["tool_pose"]
-        goto_cartesian(conn, (t["x_m"], t["y_m"], t["z_m"]), (t["theta_x_deg"], t["theta_y_deg"], t["theta_z_deg"]),
-                       speed=float(cfg.motion.sequence.descend_mps), label="down onto food_detect_start")
-        STATE.unlink()
-        runlog.event("retracted", lowest_tip_z_m=lo)
-        return
-    try:
-        goto(conn, qd, speed=RETRACT_HOME_DPS, label="-> food_detect_start", max_tilt=95.0,
-             torque_limit=RETRACT_TORQUE_NM)      # at 61 deg/s J2's own acceleration stepped 2.7 N.m (2026-09-25)
-    except MoveError as e:
-        # braking at the end of this faster move reads as a torque step (J2 -7.8 -> -4.8 N.m on
-        # 2026-09-24, nothing touched): if the arm is already there, it arrived
-        off = max_step(joints(conn), qd)
-        if "torque" not in str(e) or off > float(DL.retract.home_arrived_deg):
-            raise
-        log.info("    -> food_detect_start: arrived (%.2f deg off); the torque step was the braking", off)
-    STATE.unlink()
-    runlog.event("retracted", lowest_tip_z_m=lo)
+    p, q = tool_pose(conn), joints(conn)
+    T0, R0 = np.array(p[:3]), R_from_kortex(*p[3:])
+    if abs(axis(R0)[2]) <= LEVEL_TOL:                  # at the user
+        if not STATE.exists():
+            raise MoveError("no swing recorded (%s) -- not guessing the way back from the user" % STATE)
+        Te = np.array(json.loads(STATE.read_text())["end_tool"])
+        L = float(np.linalg.norm(Te - T0))
+        if L > float(DL.retract.max_from_swing_end_m):
+            raise MoveError("%.0f mm from the swing's end -- not backing off from here" % (1000 * L))
+        if L > ARRIVED_M:
+            path, err = homotopy(conn, q, lambda s: (T0 + (Te - T0) * s, R0), 40)
+            if path is None:
+                raise MoveError("back off " + err + " -- nothing moved")
+            run_path(conn, path, dps_for(path, L, RETRACT_MPS), "back off %.0f mm" % (1000 * L), go, torque_stop=False)
+    curobo_client.travel(conn, scene.overlook_joints(conn), "back to food_detect_start", go=go, dps=RETRACT_HOME_DPS,
+                         torque_limit=RETRACT_TORQUE_NM)
+    if go:
+        STATE.unlink(missing_ok=True)
+        runlog.event("retracted")
 
 
 # ------------------------------------------------------------------ command line

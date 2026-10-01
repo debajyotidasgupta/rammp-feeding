@@ -4,9 +4,12 @@
     w = world(workspace, mouth, wheelchair_boxes)        # RAMMP-CuRobo's world schema (obstacles: cuboids)
 
 Used by kinova/planner_server.py (the planning service) and tests/curobo_eval.py, so the two cannot drift.
-  table      the workspace's table height (the scene camera's), from x 0.08 m: clear of the arm's base
-  bowl       HOLLOW: a floor and 12 thin wall boxes round its rim (a solid box would put the overlook, the utensil
-             over its opening, inside it)
+  table      the workspace's table height over its footprint (workspace.table_extent_m)
+  bowl       HOLLOW: a floor and 12 wall boxes round its rim (a solid box would put the overlook, the utensil over
+             its opening, inside it)
+  Both grown by the workspace's error_m (the scene camera's reading is trusted to that): the table and the rim
+  that much higher (the table's near edge, beside the arm's base, as much further out), the walls that much
+  thicker either side.
   user       head and torso boxes round the measured mouth (the user faces +x, the arm's side is -y)
   wheelchair the deployment's boxes (sim/assets/wheelchair/wheelchair_boxes.yaml, if present)
   pedestal   the arm's own mount (unpadded)
@@ -38,21 +41,27 @@ def wheelchair_boxes(path: Path = WHEELCHAIR) -> list[dict]:
                  rpy_deg=_f(b.get("rpy_deg", [0, 0, 0]))) for b in (boxes or [])]
 
 
-def world(workspace: dict, mouth, chair: list[dict] | None = None, bowl_radius: float | None = None) -> dict:
+def world(workspace: dict, mouth, chair: list[dict] | None = None, bowl_radius: float | None = None,
+          table_extent: dict | None = None) -> dict:
     """RAMMP-CuRobo's world (base_link frame): table, hollow bowl, user, wheelchair, pedestal."""
-    tz, top = float(workspace["table_z"]), float(workspace["bowl_top_z"])
+    e = float(workspace.get("error_m", 0.0))         # the reading may be this far off: the table and bowl grow by it
+    tz, top = float(workspace["table_z"]) + e, float(workspace["bowl_top_z"]) + e
     bx, by = (float(v) for v in workspace["bowl_xy"])
     r = float(bowl_radius or workspace.get("bowl_radius") or 0.06)
     m = np.asarray(mouth, float)
+    ext = table_extent or dict(x=[0.08, 0.76], y=[-0.30, 0.80])
+    tx, ty = [float(v) for v in ext["x"]], [float(v) for v in ext["y"]]
+    tx[0] += e                                       # the raised table stops short of the arm's own base by as much
     obs = [dict(name="pedestal", position=[0.0, 0.0, -0.05], dims=[0.14, 0.14, 0.04]),
-           dict(name="table", position=[0.42, 0.25, tz - 0.025], dims=[0.68, 1.10, 0.05]),
-           dict(name="bowl_floor", position=[bx, by, tz + 0.004], dims=[2 * r, 2 * r, 0.008]),
+           dict(name="table", position=[sum(tx) / 2, sum(ty) / 2, tz - 0.025], dims=[tx[1] - tx[0], ty[1] - ty[0], 0.05]),
+           dict(name="bowl_floor", position=[bx, by, tz + 0.004], dims=[2 * (r + e), 2 * (r + e), 0.008]),
            dict(name="user_head", position=[m[0] - 0.09, m[1], m[2] + 0.05], dims=[0.20, 0.18, 0.26]),
            dict(name="user_torso", position=[m[0] - 0.12, m[1], m[2] - 0.30], dims=[0.28, 0.42, 0.45])]
     for k in range(12):
         a = 2 * math.pi * k / 12
         obs.append(dict(name="bowl_wall_%d" % k, position=[bx + r * math.cos(a), by + r * math.sin(a), (tz + top) / 2],
-                        dims=[0.006, 2 * r * math.tan(math.pi / 12) + 0.004, top - tz], rpy_deg=[0.0, 0.0, math.degrees(a)]))
+                        dims=[0.006 + 2 * e, 2 * (r + e) * math.tan(math.pi / 12) + 0.004, top - tz],
+                        rpy_deg=[0.0, 0.0, math.degrees(a)]))
     obs += chair if chair is not None else wheelchair_boxes()
     for o in obs:
         o["position"], o["dims"] = _f(o["position"]), _f(o["dims"])

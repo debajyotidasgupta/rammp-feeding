@@ -614,7 +614,6 @@ def poses(a: argparse.Namespace) -> int:
     cal = Path("calibration")
     items = [("feeding_start", json.loads((cal / "home_pose.json").read_text())["joints_deg"]),
              ("food_detect_start", json.loads((cal / "food_detect_pose.json").read_text())["joints_deg"]),
-             ("lift", json.loads((cal / "lift_pose.json").read_text())["joints_deg"]),
              ("scoop_end", list(cfg.bowl.scoop_end.joints_deg))]
     from sim.scene import Food
     lay = Layout.from_config(mouth=(-0.277, 0.306, 0.635), foods=[Food((0.245, 0.245)), Food((0.225, 0.215),

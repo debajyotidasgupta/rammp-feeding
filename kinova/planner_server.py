@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""cuRobo, kept warm behind one HTTP port: collision-free paths for the free-space moves (motion.planner: curobo).
+"""cuRobo, kept warm behind one HTTP port: collision-free paths for the free-space moves.
 
 Runs where torch + cuRobo are (the planner container, `make planner`; on an x86 box docker/Dockerfile.curobo_eval):
 
@@ -12,9 +12,9 @@ Runs where torch + cuRobo are (the planner container, `make planner`; on an x86 
     POST /world                        -> rebuilds the world from the latest workspace / mouth (below); {"ok": true}
 
 It only plans; the arm side runs the path through its own guards (kinova/motion.run_path: the arm's speed limits,
-the controller's validation, the torque watch). The world (kinova/curobo_world.py): the workspace -- the scene
-camera's bowl and table (runs_dir/scene_state.json, else rammp.yaml's workspace) --, the user's mouth (the last
-delivery's, runs_dir/mouth_state.json, else motion.planner_user_mouth_m), the wheelchair's boxes, the pedestal;
+the controller's validation, the torque watch). The world (kinova/curobo_world.py): the workspace
+(kinova/workspace.py: the scene camera's bowl and table, grown by its error), the user's mouth (the last
+delivery's, runs_dir/mouth_state.json, else motion.free_space.user_mouth_m), the wheelchair's boxes, the pedestal;
 the utensil from the tip model, and a carried piece in the "carrying" planner.
 """
 
@@ -33,28 +33,18 @@ import numpy as np
 import yaml
 
 from kinova.curobo_world import no_pad_names, robot_config, world
+from kinova.workspace import workspace
 from settings import cfg
 
 RUNS = Path(os.path.expanduser(str(cfg.deployment.runs_dir)))
 LOCK = threading.Lock()
 
 
-def workspace_now() -> dict:
-    try:
-        st = json.loads((RUNS / "scene_state.json").read_text())
-        return dict(bowl_xy=st["bowl_xy"], table_z=st["table_z"], bowl_top_z=st["bowl_top_z"],
-                    bowl_radius=st.get("rim_radius_m"))
-    except (OSError, ValueError, KeyError):
-        w = cfg.workspace
-        return dict(bowl_xy=list(w.bowl_centre_m), table_z=float(w.table_height_m),
-                    bowl_top_z=float(w.table_height_m) + float(w.get("bowl_height_m", 0.06)), bowl_radius=None)
-
-
 def mouth_now() -> list[float]:
     try:
         return [float(v) for v in json.loads((RUNS / "mouth_state.json").read_text())["mouth_base"]]
     except (OSError, ValueError, KeyError):
-        return [float(v) for v in cfg.motion.planner_user_mouth_m]
+        return [float(v) for v in cfg.motion.free_space.user_mouth_m]
 
 
 def tip_tool() -> np.ndarray:
@@ -79,9 +69,9 @@ class Planners:
 
     def build(self) -> None:
         from rammp_curobo import CuRoboPlanner
-        w = world(workspace_now(), mouth_now())
+        w = world(workspace(), mouth_now(), table_extent=dict(cfg.workspace.table_extent_m))
         (self.work / "world.yaml").write_text(yaml.safe_dump(w))
-        P = cfg.motion.planner_curobo
+        P = cfg.motion.free_space
         for food in (False, True):
             tag = "food" if food else "empty"
             (self.work / ("robot_%s.yaml" % tag)).write_text(yaml.safe_dump(robot_config(self.base_robot, tip_tool(), food)))
@@ -97,7 +87,7 @@ class Planners:
 
     def refresh(self) -> int:
         """The latest workspace and mouth into both planners, in place (no re-warm)."""
-        w = world(workspace_now(), mouth_now())
+        w = world(workspace(), mouth_now(), table_extent=dict(cfg.workspace.table_extent_m))
         for pl in self.by_load.values():
             pl.update_world(w["obstacles"])
         self.world = w

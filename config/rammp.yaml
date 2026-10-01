@@ -66,21 +66,18 @@ preflight:                      # make preflight (make feed runs it first): the 
   kinematics_deg: 1.0
   allow_other_clients: false    # another program connected to the arm fails the preflight (true: a warning only)
 
-workspace:                      # where the table and the bowl are in THIS deployment (arm base frame, m).
-  # The bowl profile's poses were captured at its `captured_at`; every bowl-dependent pose is shifted by the
-  # difference (kinova/scene.py). Measure with `make locate-bowl` after `make perceive`, or a tape: only the
-  # change matters. Moving the bowl or raising the table = edit these two lines (or config/local.yaml).
-  table_height_m: 0.2140        # the table surface beside the bowl (2026-09-24 runs: 0.213-0.215; the bowl floor 0.221)
-  bowl_centre_m: [0.2692, 0.2765]   # the bowl's centre on the table (x, y) (the same runs: +-2 mm)
-  overlook_camera_height_m: null   # set (e.g. 0.35): food_detect_start is COMPUTED -- the wrist camera this high above
-                                   # the table, its lens axis through the bowl (kinova/scene.py); null = the captured
-                                   # pose, shifted with the bowl as below
-  scene_max_age_s: 3600         # the scene camera's bowl / table reading (make locate-scene) counts for this long
-  overlook_arrive_above_m: 0.05 # a computed overlook: moves into it (the retract) arrive this far above, then descend
-  scoop_end_follows: bowl       # the scoop end (where the swing to the user starts) moves with: bowl (x, y, z) or
-                                # table (z only: the swing stays where it was validated relative to the user)
-  max_shape_change_deg: 30      # a shifted food_detect_start may differ this much on any joint from the captured
-                                # one; more = the arm would take a different shape there: re-capture instead
+workspace:                      # where the table and the bowl are (arm base frame, m), when no scene camera says
+  table_height_m: 0.2140        # the table surface beside the bowl
+  bowl_centre_m: [0.2692, 0.2765]
+  bowl_height_m: 0.06           # rim above the table
+  bowl_radius_m: 0.08
+  table_extent_m: {x: [0.08, 0.76], y: [-0.30, 0.80]}   # its footprint: the planner's table box, and where the
+                                # utensil's floor applies (feeding_start parks beside it, below its top)
+  overlook_camera_height_m: 0.40   # food_detect_start: the wrist camera this high above the table, over the bowl
+  scene_max_age_s: 3600         # the scene camera's reading (make locate-scene) counts for this long; it is trusted
+                                # to its extrinsic.error_m: the planner's table and bowl, and the utensil's floor,
+                                # keep that as extra clearance (the wrist camera then measures the food itself)
+  scoop_end_follows: bowl       # the scoop end (where the swing starts) moves with the bowl (x, y, z) or the table (z)
 
 features:                       # what to switch on and off
   resident_models: true         # make feed starts the servers and waits until every model is warm
@@ -98,15 +95,17 @@ features:                       # what to switch on and off
   utensil_cross_check: false    # also detect the utensil, to check its stored image region
 
 motion:
-  planner: scripted             # the free-space moves (detect, home, the swing's path, the retract's return):
-                                # scripted (our lift / swing / retrace) or curobo (collision-free paths from the planner
-                                # server, run through our guards; the plunge, scoop, approach and bite stay scripted)
-  planner_curobo:
-    activation_distance_m: 0.01 # cuRobo's soft standoff (its default 0.03 refuses a utensil over the bowl's rim)
-    world_padding_m: 0.01       # per side on every box (the bowl's pieces and the pedestal: none)
+  free_space:                   # detect, home, the swing, the retract's return: cuRobo paths (make planner)
+    dps: 61.0                   # cruise, the furthest joint (just under 0.98 x the slowest joint's soft limit, 63)
+    path_step_deg: 4            # cuRobo's dense path thinned to about this on the furthest joint (run_path re-times it)
     timeout_s: 30
-    path_step_deg: 4            # its dense path thinned to about this much on the furthest joint (run_path re-times it)
-  planner_user_mouth_m: [-0.277, 0.306, 0.397]   # the user in the planner's world until a delivery measures the mouth
+    activation_distance_m: 0.01 # cuRobo's soft standoff (its default 0.03 refuses a utensil over the rim)
+    world_padding_m: 0.01       # per side on every box (the bowl's pieces and the pedestal: none)
+    min_tip_above_table_m: 0.05 # our own floor for the utensil tip on these paths (scene.tip_floor) ...
+    min_tip_above_bowl_m: 0.015 # ... above the bowl's top over the bowl
+    bowl_margin_m: 0.04         # "over the bowl": within its rim radius + this
+    user_mouth_m: [-0.277, 0.306, 0.397]   # the user in the planner's world until a delivery measures the mouth
+  direct_dps: 20.0              # make start-direct: one joint move to feeding_start, no planner (SPEED=)
   joint_accel_cap_dps2: 72.0    # per joint, every trajectory (the controller refuses above 80). Was 40, then 60:
                                 # with the faster speeds (2026-09-25) short moves would never reach cruise
   controller_accel_factor: 1.6  # the controller interpolates waypoints more sharply than the time scaling's own
@@ -120,7 +119,6 @@ motion:
   max_tilt_deg: 25.0            # the utensil's worst allowed tilt off straight down (except scoop / delivery)
   no_progress_s: 3.0            # nothing moved by then: the controller ignored the move
   near_pose_deg: 1.0            # within this of a pose's joints = "at" that pose
-  known_pose_deg: 5.0           # `make start`: within this of food_detect_start / the lift top = a pose it retraces from
   settle_dps: 10.0              # the final settle / snap onto a measured pose (x2, was 5)
   goto_pad_s: 0.3               # a joint move's duration = travel / speed + this (the ramp at each end), at least
   goto_min_s: 0.8               # this. Was 1.0 / 1.5 s: at 65 deg/s the pad was a third of every swing
@@ -135,19 +133,6 @@ motion:
   settle_speed_dps: 0.2         # after arriving, wait (at most settle_max_s) until every joint is slower than this
   settle_max_s: 2.0
   cartesian_orientation_dps: 10.0   # orientation speed limit of straight-line tool moves
-  sequence:                     # make detect / make start
-    lift_z_m: 0.545             # tool z at the top of the lift from feeding_start (the arm's reach sets it)
-    direct_dps: 20.0            # make start-direct: straight to feeding_start, the furthest joint's speed (SPEED=)
-    min_lift_above_table_m: 0.25   # the swing to the bowl crosses the table: refuse a lift top lower than this
-    lift_margin_m: 0.03         # a computed overlook: the lift tops out this far above it (then the swing goes down)
-    max_path_above_lift_m: 0.05 # a computed overlook: the swing's utensil tip may rise this far above where it starts
-    min_tip_above_table_m: 0.05 # ... and must stay this far above the table
-    min_tip_above_bowl_m: 0.015 # ... and above the bowl's top (the scene camera's bowl_top_z) over the bowl
-    bowl_margin_m: 0.04         # "over the bowl": within its rim radius + this
-    lift_mps: 0.22              # up from feeding_start (2026-09-25, user: faster everywhere but the plunge; was 0.06)
-    descend_mps: 0.13           # down into feeding_start: at 0.22 the braking at the bottom read as a contact
-                                # (J4 -6.9 -> -4.0 N.m, nothing touched, 2026-09-25)
-    swing_dps: 61.0             # just under 0.98 x the slowest joint's soft limit (63) (was 20, then 44, 65)
 
 guards:                         # contact guard: a joint-torque step this big against recent history = stop
   torque_window: {span: 12, gap: 5}   # samples: the baseline window, and the gap before the sample compared to it
@@ -158,8 +143,7 @@ guards:                         # contact guard: a joint-torque step this big ag
     scoop: 6.0                  # open air; 2.5 tripped on the arm's own acceleration
     swing: 6.0
     retract: 6.0                # empty utensil, moving away
-    sequence_swing: 6.0         # feeding_start <-> food_detect_start swings: at 65 deg/s the braking on arrival
-                                # stepped J2 -6.6 -> -3.4 N.m (2026-09-25, nothing touched)
+    free_space: 6.0             # detect / home: the braking on arrival reads up to ~3 N.m
   scoop_food_off_path_m: 0.015  # the food drifting this far from its planned path stops the scoop
   scoop_food_drop_m: 0.010      # ... or this far below it
 
@@ -238,9 +222,9 @@ perception:
   food_left_min_frac: 0.05      # stands this far above its floor -- else "food left, none pickable" (exit 5)
 
 delivery:
-  lift_m: 0.175                 # above the scoop end, before the swing (60 mm touched the bowl)
-  retract_tries_m: [0.120, 0.100, 0.080, 0.060, 0.040, 0.0]   # retraction along the utensil while swinging
-  swing_dps: 61.0               # (was 20, then 44, 65)
+  lift_m: 0.175                 # the swing's goal: this far above the scoop end, ...
+  retract_tries_m: [0.120, 0.100, 0.080, 0.060, 0.040, 0.0]   # ... turned to the user, retracted the most of these
+  swing_dps: 61.0
   detect_sidestep_m: 0.050      # to the user's right (-Y) before looking
   stop_m: 0.080                 # utensil tip short of the mouth (safe for any cube-sized piece)
   stop_extra_if_depth_filled_m: 0.040
@@ -263,7 +247,7 @@ delivery:
   pointing_tol_cos: 0.99        # the utensil points at the user (+Y) / back along the swing: cos of the angle
   arrived_m: 0.003              # closer than this to a goal = already there
   sidestep_mps: 0.044           # x2.2 (was 0.02)
-  plan_cache_tol_deg: {swing: 1.0, retract: 1.5}   # a cached plan is reused from within this of its start
+  goal_cache_tol_deg: 1.0       # the swing's goal is reused from within this of its start
   bite_baseline_samples: 40     # force samples at rest before the wait (~1 s)
   bite_settle_s: 10.0           # after the bite: watch at most this long for the force to settle
   open_mouth_ratio: 0.20        # inner-lip gap / mouth width; closed reads <= 0.02
@@ -273,13 +257,6 @@ delivery:
   bite_hold_s: 0.10
   bite_timeout_s: 60.0
   retract:
-    back_off_mps: 0.20          # (was 0.060, then 0.13)
-    swing_dps: 61.0             # (was 25, then 55, 65)
-    down_dps: 61.0              # (was 20, then 44, 65)
-    home_dps: 61.0              # (was 20, then 44, 65)
-    max_from_swing_end_m: 0.400 # further than this from where the swing ended = not retracing from here
-    resume_tol_m: 0.020         # within this of the swing's start (utensil turned back) = legs 1-2 already done
-    descend_to_above_scoop_end_m: 0.080   # the descent's end; the lift's arm shape at this height steers it
-    home_arrived_deg: 0.2       # the move home tripped on braking: arrived if within this
-    min_tip_above_table_m: 0.086   # the joint move home keeps the utensil tip this far above the table (0.300 m
-                                   # absolute; unsteered, that move dipped the tip to the bowl floor, 0.222)
+    back_off_mps: 0.20          # straight back from the mouth
+    home_dps: 61.0              # the planned return to food_detect_start
+    max_from_swing_end_m: 0.400 # further than this from where the swing ended = not backing off from here

@@ -1,10 +1,8 @@
 # The bowl in front of the user (2026-09-24).
 #
-# MOVED the bowl, or a different table height: nothing to change here -- set rammp.yaml's `workspace`
-# (where they are now); the poses below are shifted by the difference from `captured_at` (kinova/scene.py).
-# A different bowl (size, depth), or a place the shifted pose cannot reach: copy this file, capture its
-# overlook pose (make capture) and scoop end there, set captured_at to where the table and bowl were, and
-# select it in rammp.yaml (profiles.bowl).
+# Where the bowl and table are now is the workspace's (rammp.yaml / the scene camera). This profile holds what was
+# captured with it: the overlook's orientation and arm shape (food_detect_start is computed over the bowl from it)
+# and the scoop end, moved with the bowl / table from `captured_at` (kinova/scene.py).
 
 name: front
 captured_at:                    # where the table and the bowl were when the poses below were captured
@@ -12,8 +10,6 @@ captured_at:                    # where the table and the bowl were when the pos
   table_height_m: 0.2140
   bowl_centre_m: [0.2692, 0.2765]
 overlook_pose: calibration/food_detect_pose.json   # food_detect_start: joints + tool pose (written by the capture tool)
-scoop_end:                      # where the scoop carries the food to -- the pose delivery's swing was built from
+scoop_end:                      # where the scoop carries the food to: the swing to the user starts here
   tool_m: [0.2997, -0.0968, 0.4038]
   joints_deg: [-102.4, -42.0, -37.2, -97.5, -41.1, -111.2, 131.8]
-swing_start_y_range_m: [-0.15, 0.0]   # the swing refuses scoop ends outside this (it was validated there). NOT
-                                      # shifted with the bowl: it is about where the user sits, not the bowl

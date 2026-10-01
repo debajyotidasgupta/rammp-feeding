@@ -4,8 +4,8 @@
 #   make status    what is running, is the arm reachable
 #   make state     where is the ARM, right now
 #
-#   make start     back to feeding_start  (retraces from food_detect_start)
-#   make detect    feeding_start -> food_detect_start  (smooth lift, then swing)
+#   make start     to feeding_start (a cuRobo path, from anywhere)
+#   make detect    to food_detect_start, over the bowl (a cuRobo path; PLAN=1: plan only)
 #   make perceive  from food_detect_start: capture, detect, depth, target
 #   make over      move so the utensil is over the target food
 #   make acquire   over -> approach -> punch -> scoop (STOP_AFTER=over|hover30|hover10|punch, START_AT=...)
@@ -82,8 +82,8 @@ start:
 detect:
 	@$(MOVELOG) kinova.scripts.sequence detect $(if $(PLAN),--plan,) $(TO_MOVELOG)
 
-# Straight to feeding_start from ANYWHERE, every joint the short way round (SPEED=<deg/s>, default
-# motion.sequence.direct_dps). It does not route round the table like `start`: for a workspace you can see is clear.
+# To feeding_start by one joint move, no planner (SPEED=<deg/s>, default motion.direct_dps): a recovery when the
+# planner is down, for a workspace you can see is clear.
 start-direct:
 	@$(MOVELOG) kinova.scripts.sequence direct $(if $(SPEED),--speed $(SPEED),) $(TO_MOVELOG)
 
@@ -136,8 +136,8 @@ over:
 acquire:
 	@STOP_AFTER=$(STOP_AFTER) START_AT=$(or $(START_AT),over) feeding/acquire.sh
 
-# Food delivery, from the end of the scoop: lift and swing to the user (retracting the utensil as it
-# turns), present 80 mm short of the mouth, wait for the bite (1 N), retract to food_detect_start.
+# Food delivery, from the end of the scoop: swing to the user, present short of the mouth, wait for the bite,
+# retract to food_detect_start.
 deliver:
 	@STOP_AFTER=$(STOP_AFTER) START_AT=$(or $(START_AT),swing) VALIDATE=$(VALIDATE) $(if $(filter undefined,$(origin WAIT_OPEN)),,WAIT_OPEN=$(WAIT_OPEN)) feeding/deliver.sh
 
@@ -167,7 +167,7 @@ tool:
 review:
 	@PYTHONPATH=. $(FACE_PY) -m feeding.review "$(or $(RUN),$$(dirname $$(readlink -f $(RUNS)/latest)))" --write
 
-# The cuRobo planner server (motion.planner: curobo): its own container, our tree mounted, on the GPU
+# The cuRobo planner server (every free-space move): its own container, our tree mounted, on the GPU
 PLANNER    := $(shell $(SET) deployment.containers.planner)
 PLANNER_IMG:= $(shell $(SET) deployment.images.planner)
 planner:
@@ -238,7 +238,7 @@ images: driver-image vision
 # The driver container: the arm scripts run in it (INARM), this tree mounted at /work, the run record at its host
 # path (RAMMP_ROOT: files the arm scripts save, e.g. make tool's, land on the host), and every external calibration
 # file the config reads (settings.py files: a camera mount, the scene camera) read-only at its own path. Recreating it clears its /tmp
-# (the swing / retract caches: the next delivery rebuilds them).
+# (the swing-goal cache: the next delivery rebuilds it).
 driver:
 	-docker rm -f $(DRIVER) 2>/dev/null
 	@mkdir -p $(RUNS)

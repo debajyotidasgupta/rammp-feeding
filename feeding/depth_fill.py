@@ -11,20 +11,18 @@ pixel is kept as measured. Writes, beside the inputs:
     depth_filled_mask.npy   True where a pixel came from DA3
     depth_fill.json         source: "sensor" | "filled" | "da3-raw", fit, fraction filled
 
-Why fit, not trust: DA3's own metric scale made berries 2-3x too tall and invented a 39 mm table tilt
-(2026-09-23). With no sensor pixels at all the fill is RAW DA3 -- good enough to find and rank food and a
-face, NOT to stop a plunge at the bowl floor: acquire refuses a plunge measured on raw DA3.
+DA3's own metric scale is not trusted, hence the fit. With no sensor pixels at all the fill is RAW DA3 -- good
+enough to find and rank food and a face, NOT to stop a plunge at the bowl floor: acquire refuses a plunge
+measured on raw DA3.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
 
 from settings import cfg
 from feeding.camera import CXC, CXD, CYC, CYD, DEPTH_SHAPE, FXC, FXD, FYC, FYD, T_D2C
@@ -78,9 +76,8 @@ def main() -> int:
             s, b = np.polyfit(x[keep], y[keep], 1)
         resid = float(np.median(np.abs(y - (s * x + b))))
         fill = s * da3_mm + b
-        # one global fit cannot follow DA3's LOCAL distortions (a 60x60 px hole came out 14 mm off, 52 mm worst).
-        # Correct each hole by the fit's own error on the sensor pixels around it: spread the residual field
-        # into the holes (normalised Gaussian), so DA3 supplies the shape and the sensor the level.
+        # a global fit misses DA3's local distortions: spread the fit's residual on the surrounding sensor pixels
+        # into each hole (normalised Gaussian), so DA3 supplies the shape and the sensor the level.
         r = np.zeros(SHAPE); w = np.zeros(SHAPE)
         r[fit] = (D - fill)[fit]; w[fit] = 1.0
         from scipy.ndimage import gaussian_filter

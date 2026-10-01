@@ -8,12 +8,10 @@ Runs in ~/venvs/mp (mediapipe, opencv). Writes the same face.json as detect_mout
 deliver.sh falls back to when no face is found here (exit 5).
 
 - The image is rolled 90 deg at the delivery pose; it is rotated upright first, as in detect_mouth.py.
-- On 8 saved delivery frames it found the face every time, including the two where LocateAnything's "mouth"
-  box was the whole frame; where both worked they agreed to 2-10 px.
 - DEPTH: when the food covers the mouth, the depth at the mouth's pixel is the FOOD. Depth is read at many
   face points instead; points far nearer than the face (the food, ~250 mm nearer) are dropped; the mouth
   takes the lips' own depth where they are visible, else the nose tip's + 5 mm, else the face's.
-- mouth_open = inner-lip gap / mouth width: closed read <= 0.02 on every saved frame.
+- mouth_open = inner-lip gap / mouth width.
 """
 
 from __future__ import annotations
@@ -35,7 +33,7 @@ URL = COLOUR_URL
 NOSE = [1, 2, 4, 5, 6, 19, 94, 98, 168, 195, 197, 327]
 LIPS = [0, 13, 14, 17, 37, 61, 78, 84, 267, 291, 308, 314]
 FACE_PTS = list(range(0, 468, 6))
-OPEN_RATIO = float(cfg.delivery.open_mouth_ratio)      # closed reads <= 0.02 on every saved frame
+OPEN_RATIO = float(cfg.delivery.open_mouth_ratio)
 OPEN_HOLD_S = float(cfg.delivery.open_mouth_hold_s)
 NO_FACE = 5
 

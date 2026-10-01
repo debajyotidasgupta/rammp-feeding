@@ -7,23 +7,18 @@
 Inputs are all from ONE pose (food_detect_start): colour detections, the depth
 sensor frame, and Depth Anything 3 metric depth on the colour frame.
 
-1. DEPTH. The sensor is the metric truth. Inside the bowl it resolves three
-   surfaces cleanly -- table ~480 mm, rim ~440 mm (40 mm proud), floor ~472 mm
-   -- and each berry as a 30 mm bump. Berries are found as blobs nearer than
-   the floor INSIDE the rim; without that restriction the rim itself looks like
-   food.
+1. DEPTH. The sensor is the metric truth. Each colour box is mapped into the
+   depth frame and depth read locally: the piece's top and the floor beside it.
 
-2. REGISTRATION. The three berries are visible in both frames, so they are the
-   correspondences: each gives the colour principal point directly under the
-   factory depth->colour extrinsic. Measured cx 657 +- 9, cy 226 +- 3.5 px
-   against factory 621 / 238 -- close, and 1 px is ~0.34 mm at berry depth.
+2. REGISTRATION. Unoccluded pieces, visible in both frames, give a per-run
+   check of the colour principal point under the depth->colour extrinsic
+   (1 px ~ 0.34 mm at berry depth); > 25 px systematic offset warns.
 
-3. DA3 FUSION. DA3's metric output is NOT used as-is. It invents a ~45 mm tilt
-   across a table the camera is looking straight down at, and exaggerates local
-   relief ~4x. It is fitted to the sensor with scale, shift AND a plane,
+3. DA3 FUSION (optional cross-check). DA3 is fitted to the sensor with scale,
+   shift AND a plane,
        Z = a*DA3 + b + c*(u/W) + d*(v/H)
-   which absorbs the tilt and keeps only its local shape. It is reported as a
-   cross-check at colour resolution, not as the source of truth.
+   which absorbs its tilt and keeps only its local shape. Reported only, never
+   the source of truth.
 
 4. TARGET. With the camera vertical, a vertical line in the world projects
    through the principal point. So the utensil tip's vertical line, seen at
@@ -33,8 +28,9 @@ sensor frame, and Depth Anything 3 metric depth on the colour frame.
    orientation, +X_base shifts the scene +v and +Y_base shifts it +u, both at
    f/Z, so
        dX = (p*_v - berry_v) * Zb / fy        dY = (p*_u - berry_u) * Zb / fx
-   No hand-eye calibration is needed; what remains is Z_tip, the camera-to-tip
-   distance along the utensil in the depth sensor's frame: 260 mm for the knife.
+   (with a non-default mount, the offset goes through the camera and tool
+   rotations instead). What remains is Z_tip, the camera-to-tip distance along
+   the utensil (utensil profile: camera_to_tip_m).
 """
 
 from __future__ import annotations
@@ -47,34 +43,14 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from settings import cfg
-from feeding.camera import CAM_ROT, CXD, CYD, DEFAULT_MOUNT, FXC, FXD, FYC, FYD, T_D2C, VP, corrected
-FACTORY_PP = (620.914, 238.280)                             # colour, device-reported (for the registration report)
-MIN_FOOD_MM, MAX_FOOD_MM = 12.0, 60.0                       # food height above the floor
+from feeding.camera import CAM_ROT, DEFAULT_MOUNT, FXC, FXD, FYC, VP, colour_to_depth, corrected, depth_to_colour
+from kinova.frames import R_from_kortex
 
 
 def overlook_rotation() -> np.ndarray:
     """The tool's orientation at food_detect_start (captured; a computed one keeps it): Kortex's Rz Ry Rx."""
     t = cfg.overlook_pose()["tool_pose"]
-    tx, ty, tz = (np.radians(float(t[k])) for k in ("theta_x_deg", "theta_y_deg", "theta_z_deg"))
-    Rx = np.array([[1, 0, 0], [0, np.cos(tx), -np.sin(tx)], [0, np.sin(tx), np.cos(tx)]])
-    Ry = np.array([[np.cos(ty), 0, np.sin(ty)], [0, 1, 0], [-np.sin(ty), 0, np.cos(ty)]])
-    Rz = np.array([[np.cos(tz), -np.sin(tz), 0], [np.sin(tz), np.cos(tz), 0], [0, 0, 1]])
-    return Rz @ Ry @ Rx
-
-
-def colour_to_depth(u, v, z_m, cx, cy):
-    """Colour pixel at depth z_m (colour-frame z) -> depth-frame pixel."""
-    X = (u - cx) * z_m / FXC - T_D2C[0]
-    Y = (v - cy) * z_m / FYC - T_D2C[1]
-    Z = z_m - T_D2C[2]
-    return FXD * X / Z + CXD, FYD * Y / Z + CYD
-
-
-def to_colour(u, v, z_m, cx, cy):
-    X = (u - CXD) * z_m / FXD + T_D2C[0]
-    Y = (v - CYD) * z_m / FYD + T_D2C[1]
-    Z = z_m + T_D2C[2]
-    return FXC * X / Z + cx, FYC * Y / Z + cy, Z
+    return R_from_kortex(float(t["theta_x_deg"]), float(t["theta_y_deg"]), float(t["theta_z_deg"]))
 
 
 def food_left(D, bowls, cx, cy):
@@ -108,8 +84,7 @@ def food_left(D, bowls, cx, cy):
 def top_surface_aim(D, f, cx, cy):
     """The centre of the uppermost piece's top inside a food box: the depth pixels within
     perception.top_band_mm of the box's nearest point, their largest connected patch -- a box that spans two
-    pieces, or a seam, still aims at one piece's top (2026-09-25: a merged box's centre sent the fork into the
-    gap between a piece and a grape). None if the box has too little depth."""
+    pieces, or a seam, still aims at one piece's top. None if the box has too little depth."""
     from scipy.ndimage import label
     H, W = D.shape
     a = colour_to_depth(f["x1"], f["y1"], 0.40, cx, cy)
@@ -126,7 +101,7 @@ def top_surface_aim(D, f, cx, cy):
         return None
     k = 1 + int(np.argmax(np.bincount(lab.ravel())[1:]))
     ys, xs = np.nonzero(lab == k)
-    u, v, _ = to_colour(u0 + xs.mean(), v0 + ys.mean(), (top + 8.0) / 1000.0, cx, cy)
+    u, v, _ = depth_to_colour(u0 + xs.mean(), v0 + ys.mean(), (top + 8.0) / 1000.0, cx, cy)
     return float(u), float(v)
 
 
@@ -135,9 +110,7 @@ def main() -> int:
     ap.add_argument("--det", required=True)
     ap.add_argument("--depth", required=True, help="sensor depth .npy, mm, 480x270")
     ap.add_argument("--da3", default=None,
-                    help="DA3 metric .npy (m, colour size). OPTIONAL cross-check only: "
-                         "scored against physical checks it overstated berry relief 2-3x "
-                         "raw and flattened it to 9-14 mm fused; the sensor got 31-32 mm")
+                    help="DA3 metric .npy (m, colour size). OPTIONAL cross-check only")
     ap.add_argument("--image", default=None)
     ap.add_argument("--tool", type=float, nargs=3, required=True, help="current tool xyz, m")
     ap.add_argument("--z-tip", type=float, default=float(cfg.utensil.camera_to_tip_m),
@@ -150,13 +123,8 @@ def main() -> int:
     A = np.load(a.da3).astype(np.float64) if a.da3 else None
 
     # 1+2. DEPTH PER DETECTION, and a registration check that falls out of it.
-    #
-    # No blob segmentation. The bowl floor is CONCAVE, rising toward the rim,
-    # so no single floor level separates berries from the bowl wall; every
-    # threshold tried let a different slice of wall merge into a different
-    # berry, and blob centroids wandered by tens of pixels. Instead each colour
-    # box is mapped into the depth frame through the frozen principal point and
-    # depth is read locally:
+    # No blob segmentation (the concave bowl floor has no single level that separates food from wall): each
+    # colour box is mapped into the depth frame through the configured principal point and depth read locally:
     #   top    = nearest surface within ~20 mm of the mapped centre
     #   floor  = far end of a ~45 mm window around it (the bowl just beside it)
     # The offset between where that nearest surface actually is and where the
@@ -194,7 +162,7 @@ def main() -> int:
         print("  berry at (%4.0f,%4.0f)  top %.0f mm  floor beside it %.0f mm  height %.0f mm%s"
               % (f["cx"], f["cy"], top, floor_here, floor_here - top, tag))
         if not f["_occluded"]:
-            cu_, cv_, _ = to_colour(pu, pv, (top + 8.0) / 1000.0, cx, cy)
+            cu_, cv_, _ = depth_to_colour(pu, pv, (top + 8.0) / 1000.0, cx, cy)
             res.append((f["cx"] - cu_, f["cy"] - cv_))
     col = [f for f in col if "_depth" in f]
     floor = float(np.median([f["_depth"]["floor"] for f in col])) if col else float("nan")
@@ -213,7 +181,7 @@ def main() -> int:
         vs, us = np.nonzero(D)
         Zs = D[vs, us] / 1000.0
         k = (Zs > 0.30) & (Zs < 0.65)
-        uc, vc, Zc = to_colour(us[k], vs[k], Zs[k], cx, cy)
+        uc, vc, Zc = depth_to_colour(us[k], vs[k], Zs[k], cx, cy)
         ui, vi = np.round(uc).astype(int), np.round(vc).astype(int)
         ok = (ui >= 0) & (ui < A.shape[1]) & (vi >= 0) & (vi < A.shape[0])
         da, zt = A[vi[ok], ui[ok]], Zc[ok]
@@ -232,8 +200,7 @@ def main() -> int:
 
     # 4. per-berry 3D and the target
     ute = det["utensil"][0]
-    # Prefer the MEASURED tip pixel: a fork's head is wide and curled, so the
-    # top-centre of its image box was ~10 mm off where it meets the food.
+    # prefer the MEASURED tip pixel: a fork's box top-centre is off where it meets the food
     p_tip = np.array(det.get("utensil_tip") or [(ute["x1"] + ute["x2"]) / 2.0, ute["y1"]])
     bowl = det["bowl"][0]
     bc = np.array([bowl["cx"], bowl["cy"]])
@@ -252,9 +219,8 @@ def main() -> int:
               % (i + 1, f["cx"], f["cy"], 1000 * zb_s, 1000 * zb_f, 1000 * Xc, 1000 * Yc, d_rim))
 
     if not rows:
-        # No usable box is not an empty bowl: on 2026-09-25 a pile of grapes and slices came back as one
-        # bowl-sized box (rightly dropped) and the loop ended "empty" with food left. Empty = nothing stands
-        # above the bowl floor in the depth; else say food is left (acquire refuses either way: no target).
+        # no usable box is not an empty bowl: empty = nothing stands above the bowl floor in the depth; else say
+        # food is left (acquire refuses either way: no target).
         left = food_left(D, det.get("bowl") or [], cx, cy)
         if left is not None and left > float(cfg.perception.food_left_min_frac):
             Path(a.out + ".json").with_name("food_left").write_text("food left, no pickable piece detected\n")
@@ -272,8 +238,7 @@ def main() -> int:
         print("  aim: the top of the piece at (%.0f, %.0f), %.0f px from the box centre (%.0f, %.0f)"
               % (au, av, np.hypot(au - f["cx"], av - f["cy"]), f["cx"], f["cy"]))
         f = dict(f, cx=au, cy=av)
-    # The tip's vertical line projects through the image of TRUE VERTICAL, not
-    # through the optical centre -- measured, see config/camera/<name>.yaml (colour.vertical_vp).
+    # the tip's vertical line projects through the image of TRUE VERTICAL (colour.vertical_vp), not the optical centre
     pp = VP
     p_star = pp + (p_tip - pp) * (a.z_tip / zb)
     du, dv = p_star[0] - f["cx"], p_star[1] - f["cy"]

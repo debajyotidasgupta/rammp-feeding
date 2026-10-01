@@ -6,8 +6,9 @@
 SMPL-X is licensed, so neither the body model nor these meshes are in the repo (.gitignore). Writes
 sim/assets/human/<part>_<closed|open>.obj -- one mesh per material (skin, hair, eyes, sclera, shirt, trousers, shoes),
 with the jaw closed and open -- and landmarks.json. Trousers and shoes stay on the seat; the rest (skin, hair,
-eyes, sclera, shirt) is the upper body, which sim/scene.py hinges at the lumbar spine so the user can lean in to bite. Frame: Z-up, the person faces +X, their left is +Y, the
-floor is z = 0. sim/scene.py moves the whole person so the mouth lands where the recording measured it.
+eyes, sclera, shirt) is the upper body, which sim/scene.py hinges at the lumbar spine so the user can lean in to
+bite. Frame: Z-up, the person faces +X, their left is +Y, the floor is z = 0. sim/scene.py moves the whole person
+so the mouth lands where the recording measured it.
 """
 
 from __future__ import annotations
@@ -31,7 +32,6 @@ JOINT = {"pelvis": 0, "spine1": 3, "left_knee": 4, "neck": 12, "head": 15, "jaw"
 # the material each vertex takes, by the joint that drives it most (SMPL-X joint ids)
 TROUSERS = {0, 1, 2, 4, 5}
 SHOES = {7, 8, 10, 11}
-SHIRT = {3, 6, 9, 13, 14, 16, 17, 18, 19}
 SUBDIVIDE = 2                                         # 16x the triangles: clean material edges
 JAW_OPEN_RAD = 0.30                                   # ~17 deg: a mouth open for a bite
 

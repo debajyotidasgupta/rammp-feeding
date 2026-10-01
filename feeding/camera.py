@@ -71,22 +71,20 @@ def load_depth(path):
     return corrected(np.load(path))
 
 
-def colour_to_depth(u, v, z_m):
-    """Colour pixel at colour-frame depth z_m -> depth-frame pixel."""
-    X = (u - CXC) * z_m / FXC - T_D2C[0]
-    Y = (v - CYC) * z_m / FYC - T_D2C[1]
+def colour_to_depth(u, v, z_m, cx=None, cy=None):
+    """Colour pixel at colour-frame depth z_m -> depth-frame pixel (cx, cy: another colour principal point)."""
+    cx, cy = CXC if cx is None else cx, CYC if cy is None else cy
+    X = (u - cx) * z_m / FXC - T_D2C[0]
+    Y = (v - cy) * z_m / FYC - T_D2C[1]
     Z = z_m - T_D2C[2]
     return FXD * X / Z + CXD, FYD * Y / Z + CYD
 
 
-def depth_to_colour(ud, vd, z_m):
+def depth_to_colour(ud, vd, z_m, cx=None, cy=None):
     """Depth-frame pixel at depth-frame z_m -> colour pixel and colour-frame z."""
+    cx, cy = CXC if cx is None else cx, CYC if cy is None else cy
     X = (ud - CXD) * z_m / FXD + T_D2C[0]
     Y = (vd - CYD) * z_m / FYD + T_D2C[1]
     Z = z_m + T_D2C[2]
-    return FXC * X / Z + CXC, FYC * Y / Z + CYC, Z
+    return FXC * X / Z + cx, FYC * Y / Z + cy, Z
 
-
-def tip_line_px(tip_px, z_m, z_tip_m):
-    """Where the utensil tip's vertical line crosses depth z_m (through the image of true vertical)."""
-    return VP + (np.asarray(tip_px, dtype=float) - VP) * z_tip_m / z_m

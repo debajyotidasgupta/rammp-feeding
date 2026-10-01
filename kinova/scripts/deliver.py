@@ -37,7 +37,8 @@ from kinova import scene
 from kinova.connection import kinova_connection
 from settings import cfg
 from feeding.camera import COLOUR_SIZE, CXC, CYC, FXC, FYC, cam_to_tool
-from kinova.motion import R_from_kortex, Rz, _ik, axis, dps_for, homotopy, margin, max_step, run_path, tip_in_tool
+from kinova.frames import R_from_kortex, Rz, axis
+from kinova.motion import _ik, dps_for, homotopy, margin, max_step, run_path, tip_in_tool
 from kinova import curobo_client
 from kinova.scripts.safe_move import Joints, MoveError, goto_cartesian, joints, tool_pose
 

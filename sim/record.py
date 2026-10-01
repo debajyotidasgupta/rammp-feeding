@@ -79,9 +79,6 @@ class Bite:
             prev = s.q[-1]
         return prev
 
-    def segment_at(self, t: float) -> Segment | None:
-        return next((s for s in self.segments if s.t[0] <= t <= s.t[-1]), None)
-
     def phase_at(self, t: float) -> Phase:
         cur = self.phases[0]
         for p in self.phases:
@@ -217,11 +214,11 @@ def load_bite(session: str | Path, n: int) -> Bite:
             ("%s · %.0f mm down" % (mode, 1000 * pp["down_m"])) if pp else "")
     if scoop:
         add(scoop.t[0], scoop.t[-1], "acquire", "Scoop", "tilt and lift: the piece rides the tines")
-    sw = seg("lift + swing")
+    sw = seg("swing to the user") or seg("lift + swing")       # the cuRobo swing; before 2026-10-01 the scripted one
     d_start = first("stage_start", "deliver")
     if sw:
         add(d_start and rel(d_start["t"]) or sw.t[0], sw.t[-1], "deliver", "Swing to the user",
-            "lift, swing and step right: fork up, food toward the face")
+            "to the user, the piece on the utensil")
     appr = seg("approach")
     ow_path = sorted(B.glob("deliver/look_*/open_wait.json"))
     open_t = open_v = np.zeros(0)
@@ -245,9 +242,9 @@ def load_bite(session: str | Path, n: int) -> Bite:
     if bs:
         detail = ("bite felt at +%.1f s · %.1f N" % (be["at_s"], be["peak_n"])) if be else ""
         add(bs.t[0], bs.t[-1], "deliver", "Bite", detail)
-    back = seg("back off")
+    back = seg("back off") or seg("back to food_detect_start")
     if back:
-        add(back.t[0], t_end - t0, "deliver", "Retract", "back off, reverse swing, down to the scoop end, overlook")
+        add(back.t[0], t_end - t0, "deliver", "Retract", "back off from the mouth, then back to the overlook")
 
     events = {}
     if plunge:

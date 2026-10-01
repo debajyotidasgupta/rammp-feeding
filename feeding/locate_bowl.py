@@ -21,16 +21,10 @@ from pathlib import Path
 
 import numpy as np
 
+from kinova.frames import R_from_kortex
+
 from settings import cfg
 from feeding.camera import CXC, CYC, FXC, FYC, cam_to_tool, colour_to_depth, load_depth
-
-
-def R_from_kortex(tx: float, ty: float, tz: float) -> np.ndarray:
-    tx, ty, tz = np.radians([tx, ty, tz])
-    Rx = np.array([[1, 0, 0], [0, np.cos(tx), -np.sin(tx)], [0, np.sin(tx), np.cos(tx)]])
-    Ry = np.array([[np.cos(ty), 0, np.sin(ty)], [0, 1, 0], [-np.sin(ty), 0, np.cos(ty)]])
-    Rz = np.array([[np.cos(tz), -np.sin(tz), 0], [np.sin(tz), np.cos(tz), 0], [0, 0, 1]])
-    return Rz @ Ry @ Rx
 
 
 def to_base(u: float, v: float, z: float, T: np.ndarray, R: np.ndarray) -> np.ndarray:

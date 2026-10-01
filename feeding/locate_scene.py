@@ -173,8 +173,7 @@ def main() -> int:
     np.save(out / "scene_depth.npy", (depth * 1000).astype(np.uint16))
     from feeding.detector_server import connect
     det = connect()
-    # detect on a copy no wider than perception.scene.detect_width: the detector's time grows with the pixels
-    # (1280x720: ~5 s a prompt on the site Orin; boxes are scaled back)
+    # detect on a copy no wider than perception.scene.detect_width (detector time grows with pixels); boxes scaled back
     k = min(1.0, float(cfg.get("perception.scene.detect_width", 848)) / colour.width)
     small = colour.resize((round(colour.width * k), round(colour.height * k)), Image.BILINEAR) if k < 1 else colour
     small.save(out / "scene_colour_detect.jpg")
@@ -182,10 +181,9 @@ def main() -> int:
     p_link, _ = depth_points(depth)
     uv = project_colour(p_link)
     p_base = p_link @ R.T + t
-    # the prompts in order, stopping at the first that yields a reachable bowl (each costs ~5 s on the site Orin):
-    # every candidate placed in the base frame; only one the arm can reach, on the table, and of those the nearest
-    # to the last reading (else the configured workspace) -- "bowl" also names the food containers around it
-    # (2026-09-30: a lidded box 1 m away, at the edge of the table, won the single-best-box call)
+    # the prompts in order, stopping at the first that yields a reachable bowl: every candidate placed in the base
+    # frame; only one the arm can reach, on the table, and of those the nearest to the last reading (else the
+    # configured workspace) -- "bowl" also names the food containers around it
     ref = reference(runs)
     boxes, cands = [], []
     for p in a.prompt:

@@ -1,49 +1,24 @@
 #!/usr/bin/env python3
-"""Every arm motion goes through here. Importable helper, not a command.
+"""Single arm moves and their guards. Importable helper, not a command.
 
-goto() for joint moves, goto_cartesian() for straight-line tool moves. Both
-refuse before moving if the command cannot be safe, and both watch the whole
-move and stop the arm the moment it stops being safe. Each check below exists
-because its absence cost something on this arm:
+goto() for joint moves, goto_cartesian() for straight-line tool moves. Both refuse before moving if the
+command cannot be safe, and watch the whole move, stopping the arm the moment it stops being safe:
 
-  UTENSIL DOWN. Tool pitch is set by the SUM J2 + J4 + J6; ~-180 points the
-  utensil at the floor. On 2026-09-23 a diagnostic moved J6 alone while J2/J4
-  stayed put (-4.10 - 57.08 - 40.08 = -101.3) and the fork swung 79 deg off
-  vertical. A simultaneous interpolation between two utensil-down poses keeps
-  the sum between their values; moving one of the three does not. goto() only
-  accepts complete 7-joint vectors, and checks the destination's pitch sum.
+  UTENSIL DOWN. Tool pitch is set by the sum J2 + J4 + J6; ~-180 points the utensil at the floor. A
+  time-synchronised move between two utensil-down poses keeps the sum between their values; moving one of
+  the three alone does not. goto() takes only complete 7-joint vectors and checks the target's pitch sum,
+  and every move stops past MAX_TILT_DEG.
+  CONTACT. There is no self-collision model on the arm side, so a joint-torque step against a trailing
+  median (TorqueGuard) is what notices contact. It runs on every move.
+  JOINT LIMITS. Kortex silently ignores a trajectory whose target is past a joint limit (no error, no
+  motion), so targets are checked against LIMITS before sending.
+  NO PROGRESS. A trajectory the controller ignored looks like a slow one: nothing moved after NO_PROGRESS_S
+  fails at once, with the controller's own ACTION_ABORT reason from the action notifications.
+  REFUSED TRAJECTORIES. The reason is in base.GetTrajectoryErrorReport(), read on every abort (_report):
+  read it before guessing.
 
-  CONTACT. Orientation was not enough: in the same session the fork tines
-  swung into the arm's OWN joint 6 housing and broke, with the tool angle legal
-  throughout. There is no self-collision model yet (sim/safety.py was deleted
-  in the cleanup and has not been restored with the new utensil), so a
-  joint-torque step against a trailing median is the only thing that notices
-  contact. It runs on every move.
-
-  JOINT LIMITS. Kortex SILENTLY REJECTS a trajectory whose target is past a
-  joint limit -- no error, no clamp, the arm just does not move. Four retries
-  were lost to J6 = -129.6 against a +-120.3 limit. Checked before sending.
-
-  NO PROGRESS. A trajectory the controller ignored looks exactly like a slow
-  one. If nothing has moved after NO_PROGRESS_S the move fails at once, and it
-  reports the controller's OWN reason: every move subscribes to the action
-  notifications and surfaces the ACTION_ABORT sub-error code.
-
-  TIME-SYNCHRONISED JOINT MOVES. Multi-joint moves were refused with a bare
-  METHOD_FAILED whenever one joint had only a sliver of travel. The reason is
-  only visible in base.GetTrajectoryErrorReport(), which is read automatically
-  on every abort -- see goto(). Several wrong theories (angle wrap encoding,
-  the deprecated API, the gamepad) were tested and disproved before that report
-  was read. Read the report first.
-
-  ExecuteAction is used rather than PlayJointTrajectory/PlayCartesianTrajectory,
-  which are deprecated in this SDK.
-
-  Do NOT infer the cause from the arm state. On this firmware the state reads
-  SERVOING_MANUALLY_CONTROLLED for a while after ANY trajectory completes --
-  including our own -- and then drops back to SERVOING_READY. An earlier
-  version of this module refused to move in that state and blamed the gamepad;
-  the gamepad was off and blameless.
+Do not infer a fault from the arm state: on this firmware it reads SERVOING_MANUALLY_CONTROLLED for a while
+after any trajectory completes, then returns to SERVOING_READY.
 """
 
 from __future__ import annotations
@@ -60,6 +35,7 @@ import numpy as np
 from kortex_api.autogen.messages import Base_pb2
 
 import runlog
+from kinova.frames import fold  # noqa: F401 (re-exported: the stages import it from here)
 from settings import cfg
 
 if TYPE_CHECKING:
@@ -73,16 +49,10 @@ log = runlog.get("safe_move")
 MAX_TILT_DEG = float(cfg.motion.max_tilt_deg)                # how far off straight-down the utensil may ever get
 TORQUE_STEP_NM = float(cfg.guards.torque_step_nm.default)    # a step this big against recent history = contact
 NO_PROGRESS_S = float(cfg.motion.no_progress_s)              # nothing moved by then = the controller ignored it
-# Gen3 soft limits for the three limited joints (J2, J4, J6; 0-indexed), with a
-# little margin: a target AT the limit is as likely to be refused as one past it.
+# limits of the three limited joints (J2, J4, J6; 0-indexed), with a margin: a target AT the limit is as likely
+# to be refused as one past it
 LIMITS = {int(j) - 1: float(v) for j, v in cfg.motion.joint_limits_deg.items()}
 LIMIT_MARGIN = float(cfg.motion.joint_limit_margin_deg)
-
-
-def fold(d: float) -> float:
-    """Kortex reports [0, 360); joints 1/3/5/7 are continuous and sit near the
-    wrap, so always compare and interpolate on (-180, 180]."""
-    return (d + 180.0) % 360.0 - 180.0
 
 
 def approach_axis(tx: float, ty: float, tz: float) -> tuple[float, float, float]:
@@ -171,9 +141,8 @@ def tool_mismatch(conn: Any) -> list[str]:
 
 
 def check_tool(conn: Any) -> None:
-    """Refuse to move unless the arm's tool is ours: a different tool frame puts every cartesian target (and the tip
-    model) off by the difference -- 80 mm low on 2026-09-30, when another user's 200 mm frame was left on the arm.
-    Once per connection."""
+    """Refuse to move unless the arm's tool is ours: a different tool frame shifts every cartesian target (and the
+    tip model) by the difference. Checked once per connection."""
     if getattr(conn, "_tool_ok", False):
         return
     bad = tool_mismatch(conn)
@@ -245,22 +214,12 @@ def _abort_reason(ev: list[tuple[str, str]]) -> str | None:
 class ContactGuard:
     """Stops on CONTACT during a descent, from the arm's own force estimate (fz).
 
-    Not used by the current stages (the plunge became one joint trajectory watched by TorqueGuard); kept, with
-    its measurements, for any Cartesian descent that needs a force stop: goto_cartesian(..., contact=...).
+    Not used by the current stages; available to any Cartesian descent: goto_cartesian(..., contact=...).
 
-    Triggers on STIFFNESS -- dF/dz, newtons per millimetre of descent -- not on
-    force level and not on force rate. Measured on this arm:
-      * a LEVEL threshold is unusable: fz drifts +1.0 .. -2.4 N over a 170 mm
-        descent as the arm changes shape; 2 N tripped after 5 mm of free air;
-      * a RATE threshold (N/s) is speed-dependent: the drift comes from changing
-        SHAPE, so it scales with distance, not time. 0.8 N/s fired falsely at
-        20 mm/s on drift of 1.2 N/s;
-      * per millimetre the drift is ~0.014 N/mm typical, 0.06 N/mm worst over a
-        short window, while strawberry flesh is 0.15-0.27 N/mm and a rigid
-        surface far more. 0.10 N/mm sits between.
-    Every move also starts with a ~4 N/s kick lasting ~0.4 s (acceleration), so
-    the first `settle_s` is ignored and the baseline is taken after it.
-    Upward push on the utensil tip reads as +fz (finger-press test).
+    Triggers on stiffness, dF/dz in N per mm of descent, not on force level or rate: fz drifts with the arm's
+    shape, so it scales with distance, not time. k_npmm sits between that drift (~0.06 N/mm worst) and food
+    (strawberry 0.15-0.27 N/mm). The first `settle_s` (the acceleration kick) is ignored and the baseline taken
+    after it. Upward push on the utensil tip reads as +fz.
     """
 
     def __init__(self, k_npmm: float = 0.10, window_mm: float = 3.0, settle_s: float = 0.8, cap_n: float = 3.0,
@@ -348,9 +307,7 @@ def _watch_loop(conn, label, arrived, start_q, max_tilt, torque_limit, timeout, 
         if not moved and max(abs(fold(a - b)) for a, b in zip(q, start_q)) > float(cfg.motion.moved_deg):
             moved = True
         if arrived(fb, q):
-            # Let it actually stop. A new trajectory sent while the last is
-            # still decelerating can be dropped -- that is the other way a
-            # command gets silently ignored.
+            # let it actually stop: a trajectory sent while the last is still decelerating can be dropped
             t_settle = time.time()
             while time.time() - t_settle < float(cfg.motion.settle_max_s):
                 vel = conn.base_cyclic.RefreshFeedback().actuators
@@ -367,8 +324,8 @@ def _watch_loop(conn, label, arrived, start_q, max_tilt, torque_limit, timeout, 
 
 
 def _braked_on_arrival(e: MoveError, arrived: bool, label: str) -> bool:
-    """A torque-step stop with the arm already at its target: the move was complete, the step was the arm's own
-    braking (seen at 65 deg/s and 0.22 m/s, nothing touched). Anything else is a real stop."""
+    """A torque-step stop with the arm already at its target: the move was complete and the step was the arm's
+    own braking. Anything else is a real stop."""
     if arrived and "torque stepped" in str(e):
         log.info("    %-24s arrived; the torque step was the braking (%s)", label, str(e).split(": ", 1)[-1][:60])
         runlog.event("braked_on_arrival", label=label, stop=str(e))
@@ -410,15 +367,9 @@ def goto(conn: KinovaConnection, target: Sequence[float], speed: float = 10.0, t
         j = rj.joint_angles.joint_angles.add()
         j.joint_identifier = i
         j.value = v % 360.0            # Kortex's own [0, 360); it takes the short way
-    # DURATION, not SPEED. A speed constraint asks EVERY joint to reach that
-    # speed, so a joint with a sliver of travel must accelerate and stop within
-    # it -- the controller rejects that as INVALID_JOINT_ACCELERATION (read via
-    # GetTrajectoryErrorReport: J3, 0.7 deg of travel, 8.0 requested, 7.56 max).
-    # A duration makes all joints start and finish together, so each joint's
-    # acceleration scales with its own travel. It is also what makes the
-    # utensil-down argument hold: only a time-synchronised move interpolates
-    # J2+J4+J6 linearly between its endpoints. Under a per-joint speed limit a
-    # short-travel joint finishes early and the sum wanders.
+    # DURATION, not speed: a speed constraint asks every joint to reach that speed, so a joint with a sliver of
+    # travel is refused (INVALID_JOINT_ACCELERATION). A duration starts and ends all joints together, scaling
+    # each joint's acceleration with its travel, and keeps J2+J4+J6 interpolating between its endpoint values.
     rj.constraint.type = Base_pb2.JOINT_CONSTRAINT_DURATION
     from kinova.motion import capped              # (motion imports this module)
     v, acc = capped(conn, speed, math.inf)        # under the arm's own limits: faster is refused, not clamped
@@ -437,9 +388,8 @@ def goto(conn: KinovaConnection, target: Sequence[float], speed: float = 10.0, t
             if _braked_on_arrival(e, all(abs(fold(a - b)) < tol for a, b in zip(target, joints(conn))), label):
                 worst, dt = float("nan"), float("nan")
                 break
-            # Faster than the arm's configured joint limits allow: the controller refuses the duration BEFORE any
-            # motion and says its minimum -- which is not stable (a 75 deg swing half: 1.69, then 1.93 s for the
-            # re-sent one). Follow it, a few times, each at the minimum just reported + 5%
+            # Faster than the arm's joint limits allow: the controller refuses the duration before any motion and
+            # reports its minimum, which can change between tries. Re-send at the reported minimum + 5%, a few times
             m = re.search(r"INVALID_DURATION on index \d+ \(value [\d.]+, allowed ([\d.]+)\.\.", str(e))
             if attempt == tries or not m or max(abs(fold(t - c)) for t, c in zip(q0, joints(conn))) > 0.05:
                 raise

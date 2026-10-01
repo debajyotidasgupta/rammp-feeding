@@ -3,13 +3,9 @@
 # A different food: copy this file, set what differs, select it in rammp.yaml (profiles.food) or RAMMP_FOOD=<name>.
 
 name: cubes
-prompt: piece of food           # what the detector is asked for -- generic (fruit, steak, chicken cubes). On two
-                                # packed-cube frames (2026-09-25): one box per piece, 1.1 s, as good as "fruit cube";
-                                # "food pieces" / "food cube" / "bite-sized piece" merged pieces or boxed the whole
-                                # container. One food on the day: give it a profile with its own prompt, test it first
-fallback_prompts: [fruit cube] # asked only when the prompt leaves no usable box (a pile as one box, 2026-09-25)
+prompt: piece of food           # what the detector is asked for -- generic (fruit, steak, chicken cubes). One food
+                                # on the day: give it a profile with its own prompt, and test it first
+fallback_prompts: [fruit cube] # asked only when the prompt leaves no usable box
 exclude_grapes: true            # never target a dark red / purple box: grapes roll off the fork
 aim_offset_base_m: [0.0, 0.0]   # (x, y) base frame, added (with the utensil's tine offset) to the detected centre
-                                # in OVER. A cube is about as wide
-                                # as the fork head (~22 mm): aim at its centre (2026-09-25: the strawberry offset
-                                # put one side of the fork past a cube's corner)
+                                # in OVER; a cube is about as wide as the fork head: its centre

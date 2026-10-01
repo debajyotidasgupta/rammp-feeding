@@ -4,9 +4,8 @@
     python -m kinova.scripts.arm_tool            # make tool: what the arm has, and how it differs from ours
     python -m kinova.scripts.arm_tool --apply    # make tool APPLY=1: set deployment.arm.tool
 
-The tool lives ON THE ARM (Kinova ControlConfig) and another user of the arm may change it: on 2026-09-30 it read
-a 200 mm frame and 1.025 kg where ours is 120 mm / 0.831 kg, and a cartesian lift went 80 mm off. Every move
-refuses while it differs (safe_move.check_tool). --apply first writes the values it replaces to
+The tool lives on the arm (Kinova ControlConfig) and another user of the arm may change it. Every move refuses
+while it differs (safe_move.check_tool). --apply first writes the values it replaces to
 <runs_dir>/arm_tool_before_<time>.json and prints them, so the other user's setting can be put back:
 
     python -m kinova.scripts.arm_tool --restore <runs_dir>/arm_tool_before_<time>.json

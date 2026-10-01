@@ -1,6 +1,6 @@
-"""Procedural textures and meshes for the twin scene: made on first use into sim/out/cache (nothing binary in git).
+"""Procedural textures and meshes for the twin scene: made on first use into out/sim/cache (nothing binary in git).
 
-    from sim.procedural import cache_dir, wood_png, floor_png, bowl_obj, rounded_cube_obj, torus_obj
+    from sim.procedural import cache_dir, wood_png, floor_png, rounded_cube_obj, torus_obj
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ HERE = Path(__file__).parent
 
 
 def cache_dir() -> Path:
-    d = HERE / "out" / "cache"
+    d = HERE.parent / "out" / "sim" / "cache"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -100,23 +100,6 @@ def _lathe(profile: np.ndarray, n: int = 96) -> tuple[np.ndarray, np.ndarray]:
             p, q = i * n + j, i * n + (j + 1) % n
             f += [[p, q, q + n], [p, q + n, p + n]]
     return v, np.array(f)
-
-
-def bowl_obj(radius: float, height: float, wall: float = 0.005, name: str = "bowl.obj") -> Path:
-    """A ceramic bowl, origin at the centre of its foot: outside, a rolled rim, the inside, a flat-ish floor."""
-    out = cache_dir() / ("%s_%.3f_%.3f.obj" % (name[:-4], radius, height))
-    if out.exists():
-        return out
-    t = np.linspace(0, 1, 18)
-    foot = 0.55 * radius
-    outer = [(foot * 0.92, 0.0), (foot, 0.004)] + [(foot + (radius - foot) * np.sin(s * np.pi / 2),
-                                                    0.004 + (height - 0.004) * (1 - np.cos(s * np.pi / 2)) ** 0.9)
-                                                   for s in t[1:]]
-    rim = [(radius + wall * 0.35 * np.sin(s), height + wall * 0.5 * np.sin(s * 2) * 0) for s in np.linspace(0, np.pi, 7)[1:-1]]
-    inner = [(r - wall, max(z, 0.0) + wall * 1.3) for r, z in reversed(outer[1:])]
-    prof = np.array(outer + [(radius, height + wall * 0.4)] + rim + [(radius - wall, height)] + inner + [(0.0, wall * 1.3)])
-    v, f = _lathe(prof)
-    return _write_obj(out, v, f)
 
 
 def rounded_cube_obj(bevel: float = 0.18, name: str = "food_cube.obj", n: int = 14) -> Path:

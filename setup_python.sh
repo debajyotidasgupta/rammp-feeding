@@ -9,5 +9,5 @@ PYTHON=${PYTHON:-python3}
 ./.venv/bin/pip install -r requirements.txt
 
 echo
-echo "Done. Verify against the arm with:"
-echo "  ./.venv/bin/python -m kinova.scripts.check_connection"
+echo "Done. With the arm reachable:"
+echo "  make state"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Food acquisition from food_detect_start, frozen 2026-09-23. Runs ON THE JETSON.
+# Food acquisition from food_detect_start. Runs ON THE JETSON.
 #
 #   feeding/acquire.sh                      # over -> plunge (one smooth move to the floor) -> scoop
 #   STOP_AFTER=over|plunge feeding/acquire.sh
@@ -8,8 +8,7 @@
 #
 # Uses the current bite's perceive/ for the target (the latest `make perceive`; RUN=<dir> for another), and
 # records into the bite's acquire/ (feeding/lib.sh). Every depth reading is taken
-# FROM WHERE THE ARM IS before the next move: at a 30 mm hover the food was
-# 4.7-6.7 mm closer than the overlook reading predicted, every time today.
+# FROM WHERE THE ARM IS before the next move.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source feeding/lib.sh
@@ -53,7 +52,7 @@ echo "target from: $RUN"
 docker cp "$RUN/target.json" "$DRIVER":/tmp/target.json >/dev/null
 
 # Default: OVER -> PLUNGE (one smooth move to the floor, aimed from the overlook reading) -> SCOOP.
-# STOP_AFTER=hover30|hover10 (or START_AT at one of them) takes the old stepped route, for aim checks.
+# STOP_AFTER=hover30|hover10 (or START_AT at one of them) takes the stepped route, for aim checks.
 STEPPED=""; case "$STOP_AFTER $START_AT" in *hover30*|*hover10*|*punch*) STEPPED=1 ;; esac
 PICKED=""
 if [ -z "$STEPPED" ] && [ -z "$STOP_AFTER" ] && [ -n "$(S features.pick_in_one_program)" ] && run over; then

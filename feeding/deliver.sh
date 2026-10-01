@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Food delivery, from the end of the scoop. Runs ON THE JETSON. Built 2026-09-24.
+# Food delivery, from the end of the scoop. Runs ON THE JETSON.
 #
 #   feeding/deliver.sh                         # swing -> present -> bite -> retract (to food_detect_start)
 #   STOP_AFTER=present feeding/deliver.sh      # stop at a stage: swing | present | bite
@@ -7,10 +7,10 @@
 #   VALIDATE=1 feeding/deliver.sh              # plan and validate the swing / approach; nothing moves
 #   WAIT_OPEN= feeding/deliver.sh              # present: by default it approaches only once the user opens their mouth (60 s); empty = do not wait
 #
-# present = capture -> detect nose + mouth -> approach to 80 mm short of the mouth. If the food hides the
-# mouth: sidestep 50 mm away from the user (-Y) and look again, twice at most; then the nose estimate.
+# present = capture -> detect nose + mouth -> approach to delivery.stop_m (80 mm) short of the mouth. If the food
+# hides the mouth: sidestep delivery.sidestep_m (50 mm, -Y) and look again, twice at most; then the nose estimate.
 # Every approach uses only the detection made at that pose, just before it.
-# Exit 7 = the user did not open their mouth within 60 s: the arm retracted with the food still on it.
+# Exit 7 = the user did not open their mouth within delivery.open_mouth_timeout_s: the arm retracted with the food.
 #
 # Records into the bite's deliver/: one look_<n>/ per look at the face, arm/ for the arm (feeding/lib.sh).
 set -euo pipefail
@@ -31,7 +31,7 @@ arm() { $ARM "$@" 2>&1 | { grep --line-buffered -v Deprecation || true; }; retur
 capture_colour() {   # $1 = run dir: one colour frame, ~1 s
   PYTHONPATH=. "$MPY" -m feeding.grab_frame "$1/colour.jpg" >/dev/null 2>&1 && return 0
 }
-capture_depth() {    # $1 = run dir: 20-frame median depth, from frames since the arm stopped ($STILL_SINCE)
+capture_depth() {    # $1 = run dir: median depth (perception.depth_frames), from frames since the arm stopped ($STILL_SINCE)
   if ! PYTHONPATH=. "$PY" -m feeding.depth_grab "$1/depth.npy" --since "${STILL_SINCE:-$(date +%s.%N)}" >/dev/null 2>&1 && [ "$CAM_KIND" = kinova_vision ]; then     # resident: ~0.5 s
     docker cp feeding/depth_probe.py "$VISION":/tmp/depth_probe.py >/dev/null
     docker exec "$VISION" bash -lc "source /opt/ros/humble/setup.bash; source /ros2_ws/install/setup.bash; \

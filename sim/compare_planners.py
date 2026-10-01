@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Two recorded bites, side by side in the twin: e.g. the scripted moves against cuRobo's, on a site's geometry.
 
-    .venv/bin/python -m sim.compare_planners scripted.json curobo.json [--out sim/out/compare.mp4]
+    .venv/bin/python -m sim.compare_planners scripted.json curobo.json [--out out/sim/compare.mp4]
         (the dumps: tests/site_check.py --dump X.json [--planner curobo]) -- MuJoCo's own renderer, a quick look
 
     the film (path traced in Blender, sim/blender_render.py):
-    .venv/bin/python -m sim.compare_planners scripted.json curobo.json --export sim/out/cmp   # scene + poses
-    blender -b -P sim/blender_render.py -- sim/out/cmp/left  (and .../right)                 # frames, on a GPU
-    .venv/bin/python -m sim.compare_planners scripted.json curobo.json --compose sim/out/cmp # + the HUD -> mp4
+    .venv/bin/python -m sim.compare_planners scripted.json curobo.json --export out/sim/cmp   # scene + poses
+    blender -b -P sim/blender_render.py -- out/sim/cmp/left  (and .../right)                 # frames, on a GPU
+    .venv/bin/python -m sim.compare_planners scripted.json curobo.json --compose out/sim/cmp # + the HUD -> mp4
 
 Each panel replays its bite's executed moves (joint waypoints and their durations) in real time; the clocks run
 until each bite ends. The scene is the site's: the table at its height, the bowl where the scene camera put it,
@@ -308,7 +308,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("left"); ap.add_argument("right")
     ap.add_argument("--titles", nargs=2, default=["our scripted moves", "cuRobo's free-space moves"])
-    ap.add_argument("--out", default="sim/out/compare_planners.mp4")
+    ap.add_argument("--out", default="out/sim/compare_planners.mp4")
     ap.add_argument("--export", help="write the scene + poses for sim/blender_render.py into this folder")
     ap.add_argument("--compose", help="Blender's frames in this folder (left/, right/) + the HUD -> --out")
     a = ap.parse_args()

@@ -2,7 +2,6 @@
 __pycache__/
 *.py[cod]
 .DS_Store
-captures/
 # Staged KORTEX SDK: architecture-specific, fetched with `make sdk`.
 docker/vendor/kortex_api_*
 presentation/data/
@@ -11,6 +10,6 @@ config/local.yaml
 # SMPL-X is licensed: the body model and the meshes posed from it stay local (sim/pose_human.py makes them)
 sim/assets/smplx/
 sim/assets/human/
-sim/out/
+out/
 MUJOCO_LOG.TXT
 sim/assets/wheelchair/*.obj

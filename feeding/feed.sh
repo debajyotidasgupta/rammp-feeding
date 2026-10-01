@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The feeding loop, from feeding_start. Runs ON THE JETSON. Built 2026-09-24.
+# The feeding loop, from feeding_start. Runs ON THE JETSON.
 #
 #   feeding/feed.sh            # detect -> [perceive -> acquire -> deliver] until the bowl is empty or the
 #                              # user declines (no open mouth in 60 s) -> back to feeding_start

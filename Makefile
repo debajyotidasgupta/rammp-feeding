@@ -55,14 +55,14 @@ RTSP_PROTOCOLS ?= tcp
 # PYTHONDONTWRITEBYTECODE because the container runs as root: without it every
 # invocation leaves root-owned __pycache__ in the synced tree, which then blocks
 # sync.sh --delete and needs sudo to clear.
-INARM      := docker exec -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/work -w /work $(DRIVER) python3 -u -m
+INARM      := docker exec -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/work $(if $(RAMMP_SET),-e RAMMP_SET=$(RAMMP_SET),) -w /work $(DRIVER) python3 -u -m
 # make start / detect / start-direct also append their output, timestamped, to $(RUNS)/moves.log: a stop's reason is
 # kept even when the terminal is gone. RAMMP_SET passes through (e.g. slower speeds for a first trial).
 MOVELOG    = set -o pipefail; echo "== $$(date '+%F %T') make $@" >> $(RUNS)/moves.log; \
               docker exec -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/work -e RAMMP_SET="$$RAMMP_SET" -w /work $(DRIVER) python3 -u -m
 TO_MOVELOG := 2>&1 | while IFS= read -r l; do printf '%s\n' "$$l"; printf '%s %s\n' "$$(date +%T)" "$$l" >> $(RUNS)/moves.log; done
 
-.PHONY: planner local site-ready start-direct tool preflight camera camera-server locate-scene driver-image vision images driver depth clean-depth status state start detect perceive over acquire deliver retract feed detector models models-stop capture review locate-bowl limits twin twin-poses
+.PHONY: planner local site-ready start-direct tool preflight camera camera-server locate-scene calibrate-scene driver-image vision images driver depth clean-depth status state start detect perceive over acquire rise deliver retract feed detector models models-stop capture review locate-bowl limits twin twin-poses
 
 # --- the arm ----------------------------------------------------------------
 # Every motion goes through kinova/scripts/safe_move.py: utensil kept pointing
@@ -132,6 +132,10 @@ over:
 acquire:
 	@STOP_AFTER=$(STOP_AFTER) START_AT=$(or $(START_AT),over) feeding/acquire.sh
 
+# After a hover check (STOP_AFTER=hover30 / hover10): straight back up to the overlook height, then make detect
+rise:
+	@$(MOVELOG) kinova.scripts.acquire rise $(TO_MOVELOG)
+
 # Food delivery, from the end of the scoop: swing to the user, present short of the mouth, wait for the bite,
 # retract to food_detect_start.
 deliver:
@@ -148,7 +152,7 @@ feed:
 # The run record (feeding/lib.sh): every session in $(RUNS)/<date>_<what>/, the current bite at $(RUNS)/latest.
 # The arm's kinematic soft limits (on the arm): show, or apply config deployment.arm.soft_limits
 limits:
-	@$(INARM) kinova.scripts.arm_limits $(if $(APPLY),--apply,)
+	@$(INARM) kinova.scripts.arm_limits $(if $(APPLY),--apply,) $(if $(RESTORE),--restore $(RESTORE),)
 
 # Before any motion: the arm's tool, faults, kinematics (at feeding_start), speed limits, the servers. Never moves.
 # FIX=1 also sets our tool and speed limits (saving the arm's). make feed runs it first.
@@ -163,7 +167,8 @@ tool:
 review:
 	@PYTHONPATH=. $(FACE_PY) -m feeding.review "$(or $(RUN),$$(dirname $$(readlink -f $(RUNS)/latest)))" --write
 
-# The cuRobo planner server (every free-space move): its own container, our tree mounted, on the GPU
+# The cuRobo planner server (every free-space move): its own container, our tree and the external calibration
+# files mounted (the utensil's tip model reads the camera mount), on the GPU
 PLANNER    := $(shell $(SET) deployment.containers.planner)
 PLANNER_IMG:= $(shell $(SET) deployment.images.planner)
 planner:
@@ -171,6 +176,7 @@ planner:
 	else docker rm -f $(PLANNER) >/dev/null 2>&1; \
 	  docker run -d --name $(PLANNER) --network host --runtime nvidia --gpus all --restart unless-stopped \
 	    -e PYTHONUTF8=1 -e PYTHONPATH=/work -e RAMMP_ROOT=$(ROOTDIR) -v $(CURDIR):/work:ro -v $(RUNS):$(RUNS) -w /work \
+	    $(foreach f,$(CAL_FILES),-v $(f):$(f):ro) \
 	    --entrypoint bash $(PLANNER_IMG) -lc 'exec python3 -m kinova.planner_server' >/dev/null && \
 	  for i in $$(seq 1 180); do curl -s -m 2 http://127.0.0.1:$$($(SET) deployment.servers.planner_port)/ping | grep -q ok && \
 	    { echo "planner up ($${i} s, cuRobo warm)"; exit 0; }; sleep 1; done; echo "planner did not come up: docker logs $(PLANNER)"; exit 1; fi
@@ -186,6 +192,14 @@ site-ready:
 	@$(INARM) kinova.scripts.preflight
 	@if [ -n "$$($(SET) profiles.scene_camera)" ]; then $(MAKE) -s locate-scene; fi
 	@$(MAKE) -s detect PLAN=1
+
+# The scene camera's pose from the arm itself (feeding/calibrate_scene.py): one capture at the arm's pose now,
+# solved over the recent ones -> runs_dir/scene_extrinsic.json. Nothing moves. RESET=1: the camera was moved.
+# At food_detect_start one capture is enough (the wrist camera gives the table too); elsewhere, two poses in view.
+calibrate-scene:
+	@S=$$($(INARM) kinova.scripts.arm_state --joints | tail -2) && \
+	  PYTHONPATH=. $(DETECT_PY) -m feeding.calibrate_scene --joints="$$(echo "$$S" | head -1)" \
+	    --tool="$$(echo "$$S" | tail -1)" $(if $(RESET),--reset,)
 
 # The COARSE bowl + table position from the fixed scene camera (profiles.scene_camera) -> runs_dir/scene_state.json:
 # where food_detect_start goes. No motion. make models brings its camera server up.

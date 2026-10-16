@@ -17,6 +17,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -57,8 +58,15 @@ class Settings(unittest.TestCase):
                                       RAMMP_SET="deployment.name=site"), "site_driver")
 
     def test_by_camera_applies_only_with_that_camera(self):
-        self.assertEqual(settings_get("utensil.camera_to_tip_m", RAMMP_NO_LOCAL="1", RAMMP_CAMERA="realsense_d405"), "0.26")
-        self.assertEqual(settings_get("utensil.camera_to_tip_m", RAMMP_NO_LOCAL="1", RAMMP_CAMERA="kinova_wrist"), "0.265")
+        import yaml
+        cfgdir = Path(__file__).resolve().parent.parent / "config"
+        fork = yaml.safe_load((cfgdir / "utensil" / "fork.yaml").read_text())
+        d405 = yaml.safe_load((cfgdir / "camera" / "realsense_d405.yaml").read_text())
+        want = fork["by_camera"]["realsense_d405"]["glass_to_tip_m"] + d405["glass_to_optical_m"]   # the D405's: ruler + its glass
+        got = settings_get("utensil.camera_to_tip_m", RAMMP_NO_LOCAL="1", RAMMP_CAMERA="realsense_d405")
+        self.assertAlmostEqual(float(got), want, places=6)
+        got = settings_get("utensil.camera_to_tip_m", RAMMP_NO_LOCAL="1", RAMMP_CAMERA="kinova_wrist")
+        self.assertAlmostEqual(float(got), fork["camera_to_tip_m"], places=6)                      # the built-in camera's
 
     def test_local_yaml_picks_profiles(self):
         conf = TMP / "config"
@@ -92,7 +100,12 @@ class SceneCamera(unittest.TestCase):
         import feeding.locate_scene as L
         rng = np.random.default_rng(0)
         z = np.concatenate([rng.normal(-0.024, 0.002, 3000), rng.uniform(0.1, 0.6, 2500), np.full(500, -0.8)])
-        self.assertAlmostEqual(L.table_height(z), -0.024, delta=0.002)   # not the arm above it, not the floor
+        xy = rng.uniform(0.1, 0.5, (len(z), 2))
+        self.assertAlmostEqual(L.table_height(np.c_[xy, z], [0.3, 0.2]), -0.024, delta=0.002)   # not the arm, the floor
+        # the table read sloped (a rotated extrinsic: +7 mm per 10 cm), most pixels on its high side: at the bowl
+        xy = np.r_[rng.uniform([0.3, 0.3], [0.5, 0.5], (4000, 2)), rng.uniform([0.1, 0.0], [0.3, 0.2], (800, 2))]
+        z = -0.030 + 0.07 * (xy[:, 0] - 0.3) + 0.07 * (xy[:, 1] - 0.2) + rng.normal(0, 0.001, len(xy))
+        self.assertAlmostEqual(L.table_height(np.c_[xy, z], [0.3, 0.2]), -0.030, delta=0.002)
         n = 400                                         # a box full of an arm (0.3 m up), a few bowl points
         box_pts = np.column_stack([np.full(n, 0.29), np.full(n, 0.158), np.where(np.arange(n) < 300, 0.3, 0.03)])
         ring_pts = np.column_stack([rng.uniform(0.1, 0.5, 400), rng.uniform(0.0, 0.3, 400), np.full(400, -0.024)])
@@ -177,19 +190,113 @@ class Preflight(unittest.TestCase):
         self.assertIn("192.168.1.11:5216", rep.rows[-1][2])
 
 
+class PlungeFloor(unittest.TestCase):
+    """A clear bowl: depth reads the table beneath it -- the plunge stops at the bowl's own floor (2026-10-02)."""
+
+    def test_the_bowls_floor_bounds_a_reading_through_it(self):
+        import kinova.scripts.acquire as A
+        u = A.Under.from_dict(dict(top=0.417, gap_top=0.181, floor=0.445, gap_floor=0.209, height=0.028))
+        tip_z = 0.455 - 0.236                                      # the camera's height - camera-to-tip
+        floor = {"bowl.floor_above_table_m": 0.020}
+        with mock.patch.object(A.scene, "table_height", lambda: 0.007), \
+                mock.patch.object(A, "cfg", SimpleNamespace(get=lambda k, d=None: floor.get(k, d))):
+            d = A._plunge_depth(u, 0.0, tip_z)
+            self.assertAlmostEqual(tip_z - d.down, 0.027, places=6)          # at the floor, not 3 mm above the table
+            floor["bowl.floor_above_table_m"] = None
+            self.assertAlmostEqual(A._plunge_depth(u, 0.0, tip_z).down, 0.209, places=6)   # unset: as measured
+
+
+class OpenMouthWait(unittest.TestCase):
+    """The open-mouth hold over a far face's detection gaps: skipped up to open_mouth_gap_s, never a closed mouth."""
+
+    def run_wait(self, frames):
+        import feeding.detect_mouth_mp as M
+        seq = iter(frames)                              # per 1/30 s frame: "open", "closed" or None (no face found)
+        L_open = np.zeros((478, 2)); L_open[13] = [0, 0]; L_open[14] = [0, 30]; L_open[61] = [-50, 15]; L_open[291] = [50, 15]
+        L_shut = L_open.copy(); L_shut[14] = [0, 1]
+        state = {}
+
+        def read():
+            time.sleep(1 / 30)
+            state["f"] = next(seq, "closed")
+            return True, np.zeros((480, 848, 3), np.uint8), 0.0
+        with mock.patch.object(M, "landmarks", lambda det, img: ({"open": L_open, "closed": L_shut}.get(state["f"]), 0.0)):
+            return M._wait(None, read, TMP, timeout=float(len(frames)) / 30 + 0.5)
+
+    def test_gaps_up_to_the_limit_are_skipped(self):
+        # 0.4 s open with two 0.13 s detection gaps: counts
+        self.assertEqual(self.run_wait(["open"] * 3 + [None] * 4 + ["open"] * 3 + [None] * 4 + ["open"] * 4), 0)
+
+    def test_a_long_gap_or_a_closed_mouth_resets(self):
+        self.assertEqual(self.run_wait(["open"] * 5 + [None] * 15 + ["open"] * 5 + ["closed"] * 10), 4)
+        self.assertEqual(self.run_wait((["open"] * 4 + ["closed"]) * 4 + ["closed"] * 10), 4)
+
+
+class SceneCalibration(unittest.TestCase):
+    """The scene camera's pose from the arm's spheres: synthetic, the truth known."""
+
+    def test_recovers_a_knocked_camera(self):
+        import feeding.calibrate_scene as C
+        rng = np.random.default_rng(1)
+        R_true, t_true = C.rot(np.radians([4.0, 20.0, -105.0])), np.array([0.1, 0.7, 0.35])
+
+        def capture(chain):                             # an arm pose: its spheres, and the camera's view of them
+            S = np.array([[*(np.array(a) + (np.array(b) - np.array(a)) * f), 0.05 - 0.02 * f]
+                          for a, b in zip(chain[:-1], chain[1:]) for f in (0.0, 0.33, 0.66)])
+            pts = []
+            for c in S:                                 # each sphere's half facing the camera
+                v = rng.normal(size=(300, 3)); v /= np.linalg.norm(v, axis=1)[:, None]
+                pts.append(c[:3] + v[(v @ (t_true - c[:3])) > 0] * c[3])
+            pts.append(np.c_[rng.uniform(0.1, 0.7, 4000), rng.uniform(-0.3, 0.6, 4000), np.full(4000, -0.03)])  # the table
+            X = np.vstack(pts) + rng.normal(0, 0.002, (sum(len(p) for p in pts), 3))
+            return (X - t_true) @ R_true, S             # the points in the camera's frame
+        caps = [capture([[0, 0, 0.2], [0.05, 0.05, 0.35], [0.2, 0.08, 0.4], [0.35, 0.12, 0.38], [0.42, 0.2, 0.33], [0.43, 0.22, 0.25]]),
+                capture([[0, 0, 0.2], [-0.05, 0.08, 0.38], [0.05, 0.25, 0.45], [0.15, 0.4, 0.35], [0.25, 0.45, 0.3], [0.32, 0.4, 0.22]])]
+        R0, t0 = R_true @ C.rot(np.radians([3.0, -4.0, 4.0])), t_true + [0.04, -0.03, 0.02]   # knocked: 5 cm, 6 deg
+        R, t, rms, n = C.best_fit(caps, R0, t0)
+        self.assertLess(np.linalg.norm(t - t_true), 0.01)
+        self.assertLess(np.degrees(np.arccos(np.clip((np.trace(R_true.T @ R) - 1) / 2, -1, 1))), 1.0)
+        self.assertLess(rms, 0.004)
+
+
+    def test_one_pose_and_the_table_recover_a_hard_knock(self):
+        import feeding.calibrate_scene as C
+        rng = np.random.default_rng(2)
+        R_true, t_true = C.rot(np.radians([4.0, 20.0, -105.0])), np.array([0.1, 0.7, 0.35])
+        chain = [[0, 0, 0.2], [0.05, 0.05, 0.35], [0.2, 0.08, 0.4], [0.35, 0.12, 0.38], [0.42, 0.2, 0.33], [0.43, 0.22, 0.25]]
+        S = np.array([[*(np.array(a) + (np.array(b) - np.array(a)) * f), 0.05 - 0.02 * f]
+                      for a, b in zip(chain[:-1], chain[1:]) for f in (0.0, 0.33, 0.66)])
+        pts = []
+        for c in S:
+            v = rng.normal(size=(300, 3)); v /= np.linalg.norm(v, axis=1)[:, None]
+            pts.append(c[:3] + v[(v @ (t_true - c[:3])) > 0] * c[3])
+        pts.append(np.c_[rng.uniform(0.1, 0.7, 4000), rng.uniform(-0.3, 0.6, 4000), np.full(4000, 0.007)])  # the table
+        X = np.vstack(pts) + rng.normal(0, 0.002, (sum(len(p) for p in pts), 3))
+        caps = [((X - t_true) @ R_true, S)]
+        R0, t0 = R_true @ C.rot(np.radians([6.0, -8.0, 8.0])), t_true + [0.08, -0.06, 0.04]   # 11 cm, 13 deg
+        R, t, rms, n = C.best_fit(caps, R0, t0, table_z=0.007)
+        self.assertLess(np.linalg.norm(t - t_true), 0.01)
+        self.assertLess(np.degrees(np.arccos(np.clip((np.trace(R_true.T @ R) - 1) / 2, -1, 1))), 1.0)
+
+
 class Scene(unittest.TestCase):
     def setUp(self):
         (TMP / "scene_state.json").write_text(json.dumps(dict(t=__import__("time").time(), bowl_xy=[0.29, 0.158],
                                                               table_z=-0.024, bowl_top_z=0.046, rim_radius_m=0.054)))
 
-    def test_computed_overlook_puts_the_camera_over_the_bowl(self):
+    def test_computed_overlook_puts_the_aim_over_the_bowl_the_lens_at_its_height(self):
         from kinova import scene
         from kinova.frames import R_from_kortex
+        from kinova.motion import tip_in_tool
         from feeding.camera import CAM_IN_TOOL
+        from settings import cfg
         t = scene.overlook_pose()["tool_pose"]
-        cam = np.array([t["x_m"], t["y_m"], t["z_m"]]) + R_from_kortex(t["theta_x_deg"], t["theta_y_deg"],
-                                                                        t["theta_z_deg"]) @ CAM_IN_TOOL
-        self.assertTrue(np.allclose(cam, [0.29, 0.158, -0.024 + 0.35], atol=1e-9), cam)
+        T = np.array([t["x_m"], t["y_m"], t["z_m"]])
+        R = R_from_kortex(t["theta_x_deg"], t["theta_y_deg"], t["theta_z_deg"])
+        aim = T + R @ (tip_in_tool() if str(cfg.workspace.overlook_aim) == "tip" else CAM_IN_TOOL)
+        self.assertTrue(np.allclose(aim[:2], [0.29, 0.158], atol=1e-9), aim)
+        lens_z = (T + R @ CAM_IN_TOOL)[2]
+        self.assertAlmostEqual(lens_z, -0.024 + float(cfg.workspace.overlook_camera_height_m), places=9)
 
     def test_tip_floor_bowl_table_and_beside_it(self):
         from kinova import scene

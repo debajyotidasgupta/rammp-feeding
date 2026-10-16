@@ -12,3 +12,4 @@ an instruction unless the README or CLAUDE.md repeats it.
 | perception.md | feeding/ and sim/: prompts, filters, depth, the face, the twin |
 | scene_error_study_20261001.json | tests/scene_error_study.py's raw rows (the overlook height and the scene camera's margin) |
 | planners.md, planner_compare_20261001.json | scripted / cuRobo / BLAST on the same moves; findings for BLAST's authors |
+| sim.md | the GPU strategy search (sim/isaac/): the pipeline, generation 0's findings, the cluster setup |

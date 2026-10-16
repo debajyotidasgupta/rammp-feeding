@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 
 from kinova.connection import kinova_connection
-from kinova.scripts.safe_move import approach_axis, fold
+from kinova.scripts.safe_move import approach_axis, fold, joints, tool_pose
 
 HOME_JSON = Path(__file__).resolve().parent.parent.parent / "calibration" / "home_pose.json"
 
@@ -57,7 +57,14 @@ def main() -> int:
     ap.add_argument("--ip", default=None)
     ap.add_argument("--watch", action="store_true")
     ap.add_argument("--hz", type=float, default=2.0)
+    ap.add_argument("--joints", action="store_true", help="print only the joints (deg) and the tool pose (m, deg): "
+                                                           "two comma-separated lines")
     a = ap.parse_args()
+    if a.joints:
+        with kinova_connection(ip=a.ip) as conn:
+            print(",".join("%.4f" % v for v in joints(conn)))
+            print(",".join("%.5f" % v for v in tool_pose(conn)))
+        return 0
 
     home = None
     if HOME_JSON.exists():

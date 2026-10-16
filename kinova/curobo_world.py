@@ -4,7 +4,7 @@
     w = world(workspace, mouth, wheelchair_boxes)        # RAMMP-CuRobo's world schema (obstacles: cuboids)
 
 Used by kinova/planner_server.py (the planning service) and tests/scene_error_study.py.
-  table      the workspace's table height over its footprint (workspace.table_extent_m)
+  table      the workspace's table height over its footprint (workspace.table_extent_m), raised to our tip floor
   bowl       HOLLOW: a floor and 12 wall boxes round its rim (a solid box would put the overlook, the utensil over
              its opening, inside it)
   Both grown by the workspace's error_m (the scene camera's reading is trusted to that): the table and the rim
@@ -42,8 +42,10 @@ def wheelchair_boxes(path: Path = WHEELCHAIR) -> list[dict]:
 
 
 def world(workspace: dict, mouth, chair: list[dict] | None = None, bowl_radius: float | None = None,
-          table_extent: dict | None = None) -> dict:
-    """RAMMP-CuRobo's world (base_link frame): table, hollow bowl, user, wheelchair, pedestal."""
+          table_extent: dict | None = None, floor_m: float = 0.0) -> dict:
+    """RAMMP-CuRobo's world (base_link frame): table, hollow bowl, user, wheelchair, pedestal. floor_m: the table's
+    box this much higher over its footprint -- our own floor for the utensil tip (scene.tip_floor), so the planner's
+    paths respect it rather than being refused after planning."""
     e = float(workspace.get("error_m", 0.0))         # the reading may be this far off: the table and bowl grow by it
     tz, top = float(workspace["table_z"]) + e, float(workspace["bowl_top_z"]) + e
     bx, by = (float(v) for v in workspace["bowl_xy"])
@@ -53,7 +55,7 @@ def world(workspace: dict, mouth, chair: list[dict] | None = None, bowl_radius: 
     tx, ty = [float(v) for v in ext["x"]], [float(v) for v in ext["y"]]
     tx[0] += e                                       # the raised table stops short of the arm's own base by as much
     obs = [dict(name="pedestal", position=[0.0, 0.0, -0.05], dims=[0.14, 0.14, 0.04]),
-           dict(name="table", position=[sum(tx) / 2, sum(ty) / 2, tz - 0.025], dims=[tx[1] - tx[0], ty[1] - ty[0], 0.05]),
+           dict(name="table", position=[sum(tx) / 2, sum(ty) / 2, tz + floor_m - 0.025], dims=[tx[1] - tx[0], ty[1] - ty[0], 0.05]),
            dict(name="bowl_floor", position=[bx, by, tz + 0.004], dims=[2 * (r + e), 2 * (r + e), 0.008]),
            dict(name="user_head", position=[m[0] - 0.09, m[1], m[2] + 0.05], dims=[0.20, 0.18, 0.26]),
            dict(name="user_torso", position=[m[0] - 0.12, m[1], m[2] - 0.30], dims=[0.28, 0.42, 0.45])]

@@ -91,7 +91,7 @@ stage_begin() {
 }
 
 # the arm command for a kinova.scripts module, recording into the driver container
-arm_cmd() { echo "docker exec -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/work -e RAMMP_RECORD=$ARM_REC -w /work $DRIVER python3 -u -m kinova.scripts.$1"; }
+arm_cmd() { echo "docker exec -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/work -e RAMMP_RECORD=$ARM_REC ${RAMMP_SET:+-e RAMMP_SET=$RAMMP_SET} -w /work $DRIVER python3 -u -m kinova.scripts.$1"; }   # RAMMP_SET passes through
 
 # arm_pull: copy the arm's record out of the driver container into this stage's arm/ (host-owned files)
 arm_pull() {

@@ -10,6 +10,9 @@ streams:
   colour_url: "http://127.0.0.1:{camera_port}/mjpeg"   # the camera server's colour stream (face server, grab_frame)
   ros: {domain_id: 0, cyclonedds_uri: ""}             # "" = the image's default DDS config
 
+glass_to_optical_m: 0.003       # its optical origin behind the front glass (a few mm; not measured -- longer errs safe:
+                                # a utensil's ruler reading from the glass, settings.py, then stops higher)
+
 colour:                         # /wrist_camera/color/camera_info, 2026-09-30 (plumb_bob, k1 -0.054: not undistorted)
   width: 848
   height: 480

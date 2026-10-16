@@ -6,7 +6,7 @@ to its extrinsic.error_m, which the planner's world and the utensil's floor keep
 camera then measures the food itself, from food_detect_start.
 
 food_detect_start is computed, not stored: the wrist camera workspace.overlook_camera_height_m above the table,
-its lens axis through the bowl, in the captured overlook's orientation (utensil down, the image oriented as
+the utensil tip (or the lens axis: workspace.overlook_aim) over the bowl, in the captured overlook's orientation (utensil down, the image oriented as
 calibrated). Its joints come from continuous IK out of the captured overlook, so the arm keeps that shape.
 """
 
@@ -19,7 +19,7 @@ import numpy as np
 
 from feeding.camera import CAM_IN_TOOL
 from kinova.frames import R_from_kortex
-from kinova.motion import homotopy, margin
+from kinova.motion import _ik, homotopy, margin, tip_in_tool
 from kinova.scripts.safe_move import Joints, MoveError
 from kinova.workspace import workspace
 from settings import cfg
@@ -62,7 +62,9 @@ def overlook_pose() -> dict:
     R = R_from_kortex(t["theta_x_deg"], t["theta_y_deg"], t["theta_z_deg"])
     cam = R @ CAM_IN_TOOL                                       # the lens, from the tool point, in the base frame
     cam_z = ws["table_z"] + float(cfg.workspace.overlook_camera_height_m)
-    t["x_m"], t["y_m"], t["z_m"] = ws["bowl_xy"][0] - cam[0], ws["bowl_xy"][1] - cam[1], cam_z - cam[2]
+    aim = R @ tip_in_tool() if str(cfg.workspace.overlook_aim) == "tip" else cam   # what goes over the bowl
+    off = [float(v) for v in cfg.workspace.overlook_offset_m]
+    t["x_m"], t["y_m"], t["z_m"] = ws["bowl_xy"][0] + off[0] - aim[0], ws["bowl_xy"][1] + off[1] - aim[1], cam_z - cam[2]
     pose["tool_pose"] = t
     return pose
 
@@ -73,18 +75,24 @@ def overlook_joints(conn: KinovaConnection) -> Joints:
     captured = cfg.overlook_pose()
     seed = [float(v) for v in captured["joints_deg"]]
     t = overlook_pose()["tool_pose"]
-    key = tuple(round(t[k], 6) for k in ("x_m", "y_m", "z_m"))
+    key = tuple(round(t[k], 6) for k in ("x_m", "y_m", "z_m")) + tuple(cfg.workspace.overlook_seed_delta_deg or ())
     if key in _RESOLVED:
         return list(_RESOLVED[key])
     c = captured["tool_pose"]
     T0, T1 = np.array([c["x_m"], c["y_m"], c["z_m"]]), np.array([t["x_m"], t["y_m"], t["z_m"]])
-    R = R_from_kortex(t["theta_x_deg"], t["theta_y_deg"], t["theta_z_deg"])
-    n = max(4, int(np.ceil(np.linalg.norm(T1 - T0) / 0.015)))
-    path, why = homotopy(conn, seed, lambda s: (T0 + (T1 - T0) * s, R), n)
-    if path is None:
-        raise MoveError("food_detect_start over the bowl at (%.3f, %.3f) m is not reachable from the captured one "
-                        "without changing the arm's shape (%s)" % (*workspace()["bowl_xy"], why))
-    q = path[-1]
+    rpy = (t["theta_x_deg"], t["theta_y_deg"], t["theta_z_deg"])
+    delta = cfg.workspace.overlook_seed_delta_deg
+    if delta:                                                   # another arm shape: one IK from a shifted seed
+        q = _ik(conn, T1, rpy, [s + float(d) for s, d in zip(seed, delta)])
+        if q is None:
+            raise MoveError("food_detect_start is not reachable from the seed shifted by %s" % list(delta))
+    else:
+        n = max(4, int(np.ceil(np.linalg.norm(T1 - T0) / 0.015)))
+        path, why = homotopy(conn, seed, lambda s: (T0 + (T1 - T0) * s, R_from_kortex(*rpy)), n)
+        if path is None:
+            raise MoveError("food_detect_start over the bowl at (%.3f, %.3f) m is not reachable from the captured one "
+                            "without changing the arm's shape (%s)" % (*workspace()["bowl_xy"], why))
+        q = path[-1]
     if margin(q) < float(cfg.motion.plan_min_margin_deg):
         raise MoveError("food_detect_start comes within %.1f deg of a joint limit" % margin(q))
     _RESOLVED[key] = q
@@ -93,11 +101,12 @@ def overlook_joints(conn: KinovaConnection) -> Joints:
 
 def scoop_end() -> dict:
     """Where the scoop carries the food (the swing to the user starts there): the bowl profile's scoop end moved by
-    the table's height (workspace.scoop_end_follows: table) or by the bowl and the table (bowl). joints_deg: an IK
-    seed (the arm's shape)."""
+    the table's height (workspace.scoop_end_follows: table) or by the bowl and the table (bowl), and raised by
+    acquisition.scoop.end_raise_m. joints_deg: an IK seed (the arm's shape)."""
     se = dict(cfg.bowl.scoop_end)
     d = shift()
     if str(cfg.workspace.scoop_end_follows) == "table":
         d = np.array([0.0, 0.0, d[2]])
+    d = d + np.array([0.0, 0.0, float(cfg.acquisition.scoop.end_raise_m)])
     se["tool_m"] = [float(se["tool_m"][i]) + float(d[i]) for i in range(3)]
     return se

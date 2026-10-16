@@ -44,9 +44,11 @@ OPT_TO_LINK = np.array([[0.0, 0.0, 1.0], [-1.0, 0.0, 0.0], [0.0, -1.0, 0.0]])
 
 
 def extrinsic() -> tuple[np.ndarray, np.ndarray, str]:
-    """(R, t): base_link <- the camera's link frame, and where it came from."""
+    """(R, t): base_link <- the camera's link frame, and where it came from: our own calibration
+    (make calibrate-scene: <runs_dir>/scene_extrinsic.json) when there is one, else the configured file / values."""
     e = SC.extrinsic
-    path = str(e.get("file") or "")
+    ours = Path(os.path.expanduser(str(cfg.deployment.runs_dir))) / "scene_extrinsic.json"
+    path = str(ours) if ours.exists() else str(e.get("file") or "")
     if path:
         doc = yaml.safe_load(open(os.path.expanduser(path)))
         if doc.get("parent_frame") not in ("base_link", None):
@@ -58,10 +60,14 @@ def extrinsic() -> tuple[np.ndarray, np.ndarray, str]:
 
 
 def fetch(port: int) -> tuple[Image.Image, np.ndarray]:
-    with urllib.request.urlopen("http://127.0.0.1:%d/frame" % port, timeout=5) as r:
-        colour = Image.open(io.BytesIO(r.read())).convert("RGB")
-    with urllib.request.urlopen("http://127.0.0.1:%d/median?frames=15&wait=5&min=5" % port, timeout=15) as r:
-        depth = np.load(io.BytesIO(r.read())).astype(np.float64) / 1000.0            # m, 0 = no return
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:%d/frame" % port, timeout=5) as r:
+            colour = Image.open(io.BytesIO(r.read())).convert("RGB")
+        with urllib.request.urlopen("http://127.0.0.1:%d/median?frames=15&wait=5&min=5" % port, timeout=15) as r:
+            depth = np.load(io.BytesIO(r.read())).astype(np.float64) / 1000.0        # m, 0 = no return
+    except OSError as e:
+        raise SystemExit("the scene camera server (:%d) has no frames (%s) -- is the camera's driver running? "
+                         "(then restart ours: make camera-server)" % (port, e))
     return colour, depth
 
 
@@ -100,13 +106,21 @@ def circle_fit(xy: np.ndarray) -> tuple[np.ndarray, float]:
     return np.array([cx, cy]), float(np.sqrt(max(c + cx * cx + cy * cy, 0.0)))
 
 
-def table_height(z: np.ndarray) -> float:
-    """The table round the bowl: the most common height (1 cm bins), refined -- the dominant flat surface, not
-    the median of whatever else the ring takes in (an arm, a person, the floor past the table's edge)."""
+def table_height(p: np.ndarray, at_xy: np.ndarray) -> float:
+    """The table round the bowl, at the bowl: the dominant flat surface (the most common height, 1 cm bins, not
+    whatever else the ring takes in -- an arm, a person, the floor past the table's edge), fitted as a plane and read
+    at at_xy. A plane, not the mode: through a slightly rotated extrinsic the table reads sloped, and the ring's side
+    nearest the camera has the most pixels."""
+    z = p[:, 2]
     lo = np.floor(z.min() * 100) / 100
-    counts = np.bincount(((z - lo) * 100).astype(int))
-    peak = lo + (int(np.argmax(counts)) + 0.5) / 100
-    return float(np.median(z[np.abs(z - peak) < 0.015]))
+    peak = lo + (int(np.argmax(np.bincount(((z - lo) * 100).astype(int)))) + 0.5) / 100
+    q = p[np.abs(z - peak) < 0.03]
+    for _ in range(4):
+        A = np.c_[q[:, 0], q[:, 1], np.ones(len(q))]
+        c, *_ = np.linalg.lstsq(A, q[:, 2], rcond=None)
+        r = q[:, 2] - A @ c
+        q = q[np.abs(r) < 2.5 * r.std() + 1e-4]
+    return float(c[0] * at_xy[0] + c[1] * at_xy[1] + c[2])
 
 
 def measure(bx: list[float], uv: np.ndarray, p_base: np.ndarray) -> dict:
@@ -118,8 +132,8 @@ def measure(bx: list[float], uv: np.ndarray, p_base: np.ndarray) -> dict:
             & (uv[:, 1] <= bx[3] + 0.6 * h) & ~inside)
     if inside.sum() < 50 or ring.sum() < 50:
         return dict(res, rejected="too little depth at it (%d points) or around it (%d)" % (inside.sum(), ring.sum()))
-    table_z = table_height(p_base[ring, 2])
     b = p_base[inside]
+    table_z = table_height(p_base[ring], np.median(b[:, :2], axis=0))
     max_h, gate = float(cfg.perception.scene.max_bowl_height_m), float(cfg.perception.scene.max_bowl_radius_m)
     blocked = float(np.mean(b[:, 2] > table_z + max_h))
     if blocked > float(cfg.perception.scene.max_blocked_frac):

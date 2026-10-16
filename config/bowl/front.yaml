@@ -9,6 +9,8 @@ captured_at:                    # where the table and the bowl were when the pos
                                 # (feeding/locate_bowl.py on the 2026-09-24 perceive runs at this overlook)
   table_height_m: 0.2140
   bowl_centre_m: [0.2692, 0.2765]
+floor_above_table_m: null       # the bowl's inner floor above the table (ruler); set, the plunge never aims below
+                                # it -- a clear bowl's floor is invisible to depth (it reads the table beneath)
 overlook_pose: calibration/food_detect_pose.json   # food_detect_start: joints + tool pose (written by the capture tool)
 scoop_end:                      # where the scoop carries the food to: the swing to the user starts here
   tool_m: [0.2997, -0.0968, 0.4038]

@@ -71,11 +71,25 @@ def check_floor(conn, path) -> tuple[float, float]:
     return min(zs), max(zs)
 
 
+def check_reach(conn, path, max_r: float) -> float:
+    """The utensil tip's furthest horizontal distance from the arm's base axis on the path; refuses past max_r."""
+    from kinova.motion import fk_tip
+    r = max(float(np.hypot(*fk_tip(conn, q)[:2])) for q in path)
+    if r > max_r + 1e-6:
+        raise MoveError("the planned path swings the utensil tip %.0f mm out from the arm's base (at most %.0f) -- "
+                        "not moving" % (1000 * r, 1000 * max_r))
+    return r
+
+
 def travel(conn, goal, label: str, carrying: bool = False, go: bool = True, dps: float | None = None,
-           torque_limit: float | None = None, max_tilt: float | None = None) -> list[list[float]]:
-    """Plan from where the arm is to goal, check it, run it, settle exactly onto goal. go=False: plan and check only."""
+           torque_limit: float | None = None, max_tilt: float | None = None, max_reach_m: float | None = None,
+           start=None) -> list[list[float]]:
+    """Plan from where the arm is (or `start`, plan only) to goal, check it, run it, settle exactly onto goal.
+    go=False: plan and check only. max_reach_m: the tip stays within this of the base axis (re-planned, else refused)."""
     from kinova.motion import max_step, run_path
-    q = joints(conn)
+    q = list(start) if start is not None else joints(conn)
+    if start is not None and go:
+        raise MoveError("travel from a given start is plan-only")
     settle = dict(speed=float(cfg.motion.settle_dps), label="settle %s" % label)
     if max_tilt is not None:
         settle["max_tilt"] = max_tilt
@@ -83,8 +97,17 @@ def travel(conn, goal, label: str, carrying: bool = False, go: bool = True, dps:
         if go:
             goto(conn, goal, **settle)
         return [q, list(goal)]
-    path = plan(q, goal, carrying=carrying)
-    lo, hi = check_floor(conn, path)
+    for k in range(int(FS.floor_retries) + 1):            # cuRobo does not know our floor: another plan may clear it
+        path = plan(q, goal, carrying=carrying)
+        try:
+            lo, hi = check_floor(conn, path)
+            if max_reach_m is not None:
+                check_reach(conn, path, max_reach_m)
+            break
+        except MoveError as e:
+            if k == int(FS.floor_retries):
+                raise
+            log.info("    %-26s re-planning (%d/%d): %s", label, k + 1, int(FS.floor_retries), str(e).split(" -- ")[0])
     log.info("    %-26s planned: %d waypoints, utensil tip z %.3f .. %.3f%s", label, len(path), lo, hi,
              "" if go else "  (plan only)")
     runlog.event("planned", label=label, waypoints=len(path), tip_z=[lo, hi], carrying=carrying)

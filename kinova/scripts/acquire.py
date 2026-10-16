@@ -44,6 +44,7 @@ from kinova.connection import kinova_connection
 from kinova.frames import R_from_kortex, kortex_from_R, rot_x
 from kinova.motion import (WATCH_EXTRA_S, _ik, _waypoints, margin, max_step, record_plan, tip_in_tool, validate,
                            waypoint_list)
+from kinova.workspace import workspace
 from kinova.scripts.safe_move import (Joints, MoveError, TorqueGuard, _events, check_tool, fold, goto_cartesian,
                                       joints, tilt_deg, tool_pose)
 from settings import cfg
@@ -175,6 +176,24 @@ def descend(conn: KinovaConnection, under_path: str, to_above: float) -> None:
     log.info("    tip now ~%.1f mm above the food top", 1000 * (u.gap_top - down))
 
 
+def rise(conn: KinovaConnection) -> None:
+    """Straight back up to food_detect_start's height, where it is (after a hover check): the way out of the bowl
+    (cuRobo refuses a start inside it -- the bowl grown by the scene camera's error)."""
+    p = tool_pose(conn)
+    top = float(scene.overlook_pose()["tool_pose"]["z_m"])
+    ws = workspace()
+    off = math.hypot(p[0] - ws["bowl_xy"][0], p[1] - ws["bowl_xy"][1])
+    if off > ws["bowl_radius"] + float(A_.over_max_m):
+        raise MoveError("%.0f mm from the bowl's centre -- not a hover over it" % (1000 * off))
+    up = top - p[2]
+    if up <= float(cfg.delivery.arrived_m):
+        log.info("    already at the overlook height")
+        return
+    if up > float(A_.stepped.descend_max_m) + float(A_.stepped.slow_zone_m) + 0.05:
+        raise MoveError("%.0f mm below the overlook height -- not a hover" % (1000 * up))
+    _vertical_move(conn, -up, float(A_.stepped.rise_mps), "rise")
+
+
 def punch(conn: KinovaConnection, under_path: str, floor_m: float) -> None:
     """Straight down, slowly, to `floor_m` above the bowl floor (the stepped route's last move)."""
     u = Under.load(under_path)
@@ -219,8 +238,16 @@ def _plunge_depth(u: Under, floor_m: float, tip_z: float) -> PlungeDepth:
     else:
         why = None
     if why is None or not NF.enabled:
-        down = _check_plunge(u, floor_m)
-        return PlungeDepth(down, FoodOnTip(height=u.height, floor_m=floor_m), "floor")
+        down, height = _check_plunge(u, floor_m), u.height
+        bf = cfg.get("bowl.floor_above_table_m", None)
+        if bf is not None:                     # the bowl's own floor: a reading below it is through the bowl (glass)
+            lowest = scene.table_height() + float(bf) + floor_m
+            if tip_z - down < lowest:
+                height = (tip_z - u.gap_top) - (lowest - floor_m)
+                log.info("    the floor reads %.0f mm below the bowl's own floor (seen through it?): stopping %.0f mm "
+                         "above that floor instead", 1000 * (lowest - (tip_z - down)), 1000 * floor_m)
+                down = tip_z - lowest
+        return PlungeDepth(down, FoodOnTip(height=height, floor_m=floor_m), "floor")
     if u.depth_source == "da3-raw" or u.filled_top > float(NF.refuse_if_top_filled_over):
         raise MoveError("packed food (%s) and its top is the Depth Anything 3 fallback -- too uncertain to plunge "
                         "below it; nothing moved" % why)
@@ -326,7 +353,8 @@ def plunge(conn: KinovaConnection, under: str | Under, floor_m: float, scoop_wit
     """From OVER straight down to the depth _plunge_depth picks, in one move with no stop on the way.
 
     One joint trajectory along the vertical, fast then easing to PLUNGE_SLOW from SLOW_ABOVE the food top,
-    validated by the controller, watched for torque. With `scoop_with`, the scoop is planned before the plunge
+    validated by the controller, watched for torque: strictly above the food, allowing a firm piece's piercing
+    (guards.torque_step_nm.plunge_in_food) once the tines are in it. With `scoop_with`, the scoop is planned before the plunge
     starts and runs straight after it: no pause at the bottom."""
     t_plan = time.time()
     u = under if isinstance(under, Under) else Under.load(under)     # a path: measured by the shell
@@ -366,11 +394,18 @@ def plunge(conn: KinovaConnection, under: str | Under, floor_m: float, scoop_wit
     if validate_only:
         log.info("    validate-only: controller accepted it, nothing moved")
         return
+    # the contact guard, zoned by depth: strict above the food (anything there is unexpected: the rim, a wrong
+    # reading), firm food's piercing allowed once the tines are in it -- the glass is kept off by where the plunge
+    # ends (punch_floor_margin_m above the bowl's floor), not by the guard
     guard = TorqueGuard()
+    strict, firm = guard.limit, float(cfg.guards.torque_step_nm.plunge_in_food)
+    in_food_at = u.gap_top - float(A_.plunge.in_food_from_above_m)   # tool travel (m) where the tines meet the food
 
     def contact(fb: Any) -> str | None:
+        inside = T0[2] - fb.base.tool_pose_z >= in_food_at
+        guard.limit = firm if inside else strict
         hit = guard.update([x.torque for x in fb.actuators])
-        return "joint %d torque step" % (hit[0] + 1) if hit else None
+        return ("joint %d torque step %s" % (hit[0] + 1, "in the food" if inside else "above the food")) if hit else None
     t0 = time.time()
     why = _run_watched(conn, wl, total, "plunge", contact)
     if why:
@@ -557,7 +592,7 @@ def run_scoop(conn: KinovaConnection, st: ScoopSettings, plan: ScoopPlan, valida
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("step", choices=["over", "descend", "punch", "plunge", "scoop", "pick"])
+    ap.add_argument("step", choices=["over", "descend", "rise", "punch", "plunge", "scoop", "pick"])
     ap.add_argument("--target", default=str(STATE_DIR / "target.json"))
     ap.add_argument("--under", default=str(STATE_DIR / "under.json"), help="measure_under.py output")
     ap.add_argument("--to-above", type=float, default=float(A_.stepped.approach_stop_m), help="descend: stop this far above the food top")
@@ -575,6 +610,7 @@ def main() -> int:
     steps: dict[str, Callable[[KinovaConnection], None]] = dict(
         over=lambda c: over(c, a.target),
         descend=lambda c: descend(c, a.under, a.to_above),
+        rise=rise,
         punch=lambda c: punch(c, a.under, a.floor_m),
         plunge=lambda c: plunge(c, a.under, a.floor_m, st if a.then_scoop else None, a.validate_only),
         scoop=lambda c: scoop(c, st, a.validate_only),

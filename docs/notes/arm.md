@@ -83,6 +83,12 @@ History and rationale moved out of the code comments (2026-10-01). Grouped by fi
 - 2026-09-25: the trajectory modes read 40 deg/s (joystick 50), set by whoever configured the arm before this repo;
   raised to 70 deg/s at the user's request (`deployment.arm.soft_limits.joint_speed_dps`). Hard limits: 80 deg/s
   J1-J4, 70 J5-J7; accelerations 5.2 / 10 rad/s^2.
+- 2026-10-02 (abra): the other team had the trajectory modes at 25 deg/s (ANGULAR_TRAJECTORY accel 50 deg/s^2,
+  which --apply does not set); set to ours with the user's OK. --apply saved nothing then (the run record only exists
+  under a stage script's RAMMP_RECORD); it now always writes <runs_dir>/arm_limits_before_<time>.json, and
+  --restore puts a saved file back (their values: abra's rammp_runs/arm_limits_before_20261002_110500.json).
+- 2026-10-02: the planner container lacked the external calibration files (the wrist mount the tip model reads):
+  `make planner` crashed on abra; it now mounts them as the driver does.
 
 ## kinova/scripts/capture_home.py
 

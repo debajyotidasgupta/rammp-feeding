@@ -139,6 +139,8 @@ class FakeArm:
         self.joint_limit_dps = None      # ExecuteAction refuses a joint move shorter than travel / this (as the arm)
         self.errors = []                 # what GetTrajectoryErrorReport returns next
         self.ik_unreachable = lambda pose: False
+        self.twist = None                # (linear m/s, angular deg/s, base frame; clock time it was last applied)
+        self.jspeed = None               # (joint speeds deg/s; clock time they were last applied)
 
     # --- scenario setup
     def register(self, joints, pose):
@@ -231,6 +233,30 @@ class FakeArm:
 
     # --- motion
     def _advance(self):
+        if self.motion is None and self.jspeed is not None:     # joint speed commands: the joints move at them
+            w, t_last = self.jspeed
+            dt = clock.time() - t_last
+            if dt > 0:
+                self.q = [fold(a + b * dt) for a, b in zip(self.q, w)]
+                self.pose = self.fk_pose(self.q)
+                self.jspeed = (w, clock.time())
+            return
+        if self.motion is None and self.twist is not None:      # a twist command: the tool moves at that velocity
+            lin, ang, t_last = self.twist
+            dt = clock.time() - t_last
+            if dt > 0:
+                w = np.radians(ang) * dt
+                a = float(np.linalg.norm(w))
+                K = np.array([[0, -w[2], w[1]], [w[2], 0, -w[0]], [-w[1], w[0], 0]]) / max(a, 1e-12)
+                dR = np.eye(3) + np.sin(a) * K + (1 - np.cos(a)) * K @ K
+                pose = [float(v) for v in np.array(self.pose[:3]) + np.array(lin) * dt] + rpy_R(dR @ R_rpy(*self.pose[3:]))
+                try:
+                    self.q, self.pose = self.joints_for(pose, self.q), pose
+                except RuntimeError:                            # out of reach: the controller faults and stops
+                    self.twist = None
+                    return
+                self.twist = (lin, ang, clock.time())
+            return
         if self.motion is None:
             return
         t0, segs, total = self.motion
@@ -343,6 +369,22 @@ class _Base:
         a = self.arm
         a.log("Stop")
         a.motion = None
+        a.twist = None
+        a.jspeed = None
+
+    def SendJointSpeedsCommand(self, cmd):
+        a = self.arm
+        a._advance()                                            # the previous speeds up to now
+        w = [0.0] * 7
+        for js in cmd.joint_speeds:
+            w[js.joint_identifier] = js.value
+        a.jspeed = (w, clock.time())
+
+    def SendTwistCommand(self, cmd):
+        a = self.arm
+        t = cmd.twist
+        a._advance()                                            # the previous twist up to now
+        a.twist = ([t.linear_x, t.linear_y, t.linear_z], [t.angular_x, t.angular_y, t.angular_z], clock.time())
 
     def OnNotificationActionTopic(self, cb, opts):
         self.arm.log("OnNotificationActionTopic")

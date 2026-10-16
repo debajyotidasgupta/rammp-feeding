@@ -27,6 +27,7 @@ from settings import cfg
 from feeding.camera import CXC, CXD, CYC, CYD, FXC, FXD, FYC, FYD, T_D2C, VP, corrected
 
 FOOD_HALF_M = float(cfg.perception.food_half_width_m)        # the floor ring beside the food
+UTENSIL_MARGIN_M = float(cfg.perception.utensil_depth_margin_m)   # depth this near the tip is the utensil itself
 
 
 def measure(depth_mm: np.ndarray, guess: float = 0.30, filled: np.ndarray | None = None,
@@ -38,6 +39,16 @@ def measure(depth_mm: np.ndarray, guess: float = 0.30, filled: np.ndarray | None
     if not zt:
         raise SystemExit("camera_to_tip_m is not set for this utensil -- measure it first")
     D = corrected(depth_mm)
+    # under the tip, nothing real is nearer the camera than the tip: from a low hover the tines themselves sit in
+    # the depth window on the tip's vertical line (the food right behind them). Drop them, and a border round them:
+    # the sensor's edge pixels there read between the tines and what is behind
+    utensil = (D > 0) & (D / 1000.0 + T_D2C[2] <= zt + UTENSIL_MARGIN_M)
+    n = int(cfg.perception.utensil_depth_border_px)
+    grown = utensil.copy()
+    for dy in range(-n, n + 1):
+        for dx in range(-n, n + 1):
+            grown |= np.roll(np.roll(utensil, dy, 0), dx, 1)
+    D = np.where(grown, 0, D)
     H, W = D.shape
     yy, xx = np.mgrid[0:H, 0:W]
     # target = (u, v, z): read along the vertical line through that scene point instead of the tip's -- i.e.

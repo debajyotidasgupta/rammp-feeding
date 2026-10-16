@@ -51,6 +51,8 @@ def report(conn: KinovaConnection, what: str) -> None:
 def detect(conn: KinovaConnection, plan: bool = False) -> None:
     """-> food_detect_start, over the bowl where the workspace says it is."""
     ws = scene.workspace()
+    if ws["age_s"] > float(cfg.workspace.scene_max_age_s):   # a new bite: the bowl may have moved since
+        raise MoveError("the scene camera's reading is %.0f min old -- make locate-scene first" % (ws["age_s"] / 60))
     qd = scene.overlook_joints(conn)              # a bowl out of reach refuses here, before anything moves
     t = scene.overlook_pose()["tool_pose"]
     log.info("  bowl at (%.3f, %.3f) m, table z %.3f (%s); food_detect_start tool (%.3f %.3f %.3f)",

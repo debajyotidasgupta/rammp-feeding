@@ -49,6 +49,7 @@ while [ "$n" -lt "$BITES" ]; do
   STOP_AFTER= START_AT=over feeding/acquire.sh || { echo "acquire stopped -- arm left where it stopped; check it"; ev bite_end ", \"result\": \"acquire stopped\""; finish "acquire stopped"; exit 1; }
   STOP_AFTER= START_AT=swing feeding/deliver.sh; rc=$?          # WAIT_OPEN: from config/ unless set
   [ $rc = 7 ] && { echo "no open mouth: the user declined -- stopping"; ev bite_end ", \"result\": \"declined\""; home; finish declined; exit 0; }
+  [ $rc = 8 ] && { echo "the approach stopped short of the mouth (retracted) -- stopping"; ev bite_end ", \"result\": \"approach stopped\""; home; finish "approach stopped"; exit 1; }
   [ $rc != 0 ] && { echo "deliver stopped (exit $rc) -- arm left where it stopped; check it"; ev bite_end ", \"result\": \"deliver stopped\", \"rc\": $rc"; finish "deliver stopped"; exit 1; }
   n=$((n + 1)); echo "== bite $n done in $(( $(date +%s) - t0 )) s"
   ev bite_end ", \"result\": \"eaten\", \"seconds\": $(( $(date +%s) - t0 ))"

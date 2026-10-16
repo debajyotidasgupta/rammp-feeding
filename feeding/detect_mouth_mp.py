@@ -12,6 +12,10 @@ deliver.sh falls back to when no face is found here (exit 5).
   face points instead; points far nearer than the face (the food, ~250 mm nearer) are dropped; the mouth
   takes the lips' own depth where they are visible, else the nose tip's + 5 mm, else the face's.
 - mouth_open = inner-lip gap / mouth width.
+- A FAR face (a user sitting back, 1-2 m: a few dozen pixels) is below the landmarker's own detector: with no face
+  in the whole frame, overlapping zoomed crops are searched (delivery.face.zoom_grid), the last hit's crop first.
+- RANGE without depth (the D405 reads little past ~1 m): from the outer eye corners' spacing
+  (delivery.face.eye_corners_m) -- a turned head looks narrower, so it reads FARTHER: the safe side.
 """
 
 from __future__ import annotations
@@ -35,7 +39,12 @@ LIPS = [0, 13, 14, 17, 37, 61, 78, 84, 267, 291, 308, 314]
 FACE_PTS = list(range(0, 468, 6))
 OPEN_RATIO = float(cfg.delivery.open_mouth_ratio)
 OPEN_HOLD_S = float(cfg.delivery.open_mouth_hold_s)
+OPEN_GAP_S = float(cfg.delivery.open_mouth_gap_s)
+FACE = cfg.delivery.face
+EYES = (33, 263)                                  # the outer eye corners
 NO_FACE = 5
+_LAST_CROP: list = [None]                         # (y0, x0) of the crop the last far face was found in
+_LAST_ZOOM: list = [0.0]                          # when the crops were last searched in vain
 
 
 def landmarker():
@@ -44,15 +53,69 @@ def landmarker():
         base_options=BaseOptions(model_asset_path=str(MODEL)), num_faces=1, output_face_blendshapes=True))
 
 
-def landmarks(det, upright: np.ndarray):
+def _landmarks(det, img: np.ndarray):
     import mediapipe as mp
-    r = det.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(upright)))
+    r = det.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(img)))
     if not r.face_landmarks:
         return None, None
-    h, w = upright.shape[:2]
+    h, w = img.shape[:2]
     L = np.array([[p.x * w, p.y * h] for p in r.face_landmarks[0]])
     jaw = next((c.score for c in r.face_blendshapes[0] if c.category_name == "jawOpen"), float("nan"))
     return L, jaw
+
+
+def landmarks(det, upright: np.ndarray):
+    """Face landmarks in the upright image (pixels): the whole frame, else its zoomed crops (a far face)."""
+    L, jaw = _landmarks(det, upright)
+    n = int(FACE.zoom_grid)
+    if L is not None or n < 2 or time.time() - _LAST_ZOOM[0] < float(FACE.zoom_every_s):
+        return L, jaw                                  # (the crops cost n x n detections: not on every empty frame)
+    h, w = upright.shape[:2]
+    ch, cw = int(2 * h / (n + 1)), int(2 * w / (n + 1))        # half-overlapping n x n crops
+    crops = [(int(i * (h - ch) / (n - 1)), int(j * (w - cw) / (n - 1))) for i in range(n) for j in range(n)]
+    if _LAST_CROP[0] in crops:
+        crops.remove(_LAST_CROP[0]); crops.insert(0, _LAST_CROP[0])
+    for y0, x0 in crops:
+        L, jaw = _landmarks(det, upright[y0:y0 + ch, x0:x0 + cw])
+        if L is not None:
+            _LAST_CROP[0] = (y0, x0)
+            return L + np.array([x0, y0]), jaw
+    _LAST_ZOOM[0] = time.time()
+    return None, None
+
+
+def range_from_eyes(L) -> float:
+    """The face's distance (m) from the camera, from the outer eye corners' spacing in the image."""
+    return float(FXC * float(FACE.eye_corners_m) / max(1e-6, np.linalg.norm(L[EYES[0]] - L[EYES[1]])))
+
+
+def mouth_cam(L, H: int, dep) -> tuple[list[float], str]:
+    """The mouth in the camera's frame from landmarks L (the upright image) and a depth frame (None: no depth):
+    (x, y, z m, "depth" -- the lips' own depth, consistent with the face's size -- or "size")."""
+    z_eyes = range_from_eyes(L)
+    to_orig = lambda x, y: (y, H - 1 - x)  # noqa: E731
+    z, src = z_eyes, "size"
+    if dep is not None:
+        H_d, W_d = dep.shape
+        zs = []
+        for i in LIPS:                                 # each lip point's depth: a 5 x 5 window, not the whole image
+            u, v = to_orig(*L[i]); zi = z_eyes
+            for _ in range(4):
+                X = (u - CXC) * zi / FXC - T_D2C[0]; Y = (v - CYC) * zi / FYC - T_D2C[1]; Zd = zi - T_D2C[2]
+                ud, vd = int(round(FXD * X / Zd + CXD)), int(round(FYD * Y / Zd + CYD))
+                win = dep[max(0, vd - 2):min(H_d, vd + 3), max(0, ud - 2):min(W_d, ud + 3)]
+                win = win[win > 0]
+                if win.size < 3:
+                    zi = None
+                    break
+                zi = np.percentile(win, 20) / 1000.0 + T_D2C[2]
+            if zi is not None:
+                zs.append(zi)
+        med = float(np.median(zs)) if len(zs) >= 3 else None
+        if med is not None and med <= max(float(FACE.depth_beyond_eyes_factor) * z_eyes, z_eyes + 0.3):
+            z, src = med, "depth"
+    u, v = to_orig(*L[[13, 14]].mean(0))
+    return [(u - CXC) * z / FXC, (v - CYC) * z / FYC, z], src
 
 
 def opening(L) -> float:
@@ -60,7 +123,8 @@ def opening(L) -> float:
 
 
 def wait_open(D: Path, timeout: float, det=None, stream=None) -> int:
-    """Watch the colour stream; save the first frame after the mouth has been open OPEN_HOLD_S.
+    """Watch the colour stream; save the first frame after the mouth has been open OPEN_HOLD_S (frames where no
+    face is found are skipped, up to OPEN_GAP_S: a far face is not found in every frame).
     stream: the resident ColourStream (the face server's) -- only frames arriving after the wait starts are used;
     without one, the stream is opened here (~1.6 s)."""
     own = det is None
@@ -117,6 +181,7 @@ def _wait(det, read, D, timeout, open_s=0.0, source=""):
             pass
     print("    waiting up to %.0f s for an open mouth (opening > %.2f for %.1f s; %s%s)"
           % (timeout, OPEN_RATIO, OPEN_HOLD_S, source, ", opened in %.1f s" % open_s if open_s else ""))
+    seen = -1e9                                   # when a face was last found
     while time.time() - t0 < timeout:
         ok, bgr, stamp = read()
         if not ok:
@@ -142,6 +207,8 @@ def _wait(det, read, D, timeout, open_s=0.0, source=""):
                 pass
         if time.time() - last > 2.0:
             print("      mouth opening %.2f" % o); last = time.time()
+        if L is not None:
+            seen = time.time()
         if o > OPEN_RATIO:
             since = since or time.time()
             if time.time() - since >= OPEN_HOLD_S:
@@ -149,7 +216,7 @@ def _wait(det, read, D, timeout, open_s=0.0, source=""):
                 print("    mouth open (%.2f) after %.1f s" % (o, time.time() - t0))
                 record("open")
                 return 0
-        else:
+        elif L is not None or time.time() - seen > OPEN_GAP_S:   # closed, or the face gone too long
             since = None
     print("    no open mouth in %.0f s" % timeout)
     record("no open mouth")
@@ -198,19 +265,26 @@ def detect(D: Path, det=None) -> int:
     lip_sensor = sum(depth_at(*to_orig(*L[i]), dep=sensor_dep) is not None for i in LIPS)
 
     fz = [z for z in zs(FACE_PTS).values() if z]
-    if len(fz) < 5:
-        print("mediapipe: face found but almost no depth on it")
-        return NO_FACE
-    med = np.median(fz); face_z = float(np.median([z for z in fz if z > med - 0.05]))   # drop the food
-    ok = lambda z: z is not None and face_z - 0.04 < z < face_z + 0.06
-    nose_z = [z for z in zs(NOSE).values() if ok(z)]; lip_z = [z for z in zs(LIPS).values() if ok(z)]
-    nose_depth = float(np.median(nose_z)) if nose_z else None
-    if len(lip_z) >= 3:
-        mouth_depth, how = float(np.median(lip_z)), "lips"
-    elif nose_depth:
-        mouth_depth, how = nose_depth + 0.005, "nose + 5 mm"
+    z_eyes = range_from_eyes(L)
+    med = np.median(fz) if len(fz) >= 5 else None
+    beyond = med is not None and med > max(float(FACE.depth_beyond_eyes_factor) * z_eyes, z_eyes + 0.3)
+    if med is None or beyond:
+        # no depth on the face, or far beyond what its size allows (the sensor past its range: junk): its size.
+        # One-sided: a turned head looks narrower, so its size reads FARTHER -- never a reason to drop good depth
+        face_z = nose_depth = mouth_depth = z_eyes
+        how, lip_sensor = "eye spacing (%s)" % ("no depth on the face" if med is None else
+                                                "depth %.0f mm disagrees" % (1000 * med)), 0
     else:
-        mouth_depth, how = face_z, "face"
+        face_z = float(np.median([z for z in fz if z > med - 0.05]))   # drop the food
+        ok = lambda z: z is not None and face_z - 0.04 < z < face_z + 0.06  # noqa: E731
+        nose_z = [z for z in zs(NOSE).values() if ok(z)]; lip_z = [z for z in zs(LIPS).values() if ok(z)]
+        nose_depth = float(np.median(nose_z)) if nose_z else None
+        if len(lip_z) >= 3:
+            mouth_depth, how = float(np.median(lip_z)), "lips"
+        elif nose_depth:
+            mouth_depth, how = nose_depth + 0.005, "nose + 5 mm"
+        else:
+            mouth_depth, how = face_z, "face"
 
     def entry(idx, centre, z, prompt):
         x1, y1 = L[idx].min(0); x2, y2 = L[idx].max(0)
@@ -224,7 +298,8 @@ def detect(D: Path, det=None) -> int:
                nose=entry(NOSE, L[1], nose_depth, "mediapipe"),
                mouth=dict(entry(LIPS, mouth_c, mouth_depth, "mediapipe, depth from %s" % how),
                           depth_filled=bool(filled.any() and lip_sensor < 3)),
-               mouth_open=opening(L), jaw_open=jaw, detector="mediapipe", ms=1000 * dt)
+               mouth_open=opening(L), jaw_open=jaw, detector="mediapipe", ms=1000 * dt,
+               range_from_eyes_m=z_eyes, depth_from_size=how.startswith("eye spacing"))
     (D / "face.json").write_text(json.dumps(out, indent=1))
     d = ImageDraw.Draw(up)
     for x, y in L[::4]:
@@ -270,14 +345,66 @@ def _via_server(D: Path, wait: float):
     return out["rc"]
 
 
+class Tracker:
+    """The face on every frame of the stream while someone asks (POST/GET /track), with its own landmarker:
+    latest = {t: the frame's time, face, cam_xyz, source, opening}. Stops after delivery.track.idle_s unasked."""
+
+    def __init__(self, stream):
+        import threading
+        self.stream, self.lock, self.th, self.until = stream, threading.Lock(), None, 0.0
+        self.latest = dict(t=0.0, face=False)
+
+    def start(self) -> None:
+        import threading
+        self.until = time.time() + float(cfg.delivery.track.idle_s)
+        if self.th is None or not self.th.is_alive():
+            self.th = threading.Thread(target=self._run, daemon=True)
+            self.th.start()
+
+    def get(self) -> dict:
+        self.until = time.time() + float(cfg.delivery.track.idle_s)
+        with self.lock:
+            return dict(self.latest)
+
+    def _run(self) -> None:
+        import io
+        import urllib.request
+        det = landmarker()
+        url = "http://127.0.0.1:%d/latest" % int(cfg.deployment.servers.camera_port)
+        last = self.stream.n
+        try:
+            while time.time() < self.until:
+                got = self.stream.frame_after(last, 0.5)
+                if got is None:
+                    continue
+                last, t, bgr = got
+                rgb = bgr[:, :, ::-1]
+                L, _ = landmarks(det, np.rot90(rgb, -1))
+                out = dict(t=t, face=L is not None)
+                if L is not None:
+                    try:
+                        with urllib.request.urlopen(url, timeout=0.3) as r:
+                            dep = corrected(np.load(io.BytesIO(r.read())))
+                    except (OSError, ValueError):
+                        dep = None
+                    cam, src = mouth_cam(L, rgb.shape[0], dep)
+                    out.update(cam_xyz=cam, source=src, opening=opening(L))
+                with self.lock:
+                    self.latest = out
+        finally:
+            det.close()
+
+
 def serve() -> int:
     """Keep the face landmarker loaded and the colour stream open (make models): POST /detect and /wait_open, as
-    the CLI does; GET /frame -> a fresh JPEG (feeding/grab_frame.py); GET /stream -> the stream's status."""
+    the CLI does; GET /frame -> a fresh JPEG (feeding/grab_frame.py); GET /stream -> the stream's status;
+    POST /track starts, GET /track reads the live face tracker (kinova/scripts/deliver.py track)."""
     import contextlib, io
     from http.server import BaseHTTPRequestHandler, HTTPServer
     from feeding.colour_stream import ColourStream
     stream = ColourStream()
     det = landmarker()
+    tracker = Tracker(stream)
     shots = sorted(Path.home().glob("rammp_runs/deliver_*/colour.jpg"))
     if shots:                                  # warm-up
         t = time.time(); landmarks(det, np.asarray(Image.open(shots[-1]).convert("RGB").transpose(Image.ROTATE_270)))
@@ -299,6 +426,9 @@ def serve() -> int:
                 self.send_response(200); self.send_header("X-Frame-Age", "%.3f" % (time.time() - got[1]))
                 self.end_headers(); self.wfile.write(jpg.tobytes())
                 return
+            if self.path.startswith("/track"):
+                self.send_response(200); self.end_headers(); self.wfile.write(json.dumps(tracker.get()).encode())
+                return
             if self.path.startswith("/stream"):
                 self.send_response(200); self.end_headers(); self.wfile.write(json.dumps(stream.status()).encode())
                 return
@@ -306,6 +436,10 @@ def serve() -> int:
 
         def do_POST(self):
             q = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            if self.path.startswith("/track"):
+                tracker.start()
+                self.send_response(200); self.end_headers(); self.wfile.write(b'{"ok": true}')
+                return
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
                 try:

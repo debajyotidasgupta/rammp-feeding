@@ -1,15 +1,15 @@
 {
   "label": "feeding_start",
-  "captured": "2026-09-23T21:28:07+0000",
-  "n_samples": 41,
+  "captured": "2026-10-02T19:27:51+0000",
+  "n_samples": 45,
   "joints_deg": [
     -90.0,
-    8.071,
+    8.069,
     0.0,
-    -139.199,
-    0.446,
+    -139.205,
+    0.447,
     -49.528,
-    -174.304
+    -174.302
   ],
   "joints_spread_deg": [
     0.0,
@@ -17,25 +17,25 @@
     0.0,
     0.0,
     0.0,
-    0.0,
+    0.0001,
     0.0
   ],
   "holding_torque_nm": [
-    0.883,
-    -4.553,
-    0.276,
-    -5.384,
-    0.238,
-    0.82,
-    0.498
+    0.206,
+    -4.579,
+    -1.7,
+    -7.179,
+    0.181,
+    -0.962,
+    -0.232
   ],
   "tool_pose": {
-    "x_m": 0.0236,
-    "y_m": -0.1766,
-    "z_m": 0.2082,
-    "theta_x_deg": -179.499,
-    "theta_y_deg": -0.0576,
-    "theta_z_deg": 96.6411
+    "x_m": 0.016,
+    "y_m": -0.1792,
+    "z_m": 0.2061,
+    "theta_x_deg": -176.2752,
+    "theta_y_deg": 0.2941,
+    "theta_z_deg": 97.8363
   },
   "tool_config": {
     "transform_m": [
@@ -55,5 +55,5 @@
       0.0473
     ]
   },
-  "note": "tool_pose is the CONFIGURED TOOL frame (120 mm z-offset for the 2F-85), not the flange. J1 and J3 are held at their INTENDED exact values (-90.000, 0.000) rather than the measured -89.998/-0.003: commanding -90.000000 lands at -89.998138 every time, a deterministic servo offset worth 7 microns at the tool, and re-capturing it would let the target drift. J6 was tuned from -40.078 to -49.51 to bring the utensil to 0.50 deg of straight down, so tool ORIENTATION is now identical at every stage and only position changes between them. The residual 0.50 deg lies in axis_x, which J2/J4/J6 cannot correct -- all three pitch in the same plane; only a roll joint could, at the cost of a large reorientation."
+  "note": "tool_pose is the CONFIGURED TOOL frame, not the flange: the arm carries a 120 mm z-offset for the 2F-85. The utensil adds more. Measured camera-to-tine-tip is ~105 mm, so the reported point lands within a few cm of the real tip -- good enough to report and to stand off by, NOT good enough for the 4 mm flesh/bowl window, which is terminated on torque instead."
 }

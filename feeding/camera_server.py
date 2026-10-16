@@ -6,6 +6,7 @@ host network), subscribed to the camera profile's topics (config/camera/<name>.y
                                15 depth frames that arrived after unix time T (default: this request) -- T = when the
                                arm stopped, so frames buffered before a stream dropout still count; after `wait` s,
                                the median of what there is if at least `min` frames, else 503
+    GET /latest                -> the newest depth frame, .npy bytes (header X-Frame-Age): the face tracker's
     GET /frame                 -> the newest colour frame, JPEG (header X-Frame-Age: its age in s)      (--colour)
     GET /mjpeg                 -> the colour frames as an MJPEG stream (the face server's colour stream,
                                   grab_frame: OpenCV opens it like the RTSP stream of a camera that has one)
@@ -107,6 +108,14 @@ def main() -> int:
                     self.send_response(503); self.end_headers(); self.wfile.write(b"no fresh frames"); return
                 buf = io.BytesIO(); np.save(buf, median(fresh[:n]))
                 self.send_response(200); self.end_headers(); self.wfile.write(buf.getvalue()); return
+            if u.path == "/latest":
+                with LOCK:
+                    last = DEPTH[-1] if DEPTH else None
+                if last is None:
+                    self.send_response(503); self.end_headers(); return
+                buf = io.BytesIO(); np.save(buf, last[1])
+                self.send_response(200); self.send_header("X-Frame-Age", "%.3f" % (time.time() - last[0]))
+                self.end_headers(); self.wfile.write(buf.getvalue()); return
             if u.path == "/frame" and a.colour:
                 with LOCK:
                     jpg, t = COLOUR.get("jpg"), COLOUR.get("t", 0.0)

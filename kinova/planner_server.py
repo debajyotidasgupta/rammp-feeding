@@ -10,6 +10,9 @@ Runs where torch + cuRobo are (the planner container, `make planner`; on an x86 
                                        -> {"ok": true, "path": [[7 deg], ...], "dt": s, "planning_s": s}
                                           or {"ok": false, "status": ..., "error": ...}
     POST /world                        -> rebuilds the world from the latest workspace / mouth (below); {"ok": true}
+    POST /spheres {"joints": [7 deg]}  -> {"spheres": [[x, y, z, r], ...]}: the arm, gripper and utensil as cuRobo's
+                                          collision spheres at those joints, base frame (the scene camera's
+                                          calibration target: feeding/calibrate_scene.py)
 
 It only plans; the arm side runs the path through its own guards (kinova/motion.run_path: the arm's speed limits,
 the controller's validation, the torque watch). The world (kinova/curobo_world.py): the workspace
@@ -22,7 +25,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import tempfile
 import threading
 import time
@@ -33,18 +35,10 @@ import numpy as np
 import yaml
 
 from kinova.curobo_world import no_pad_names, robot_config, world
-from kinova.workspace import workspace
+from kinova.workspace import mouth_now, workspace
 from settings import cfg
 
-RUNS = Path(os.path.expanduser(str(cfg.deployment.runs_dir)))
 LOCK = threading.Lock()
-
-
-def mouth_now() -> list[float]:
-    try:
-        return [float(v) for v in json.loads((RUNS / "mouth_state.json").read_text())["mouth_base"]]
-    except (OSError, ValueError, KeyError):
-        return [float(v) for v in cfg.motion.free_space.user_mouth_m]
 
 
 def tip_tool() -> np.ndarray:
@@ -69,7 +63,9 @@ class Planners:
 
     def build(self) -> None:
         from rammp_curobo import CuRoboPlanner
-        w = world(workspace(), mouth_now(), table_extent=dict(cfg.workspace.table_extent_m))
+        w = world(workspace(), mouth_now(), chair=None if cfg.motion.free_space.wheelchair else [],
+                  table_extent=dict(cfg.workspace.table_extent_m),
+                  floor_m=float(cfg.motion.free_space.min_tip_above_table_m))
         (self.work / "world.yaml").write_text(yaml.safe_dump(w))
         P = cfg.motion.free_space
         for food in (False, True):
@@ -87,11 +83,19 @@ class Planners:
 
     def refresh(self) -> int:
         """The latest workspace and mouth into both planners, in place (no re-warm)."""
-        w = world(workspace(), mouth_now(), table_extent=dict(cfg.workspace.table_extent_m))
+        w = world(workspace(), mouth_now(), chair=None if cfg.motion.free_space.wheelchair else [],
+                  table_extent=dict(cfg.workspace.table_extent_m),
+                  floor_m=float(cfg.motion.free_space.min_tip_above_table_m))
         for pl in self.by_load.values():
             pl.update_world(w["obstacles"])
         self.world = w
         return len(w["obstacles"])
+
+    def spheres(self, joints_deg) -> dict:
+        pl = self.by_load[False]
+        st = pl._motion_gen.kinematics.get_state(pl._tensor([pl._to_curobo_order(list(np.radians(joints_deg)))]))
+        sp = st.link_spheres_tensor[0].cpu().numpy()
+        return dict(spheres=[[round(float(v), 5) for v in s] for s in sp if s[3] > 0])
 
     def plan(self, start_deg, goal_deg, carrying: bool) -> dict:
         pl = self.by_load[bool(carrying)]
@@ -133,6 +137,8 @@ def main() -> int:
             with LOCK:
                 if self.path.startswith("/plan"):
                     self._send(200, P.plan(q["start"], q["goal"], q.get("carrying", False))); return
+                if self.path.startswith("/spheres"):
+                    self._send(200, P.spheres(q["joints"])); return
                 if self.path.startswith("/world"):
                     self._send(200, dict(ok=True, obstacles=P.refresh())); return
             self._send(404, {})

@@ -3,9 +3,15 @@
 
     .venv/bin/python tests/site_check.py                      # the 2026-09-30 site (tests/sites/site_20260930.yaml)
     .venv/bin/python tests/site_check.py tests/sites/<x>.yaml [--render] [--dump motions.json]
-        [--planner stub|curobo]                               # stub (default): tests/stub_planner.py, no GPU;
-                                                              # curobo: the real planner server (a CUDA box)
+        [--planner stub|curobo|server]                        # stub (default): tests/stub_planner.py, no GPU;
+                                                              # curobo: start the real planner server (a CUDA box);
+                                                              # server: one already running on --planner-port, whose
+                                                              # runs dir is SITE_RUNS (it re-reads the world first)
         [--camera <profile>] [--scene-camera <profile>|none]  # another wrist / scene camera than the site's
+        [--user-offset dx,dy,dz]                              # the user's mouth moved by this (m)
+        [--head-sway M]                                       # the head sways +-M sideways while tracked
+        [--face-lost-at S]                                    # ... and is lost S s into the tracking
+        [--track-hz F]                                        # the tracker yields a new face only F times a second
 
 The arm stages (sequence / acquire / deliver) run as on the robot -- their own checks, their own refusals --
 against tests/mujoco_kortex.py (the Gen3's kinematics: IK / FK anywhere, unlike fake_kortex, which only knows the
@@ -24,6 +30,7 @@ import contextlib
 import io
 import json
 import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -44,9 +51,12 @@ RENDER = "--render" in sys.argv
 site = yaml.safe_load(SITE.read_text())
 
 fk.install_clock()
-WORK = Path(tempfile.mkdtemp(prefix="site_check_"))
-STATE, RUNS = WORK / "state", WORK / "runs"
-STATE.mkdir(); RUNS.mkdir()
+WORK = Path(os.environ["SITE_WORK"]) if os.environ.get("SITE_WORK") else Path(tempfile.mkdtemp(prefix="site_check_"))
+STATE, RUNS = WORK / "state", Path(os.environ.get("SITE_RUNS", WORK / "runs"))
+shutil.rmtree(STATE, ignore_errors=True)
+STATE.mkdir(parents=True); RUNS.mkdir(parents=True, exist_ok=True)
+for stale in ("mouth_state.json",):                 # a reused runs dir: no mouth from the last bite
+    (RUNS / stale).unlink(missing_ok=True)
 os.environ["RAMMP_NO_LOCAL"] = "1"
 os.environ["RAMMP_STATE_DIR"] = str(STATE)
 
@@ -55,6 +65,8 @@ def _arg(name: str, default=None):
     return sys.argv[sys.argv.index(name) + 1] if name in sys.argv else default
 
 
+if _arg("--user-offset"):                        # the user elsewhere than the site's mouth (sat back, leaning, ...)
+    site["user"]["mouth_m"] = [float(m) + float(o) for m, o in zip(site["user"]["mouth_m"], _arg("--user-offset").split(","))]
 profiles = dict(site.get("profiles", {}))
 profiles["camera"] = _arg("--camera", profiles.get("camera", "kinova_wrist"))
 profiles["scene_camera"] = _arg("--scene-camera", profiles.get("scene_camera", ""))
@@ -63,7 +75,10 @@ if profiles["scene_camera"] == "none":
 for k, v in profiles.items():
     os.environ["RAMMP_" + k.upper()] = str(v)
 PLANNER = _arg("--planner", "stub")
-sets = dict(site.get("set", {}), **{"deployment.runs_dir": str(RUNS)})
+sets = dict(site.get("set", {}), **{"deployment.runs_dir": str(RUNS),
+                                     "delivery.track.watchdog": False})   # no second session on the fake arm
+if _arg("--planner-port"):
+    sets["deployment.servers.planner_port"] = int(_arg("--planner-port"))
 if not profiles["scene_camera"]:                 # no scene camera: the site's workspace is the config's
     sets.update({"workspace.table_height_m": site["workspace"]["table_z"],
                  "workspace.bowl_centre_m": site["workspace"]["bowl_xy"],
@@ -111,8 +126,8 @@ _REAL_URLOPEN = _ur.urlopen
 
 def fake_urlopen(url, timeout=None):
     target = url if isinstance(url, str) else url.full_url
-    if ":%d/" % int(cfg.deployment.servers.planner_port) in target:     # the planner server: the real one
-        return _REAL_URLOPEN(url, timeout=timeout)
+    if any(":%d/" % int(p) in target for p in (cfg.deployment.servers.planner_port, cfg.deployment.servers.face_port)):
+        return _REAL_URLOPEN(url, timeout=timeout)                   # the planner server, the face tracker: real
     b = io.BytesIO()
     np.save(b, depth_frame())
     return contextlib.closing(io.BytesIO(b.getvalue()))
@@ -150,6 +165,51 @@ def write(path: Path, obj) -> None:
     path.write_text(json.dumps(obj))
 
 
+def face_tracker():
+    """A stand-in for the face server's /track: the mouth as the wrist camera would see it from the arm's pose now
+    -- from depth within 0.75 m, else from the face's size, 15% long -- the head swaying by --head-sway."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from kinova.frames import R_from_kortex
+    from feeding.camera import cam_to_tool
+    M = np.array([cam_to_tool(e) - cam_to_tool([0.0, 0.0, 0.0]) for e in np.eye(3)]).T   # camera -> tool, linear
+    sway, m0 = float(_arg("--head-sway", 0.0)), np.array(site["user"]["mouth_m"], float)
+    lost_at, t_start = float(_arg("--face-lost-at", 1e9)), [None]
+    period, last = 1.0 / float(_arg("--track-hz", 1e9)), {}      # a slow tracker: its last frame, re-served
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def _reply(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            p = ARM.pose
+            R = R_from_kortex(*p[3:])
+            t = fk.clock.time()
+            t_start[0] = t_start[0] or t
+            if last and t - last["t"] < period:                 # no new frame yet: the last one again
+                body = json.dumps(last).encode()
+                self.send_response(200); self.end_headers(); self.wfile.write(body)
+                return
+            if t - t_start[0] > lost_at:
+                body = json.dumps(dict(t=t, face=False)).encode()
+                self.send_response(200); self.end_headers(); self.wfile.write(body)
+                return
+            mouth = m0 + np.array([0.0, sway * np.sin(2 * np.pi * t / 4.0), 0.0])
+            c = np.linalg.solve(M, R.T @ (mouth - np.array(p[:3])) - cam_to_tool([0.0, 0.0, 0.0]))
+            src = "depth" if np.linalg.norm(c) < 0.75 else "size"
+            if src == "size":
+                c = c * 1.15
+            last.update(t=t, face=True, cam_xyz=[float(v) for v in c], source=src, opening=0.4)
+            body = json.dumps(last).encode()
+            self.send_response(200); self.end_headers(); self.wfile.write(body)
+        do_GET = do_POST = _reply
+
+    srv = ThreadingHTTPServer(("127.0.0.1", int(cfg.deployment.servers.face_port)), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
 def face_fixture(name: str) -> list[str]:
     """A face as the delivery's look would report it, the mouth where the site says, seen from the arm's pose now."""
     from kinova.frames import R_from_kortex
@@ -164,7 +224,8 @@ def face_fixture(name: str) -> list[str]:
     d.mkdir(exist_ok=True)
     (d / "colour.jpg").write_bytes(b"jpg")
     f = dict(nose=dict(box_upright=[330, 475, 390, 525], depth_m=cam_xyz[2] - 0.01),
-             mouth=dict(box_upright=[320, 530, 400, 570], depth_m=cam_xyz[2], cam_xyz=cam_xyz, prompt="mouth"))
+             mouth=dict(box_upright=[320, 530, 400, 570], depth_m=cam_xyz[2], cam_xyz=cam_xyz, prompt="mouth"),
+             depth_from_size=bool(cam_xyz[2] > 1.0))            # past the wrist depth's range: from the face's size
     (d / "face.json").write_text(json.dumps(f))
     now = fk.clock.time()
     os.utime(d / "colour.jpg", (now - 2, now - 2))
@@ -231,6 +292,10 @@ def start_planner():
         import stub_planner
         stub_planner.serve(int(cfg.deployment.servers.planner_port), stub_via)
         return None
+    if PLANNER == "server":                       # already warm: just this scenario's world
+        from kinova import curobo_client
+        curobo_client.refresh_world()
+        return None
     import subprocess
     import urllib.request
     log = open(WORK / "planner_server.log", "w")
@@ -271,11 +336,16 @@ def main() -> int:
     if ok:
         ok = run(DEL, ["swing", "--validate-only"]) == 0 and run(DEL, ["swing"]) == 0
     if ok:
-        ok = run(DEL, ["approach"] + face_fixture("face")) == 0
+        if cfg.features.track_approach:
+            srv = face_tracker()
+            ok = run(DEL, ["track"], "tracked approach") == 0
+            srv.shutdown()
+        else:
+            ok = run(DEL, ["approach"] + face_fixture("face")) == 0
         render("presented")
     if ok:
         t0 = fk.clock.time()
-        ARM.force = lambda t: [0.0, 0.0, 2.0 if t0 + 1.5 < t < t0 + 1.9 else 0.0]
+        ARM.force = lambda t: [0.0, 0.0, 3.0 if t0 + 1.5 < t < t0 + 1.9 else 0.0]   # a bite, over bite_n
         ok = run(DEL, ["bite"]) == 0
         ARM.force = lambda t: [0.0, 0.0, 0.0]
     if ok:

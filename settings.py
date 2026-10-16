@@ -132,6 +132,11 @@ def load() -> Cfg:
     for item in filter(None, re.split(r",(?![^\[]*\])", os.environ.get("RAMMP_SET", ""))):   # commas in [..] kept
         k, _, v = item.partition("=")
         _set(c, k.strip(), yaml.safe_load(v))
+    # a ruler reading from the camera's glass to the tip: the camera's own glass-to-optical-origin added here, so the
+    # utensil keeps what was measured and the camera what is the camera's (every reader uses camera_to_tip_m)
+    u = c["utensil"]
+    if u.get("glass_to_tip_m") is not None:
+        u["camera_to_tip_m"] = round(float(u["glass_to_tip_m"]) + float(c["camera"].get("glass_to_optical_m", 0.0)), 6)
     d = c["deployment"]
     if os.environ.get("RAMMP_ROOT"):
         d["root"] = os.environ["RAMMP_ROOT"]

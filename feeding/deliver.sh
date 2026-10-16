@@ -7,17 +7,21 @@
 #   VALIDATE=1 feeding/deliver.sh              # plan and validate the swing / approach; nothing moves
 #   WAIT_OPEN= feeding/deliver.sh              # present: by default it approaches only once the user opens their mouth (60 s); empty = do not wait
 #
+# present, features.track_approach: once the mouth opens, the tracked approach (deliver.py track): one continuous
+# move steered by the wrist camera to delivery.stop_m short of the mouth, wherever the user is in view and reach;
+# stopped for any reason, the arm retracts. Without it:
 # present = capture -> detect nose + mouth -> approach to delivery.stop_m (80 mm) short of the mouth. If the food
 # hides the mouth: sidestep delivery.sidestep_m (50 mm, -Y) and look again, twice at most; then the nose estimate.
 # Every approach uses only the detection made at that pose, just before it.
 # Exit 7 = the user did not open their mouth within delivery.open_mouth_timeout_s: the arm retracted with the food.
+# Exit 8 = the presentation stopped or was refused (out of reach, no usable mouth, a guard): the arm retracted.
 #
 # Records into the bite's deliver/: one look_<n>/ per look at the face, arm/ for the arm (feeding/lib.sh).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source feeding/lib.sh                            # PY: LocateAnything (fallback); MPY: MediaPipe (first choice, ~25 ms)
 bite_attach; session_begin deliver; stage_begin deliver
-OPEN_WAIT_S="$(S delivery.open_mouth_timeout_s)"; FACE_DETECTOR="$(S features.face_detector)"
+OPEN_WAIT_S="$(S delivery.open_mouth_timeout_s)"; FACE_DETECTOR="$(S features.face_detector)"; TRACK="$(S features.track_approach)"
 STOP_AFTER="${STOP_AFTER:-}"; START_AT="${START_AT:-swing}"; VALIDATE="${VALIDATE:-}"; WAIT_OPEN="${WAIT_OPEN-$(S features.wait_for_open_mouth)}"   # default from config/; WAIT_OPEN= to skip
 ARM="$(arm_cmd deliver)"
 VO=""; [ -n "$VALIDATE" ] && VO="--validate-only"
@@ -58,7 +62,22 @@ if run swing; then
   [ -n "$VALIDATE" ] && { echo; echo "validate-only: the swing was checked; present needs the arm there"; exit 0; }
   stop_here swing
 fi
-if run present; then
+if run present && [ -n "$TRACK" ]; then
+  echo "$(date +%T) [2/4] PRESENT (tracked)"
+  D="$STAGE_DIR/look_$(( $(find "$STAGE_DIR" -maxdepth 1 -name 'look_*' | wc -l) + 1 ))"; mkdir -p "$D"; export RAMMP_RECORD="$D"
+  if [ -n "$WAIT_OPEN" ] && [ -z "$VALIDATE" ]; then
+    set +e; PYTHONPATH=. "$MPY" -m feeding.detect_mouth_mp "$D" --wait-open "$OPEN_WAIT_S" 2>/dev/null | grep --line-buffered -v -E "^(W0000|I0000|INFO)"; rc=${PIPESTATUS[0]}; set -e
+    [ "$rc" != 0 ] && { echo "    no open mouth -- not approaching; retracting"; ev declined; arm retract; exit 7; }
+  fi
+  set +e; arm track $VO; rc=$?; set -e
+  if [ $rc != 0 ]; then
+    echo "    the tracked approach stopped (rc $rc) -- retracting"
+    [ -n "$VALIDATE" ] && exit 1
+    arm retract && exit 8 || exit 1                 # 8: stopped, but retracted to food_detect_start
+  fi
+  [ -n "$VALIDATE" ] && exit 0
+  stop_here present
+elif run present; then
   echo "$(date +%T) [2/4] PRESENT"
   for SHIFT in 0 50 100; do
     D="$STAGE_DIR/look_$(( $(find "$STAGE_DIR" -maxdepth 1 -name 'look_*' | wc -l) + 1 ))"; mkdir -p "$D"
@@ -85,9 +104,9 @@ if run present; then
       set +e; arm approach --face "$C/face.json" --colour "$C/colour.jpg" $NOSE $VO; rc=$?; set -e
     fi
     [ $rc = 0 ] && break
-    [ $rc != 3 ] && { echo "present refused -- nothing further moved ($D)"; exit 1; }
+    [ $rc != 3 ] && { echo "present refused ($D) -- retracting"; [ -n "$VALIDATE" ] && exit 1; arm retract && exit 8 || exit 1; }
     [ -n "$VALIDATE" ] && { echo "    validate-only: would sidestep -Y 50 mm and look again"; exit 0; }
-    [ "$SHIFT" = 100 ] && { echo "mouth not found after sidestepping 100 mm"; exit 1; }
+    [ "$SHIFT" = 100 ] && { echo "mouth not found after sidestepping 100 mm -- retracting"; arm retract && exit 8 || exit 1; }
     arm sidestep                    # delivery.sidestep_m
     STILL_SINCE=$(date +%s.%N)
   done

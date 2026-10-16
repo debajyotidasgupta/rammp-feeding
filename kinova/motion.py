@@ -104,6 +104,16 @@ def fk_tip(conn: KinovaConnection, q: Sequence[float]) -> np.ndarray:
     return np.array([p.x, p.y, p.z]) + R_from_kortex(p.theta_x, p.theta_y, p.theta_z) @ tip_in_tool()
 
 
+def steered_guess(prev: Sequence[float]) -> list[float]:
+    """An IK guess from the joints prev, J2 / J4 / J6 nudged away from a limit they are within STEER_WITHIN of (the
+    7th DoF takes the arm's shape off the limit)."""
+    g = list(prev)
+    for j in (1, 3, 5):
+        if abs(prev[j]) > LIMITS[j] - STEER_WITHIN:
+            g[j] = prev[j] - math.copysign(min(STEER_STEP, abs(prev[j])), prev[j])
+    return g
+
+
 def homotopy(conn: KinovaConnection, q0: Joints, at: PoseAt, n: int,
              toward: Sequence[float] | None = None) -> tuple[list[Joints] | None, str | None]:
     """Continuous IK path along at(s) -> (tool xyz, R), s = 1/n .. 1: (path including q0, None), or (None, why).
@@ -115,13 +125,7 @@ def homotopy(conn: KinovaConnection, q0: Joints, at: PoseAt, n: int,
     for k in range(1, n + 1):
         s = k / n
         T, R = at(s)
-        if toward is not None:
-            g = [fold(a + fold(b - a) * s) for a, b in zip(q0, toward)]
-        else:
-            g = list(prev)
-            for j in (1, 3, 5):
-                if abs(prev[j]) > LIMITS[j] - STEER_WITHIN:
-                    g[j] = prev[j] - math.copysign(min(STEER_STEP, abs(prev[j])), prev[j])
+        g = [fold(a + fold(b - a) * s) for a, b in zip(q0, toward)] if toward is not None else steered_guess(prev)
         q = _ik(conn, T, kortex_from_R(R), g)
         if q is None:
             return None, "IK fails at %d%%" % (100 * s)

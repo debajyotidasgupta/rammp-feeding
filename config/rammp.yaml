@@ -74,14 +74,22 @@ workspace:                      # where the table and the bowl are (arm base fra
                                 # utensil's floor applies (feeding_start parks beside it, below its top)
   overlook_camera_height_m: 0.45   # food_detect_start: the wrist camera this high above the table, over the bowl
                                    # (with the scene camera's 5 cm error, 0.40 leaves no room: tests/scene_error_study.py)
-  scene_max_age_s: 3600         # the scene camera's reading (make locate-scene) counts for this long; it is trusted
+  scene_max_age_s: 3600         # make detect refuses a scene camera reading (make locate-scene) older than this; it is trusted
                                 # to its extrinsic.error_m: the planner's table and bowl, and the utensil's floor,
                                 # keep that as extra clearance (the wrist camera then measures the food itself)
   scoop_end_follows: bowl       # the scoop end (where the swing starts) moves with the bowl (x, y, z) or the table (z)
+  overlook_aim: tip             # what food_detect_start puts over the bowl: tip (the utensil: OVER is then only the
+                                # food's offset in the bowl) or lens (the camera's axis; a tip far off the lens axis
+                                # then needs a long OVER, over acquisition.over_max_m)
+  overlook_offset_m: [0.0, 0.0] # the aim point this far (x, y) from the bowl's centre, still looking straight down
+  overlook_seed_delta_deg: null # food_detect_start's arm shape: null = continuous IK out of the captured overlook;
+                                # 7 values = one IK seeded with the captured joints + these (another shape)
 
 features:                       # what to switch on and off
   resident_models: true         # make feed starts the servers and waits until every model is warm
   wait_for_open_mouth: true     # approach only once the user opens their mouth
+  track_approach: false         # true: present by the tracked approach (delivery.track: closed loop, follows the
+                                # head). false: the mouth measured once, as it opens, then one planned move (user)
   depth_fallback: true          # fill sensor depth holes from Depth Anything 3
   detect_from_the_side: true    # after the swing, step to the user's right before looking (food not in the way)
   bowl_once_per_session: true   # detect the bowl on the first bite, then reuse its box
@@ -101,10 +109,13 @@ motion:
     timeout_s: 30
     activation_distance_m: 0.01 # cuRobo's soft standoff (its default 0.03 refuses a utensil over the rim)
     world_padding_m: 0.01       # per side on every box (the bowl's pieces and the pedestal: none)
+    floor_retries: 4            # a planned path under our floor: plan again (cuRobo's paths differ) this many times
     min_tip_above_table_m: 0.05 # our own floor for the utensil tip on these paths (scene.tip_floor) ...
     min_tip_above_bowl_m: 0.015 # ... above the bowl's top over the bowl
     bowl_margin_m: 0.04         # "over the bowl": within its rim radius + this
     user_mouth_m: [-0.277, 0.306, 0.397]   # the user in the planner's world until a delivery measures the mouth
+    wheelchair: true            # the deployment wheelchair's boxes in the planner's world (sim/assets/wheelchair/
+                                # wheelchair_boxes.yaml); false where the arm is not on the chair (a lab station)
   direct_dps: 20.0              # make start-direct: one joint move to feeding_start, no planner (SPEED=)
   joint_accel_cap_dps2: 72.0    # per joint, every trajectory (the controller refuses above 80)
   controller_accel_factor: 1.6  # the controller measures this much more acceleration than the time scaling plans:
@@ -137,6 +148,8 @@ guards:                         # contact guard: a joint-torque step this big ag
   torque_step_nm:
     default: 2.5                # every move without its own entry
     approach: 4.0               # the user moving in the chair shakes the arm's mount past 2.5
+    plunge_in_food: 8.0         # the plunge once the tines are in the food: firm food (grilled chicken, a foam pad)
+                                # takes ~4 N.m to pierce; above the food the default holds
     scoop: 6.0                  # open air: 2.5 trips on the arm's own acceleration
     swing: 6.0
     retract: 6.0                # empty utensil, moving away
@@ -153,6 +166,7 @@ acquisition:
     fast_mps: 0.050
     slow_mps: 0.008             # through the food
     slow_above_food_m: 0.020    # the overlook reads the food top 4-7 mm high; this covers it
+    in_food_from_above_m: 0.003 # the guard treats the tines as in the food this far before the measured top
     ik_step_m: 0.006
     speed_fallbacks: [1.0, 0.75, 0.5]   # the controller refused the plunge: retry at these fractions
     ramp_start_frac: 0.25       # the speed profile: starts at this fraction of fast_mps, full speed after ramp_m,
@@ -176,6 +190,7 @@ acquisition:
     waypoints: 40
     backoff_from: 0.2           # fraction of the scoop before backing off toward the bowl's scoop end
     max_backoff_m: 0.300
+    end_raise_m: 0.100          # the scoop ends this much above the bowl profile's calibrated scoop end (user: clear of the table)
     max_joint_step_deg: 12      # the scoop's continuous IK path: a bigger step on any joint is a jump
     default_food_height_m: 0.030   # a scoop run on its own with no record of the piece
   stepped:                      # the hover route, for aim checks (STOP_AFTER=hover10)
@@ -185,8 +200,9 @@ acquisition:
     punch_range_m: [0.010, 0.060]
     approach_stop_m: 0.010
     descend_max_m: 0.200
-    fast_mps: 0.015
-    slow_mps: 0.005
+    fast_mps: 0.050             # as the plunge's fast stage
+    slow_mps: 0.010             # the last slow_zone_m to each hover
+    rise_mps: 0.040             # make rise: straight back up from a hover to the overlook height
 
 perception:
   scene:                        # the fixed scene camera (make locate-scene): the COARSE bowl + table
@@ -197,6 +213,18 @@ perception:
     max_bowl_height_m: 0.20     # inside the box, the bowl is what stands this high at most above the table ...
     max_bowl_radius_m: 0.15     # ... within this of the points' middle (an arm or a head in front is not the bowl)
     max_blocked_frac: 0.3       # more of the box than this taller than a bowl: the view is blocked, nothing located
+    calibration:                # make calibrate-scene: the scene camera's pose from the arm (feeding/calibrate_scene.py)
+      stride: 4                 # every n-th depth point
+      gates_m: [0.06, 0.04, 0.025, 0.015]   # coarse to fine: points this near the arm's surface take part
+      iterations: 8             # per gate
+      start_turns_deg: [6, 12]  # the fit also starts from the guess turned this much about each camera axis
+      max_rms_m: 0.008          # accepted only with the arm's points this close to its surface (rms) ...
+      min_points: 300           # ... at least this many of them ...
+      min_captures: 2           # ... from at least this many poses (one pose's chain leaves a rotation weak)
+      max_age_s: 3600           # captures older than this are not used
+      wrist_down_cos: 0.95      # the wrist camera looking this straight down: it measures the table's height
+      crop_m: 0.25              # only points this near the arm (under the guess) take part ...
+      table_points: 3000        # ... and about this many near the table's level
   min_box_side_px: 25
   max_box_aspect: 3.0
   food_inside_bowl_min: 0.8     # fraction of a food box inside the bowl box
@@ -212,31 +240,69 @@ perception:
                                 # arm stopped will do (the server keeps 5 s)
   depth_tries: 3                # ... this many times, before the caller falls back (the stream recovers in < 1 s)
   food_half_width_m: 0.017      # the floor ring beside the food (half a strawberry)
+  utensil_depth_margin_m: 0.005 # under the tip, depth no farther than the tip + this is the utensil (feeding/measure_under)
+  utensil_depth_border_px: 3    # ... and this many depth pixels round it (the sensor's edge pixels: utensil-or-behind)
   aim_top_surface: true         # aim at the uppermost piece's top inside the chosen box, not the box centre
   top_band_mm: 6.0              # its top = depth pixels within this of the box's nearest point
   food_left_above_floor_mm: 15  # no food box: the bowl is empty only if under food_left_min_frac of its inner area
   food_left_min_frac: 0.05      # stands this far above its floor -- else "food left, none pickable" (exit 5)
 
 delivery:
-  lift_m: 0.175                 # the swing's goal: this far above the scoop end, ...
+  lift_m: 0.075                 # the swing's goal: this far above the scoop end (+ its end_raise_m: the same place), ...
   retract_tries_m: [0.120, 0.100, 0.080, 0.060, 0.040, 0.0]   # ... turned to the user, retracted the most of these
   swing_dps: 61.0
+  swing_standoff_m: null        # null: the swing ends where the turn retracted to (retract_tries_m); a distance: the
+                                # swing ends with the tip this far short of the known mouth (workspace.mouth_now),
+                                # on its line -- the approach is then that much shorter
   detect_sidestep_m: 0.050      # to the user's right (-Y) before looking
   stop_m: 0.080                 # utensil tip short of the mouth (safe for any cube-sized piece)
   stop_extra_if_depth_filled_m: 0.040
   aim_dz_m: -0.010              # below the detected mouth
   approach_mps: 0.077           # toward the face; stops stop_m short, torque-guarded
-  max_approach_m: 0.350
+  max_approach_m: 0.800         # the open-loop approach at most this long (a user sitting back)
+  approach_step_m: 0.005        # its IK path in steps this long (a long one in 40 steps jumps)
   detection_max_age_s: 120.0
   sidestep_m: 0.050             # occlusion retries: step this far, at most twice, then the nose estimate
   nose_to_mouth: 0.84           # nose heights below the nose, upright image (0.81-0.87 measured)
   mouth_behind_nose_m: 0.005
+  track:                        # the tracked approach (deliver.py track): one continuous move to the mouth, steered live
+    rate_hz: 20                 # the control loop
+    lookahead_s: 0.15           # each cycle: our IK for the pose this far ahead -> the joint speeds to reach it
+    max_joint_dps: 30.0         # ... no joint faster than this (the direction kept)
+    far_mps: 0.10               # the tip's speed far from the mouth ...
+    near_mps: 0.04              # ... easing to this at stop_m
+    slow_from_m: 0.35           # ... from this far from the mouth
+    accel_mps2: 0.25            # the commanded velocity changes at most this fast (smooth starts and turns)
+    gain_per_s: 1.5             # speed = gain x the distance left, at most the above (a soft arrival)
+    arrive_m: 0.005             # arrived within this of the goal (stop_m short of the mouth, from depth)
+    yaw_gain_per_s: 1.0         # the utensil turned toward the mouth: deg/s per deg off ...
+    max_yaw_dps: 20.0           # ... at most this
+    max_turn_deg: 30.0          # ... and at most this far from where the swing pointed it (the wrist turns with it)
+    size_hold_m: 0.35           # while the mouth's range is only from the face's size: the tip holds this far short
+    frame_max_age_s: 1.0        # a tracked face this old still steers (placed with the arm's pose at its time)
+    hold_s: 1.0                 # no fresh face this long: ease to a hold where it is ...
+    lost_timeout_s: 3.0         # ... this long: stop, the face lost
+    timeout_s: 40.0
+    max_travel_m: 1.0           # further than this without arriving: stop
+    stall_s: 2.0                # told to move (> 3 x stall_m in this long) but moved under stall_m: stop (the
+    stall_m: 0.01               # edge of reach: the arm cannot follow)
+    max_tilt_cos: 0.25          # the utensil's axis more than this out of level: stop
+    back_off_m: 0.10            # the retract starts straight back this far along the utensil
+    poll_timeout_s: 0.1         # the face server's /track
+    idle_s: 5.0                 # the tracker stops this long after its last request
+    watchdog: true              # a second session stops the arm if the loop stops beating (kinova/scripts/twist_watchdog)
+    watchdog_s: 0.3
+  face:                         # the wrist camera's face finding (feeding/detect_mouth_mp.py)
+    zoom_grid: 3                # no face in the whole frame: search n x n half-overlapping crops (a far user); 0 = off
+    zoom_every_s: 0.5           # ... at most this often while they find nothing (each search is n x n detections)
+    eye_corners_m: 0.090        # the outer eye corners' spacing: the face's range where the depth has none
+    depth_beyond_eyes_factor: 1.6   # a face depth past this x its eye-spacing range (and 0.3 m beyond) is not the face's
   mouth_check:                  # a detected mouth box is used only if it is anatomically plausible against the nose
     max_box_frac: 0.03          # of the (upright) frame -- bigger = junk (also for the nose box)
     below_nose_heights: [0.4, 1.5]   # its centre this many nose heights below the nose's
     max_sideways_nose_widths: 1.0
     max_depth_diff_m: 0.030     # from the nose's depth
-    depth_range_m: [0.25, 0.75] # a mouth outside this is not a face at the utensil (a stale / misregistered depth
+    depth_range_m: [0.25, 1.00] # a mouth outside this is not a face at the utensil (a stale / misregistered depth
                                 # frame): look again, never approach
     max_face_diff_m: 0.080      # the mouth's depth vs the face box's median depth
   level_tol: 0.1                # |utensil axis z| below this = level (at the user)
@@ -248,11 +314,18 @@ delivery:
   bite_settle_s: 10.0           # after the bite: watch at most this long for the force to settle
   open_mouth_ratio: 0.20        # inner-lip gap / mouth width; closed reads <= 0.02
   open_mouth_hold_s: 0.30
+  open_mouth_gap_s: 0.30        # frames with no face found inside the hold: skipped, up to this long
   open_mouth_timeout_s: 60.0    # no open mouth by then = the user declined: take the food back
-  bite_n: 1.0                   # tool-force estimate against a baseline at rest
+  bite_n: 2.0                   # tool-force estimate against a baseline at rest (user, 2026-10-02)
   bite_hold_s: 0.10
   bite_timeout_s: 60.0
   retract:
-    back_off_mps: 0.20          # straight back from the mouth
+    back_off_mps: 0.20          # straight back from the mouth and on in toward the arm (one move)
     home_dps: 61.0              # the planned return to food_detect_start
-    max_from_swing_end_m: 0.400 # further than this from where the swing ended = not backing off from here
+    tuck_radii_m: [0.35, 0.45, 0.55]   # first the utensil tip pulled straight in to this far from the base's axis
+                                # (the first the arm can hold level) ...
+    reach_margin_m: 0.10        # ... then the planned return keeps it within its start's / goal's distance + this
+    max_from_swing_end_m: 0.900 # further than this from where the swing ended = not backing off from here
+                                # (the longest approach, max_approach_m, + a margin)
+    back_off_m: 0.10            # straight back this far toward where the swing ended (null: all the way), then on in
+                                # toward the arm in the same move, then cuRobo

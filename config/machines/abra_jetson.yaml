@@ -29,3 +29,11 @@ scene_camera:
 workspace:
   scoop_end_follows: table            # the swing starts where it was validated relative to the user
 
+
+motion:
+  free_space:
+    wheelchair: false           # the arm is on the lab station's table here, not on the wheelchair: no chair in
+                                # the planner's world (its backrest stood where a seated tester's head is)
+
+bowl:
+  floor_above_table_m: 0.020    # the site's clear glass bowl on its saucer (ruler, 2026-10-02): depth reads through it

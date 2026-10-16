@@ -36,7 +36,7 @@ make locate-bowl   the bowl + table from the latest perceive (no scene camera: t
 make capture       re-measure feeding_start from the parked arm
 make models        every model loaded and warm, both camera servers up (make feed runs it)
 make camera        the selected camera behind the camera server;  make depth: the Kinova vision nodes
-make limits        the arm's speed limits (APPLY=1: from deployment.arm.soft_limits)
+make limits        the arm's speed limits (APPLY=1 sets deployment.arm.soft_limits, saving theirs; RESTORE=<file>)
 make tool          the arm's tool frame + mass vs ours (APPLY=1 sets ours, saving theirs; RESTORE=<file>)
 make local         a machine's settings: config/machines/<MACHINE>.yaml -> config/local.yaml
 make twin          the digital twin: replay a recorded bite in MuJoCo -> out/sim/*.mp4 (the Mac)
@@ -52,7 +52,7 @@ feeding_start --cuRobo--> food_detect_start --perceive--> OVER, plunge, scoop --
 ```
 
 - **food_detect_start** is computed over the bowl the workspace reports (`kinova/scene.py`): the wrist camera
-  `workspace.overlook_camera_height_m` (0.45) above the table, its lens axis through the bowl, in the captured
+  `workspace.overlook_camera_height_m` (0.45) above the table, the fork's tip over the bowl (`workspace.overlook_aim`; or the lens axis), in the captured
   overlook's orientation, joints by continuous IK out of the captured pose (the arm keeps its shape).
 - **Perceive** (`feeding/stage1.sh`): a colour frame and a depth median from the camera server, LocateAnything-3B
   for the bowl and the food (one query per category; the food profile's prompt), depth at each detection, the
@@ -220,6 +220,9 @@ every sync.
 - **The final film**: `--export` the scene and poses, render on a GPU box with Blender's Cycles
   (`blender -b -P sim/blender_render.py -- out/sim/cmp/left`), `--compose` the frames with the HUD; ~2 s a frame on
   an RTX 3070. MuJoCo poses every frame; Blender only draws.
+- **The strategy search** (`sim/isaac/`): the stack's own bites with cuRobo for many strategies x scenarios, then
+  replayed with food physics on thousands of Isaac Lab arms on the cluster; how it runs and the findings:
+  docs/notes/sim.md.
 
 Everything generated goes under `out/` (git-ignored): `out/sim/` (videos, renders, the procedural textures in
 `out/sim/cache/`), `out/captures/` (debug images). The presentation figures keep their own `presentation/out/`.
@@ -250,7 +253,8 @@ Nothing moves until step 5; every motion is attended.
 1. **The machine**: `./setup_jetson.sh`, `make local MACHINE=<name>` (root, name, the arm's IP, the cameras),
    `make images driver planner`.
 2. **The arm's settings** (another user may have changed them): `make tool` / `make limits`, `APPLY=1` sets ours
-   (the replaced values are saved; `make tool RESTORE=<file>` puts them back).
+   (the replaced values are saved to `runs_dir/arm_{tool,limits}_before_<time>.json`; `make tool RESTORE=<file>` /
+   `make limits RESTORE=<file>` put them back).
 3. **The cameras**: the scene camera's extrinsic is read from its calibration file; `make models` brings up the
    models and both camera servers.
 4. **`make site-ready`**: the preflight, the bowl and table from the scene camera, the plan to food_detect_start.
@@ -280,8 +284,9 @@ feeding/                     the stage scripts (stage1 / acquire / deliver / fee
                              depth_fill, detect_mouth_mp, detect_mouth), review
 tests/                       site_check, stub_planner, mujoco_kortex + fake_kortex, scene_error_study, unit_test,
                              regress.sh, twin_check, sites/
-sim/                         the twin and the film: scene, record, twin, compare_planners, blender_render, assets/
-docker/                      the driver, vision and x86 planner images
+sim/                         the twin and the film: scene, record, twin, compare_planners, blender_render, assets/;
+                             isaac/ the GPU strategy search
+docker/                      the driver, vision, x86 planner and BLAST-evaluation images
 docs/notes/                  the design history
 presentation/                the 2026-09 figures (their own README)
 ```

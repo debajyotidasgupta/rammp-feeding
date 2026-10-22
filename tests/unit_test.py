@@ -1,243 +1,337 @@
-#!/usr/bin/env python3
-"""Offline unit tests for the machine / camera / scene layer (no arm, no Jetson, no models):
-
-    .venv/bin/python tests/unit_test.py          # (tests/offline.sh runs it with the trace and the site check)
-
-  settings     root / name templates, RAMMP_ROOT, local.yaml picking profiles, a utensil's by_camera values
-  camera       the mount read from a calibration file; any rotation through cam_to_tool / the tip model
-  scene cam    locate_scene's chain on a ray-cast synthetic scene: the bowl centre and the table recovered
-  preflight    the tool check and the other-clients check, against stub controller answers
-  scene        the computed overlook, the position-aware tip floor (with the scene camera's error)
-"""
+"""Unit tests: no ROS, no arm, no GPU (python3 tests/unit_test.py)."""
 
 from __future__ import annotations
 
 import json
+import math
 import os
-import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
-from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
-TMP = Path(tempfile.mkdtemp(prefix="unit_test_"))
-
-# one hermetic configuration for the in-process tests (settings load once, at import)
-SCENE_XYZ, SCENE_Q = [-0.06506, 0.64157, 0.35206], [0.044383, 0.020535, -0.265541, 0.962859]   # the site's calibration
-os.environ.update(RAMMP_NO_LOCAL="1", RAMMP_CAMERA="realsense_d405", RAMMP_SCENE_CAMERA="orbbec_gemini336l",
-                  RAMMP_SET=",".join([
-                      "deployment.runs_dir=%s" % TMP,
-                      "workspace.overlook_camera_height_m=0.35",
-                      "scene_camera.extrinsic.xyz=%s" % json.dumps(SCENE_XYZ),
-                      "scene_camera.extrinsic.quat_xyzw=%s" % json.dumps(SCENE_Q)]))
+sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "tests"))
+WORK = Path(tempfile.mkdtemp(prefix="rammp_unit_"))
+os.environ.update(RAMMP_NO_LOCAL="1", RAMMP_STATE_DIR=str(WORK / "state"),
+                  RAMMP_SET="deployment.runs_dir=%s,planner.world_file=%s,planner.world_file_in_planner=" % (WORK / "runs", WORK / "state/world.yaml"))
 
 import numpy as np  # noqa: E402
 
-from settings import cfg  # noqa: E402
+from fake_robot import FakeRobot, Scene  # noqa: E402
+from rammp_feeding import geometry as g, scene  # noqa: E402
+from rammp_feeding.arm import Arm, MoveError, TorqueGuard, chain, time_scale  # noqa: E402
+from rammp_feeding.config import cfg, state_dir  # noqa: E402
+from rammp_feeding.ros import Detection  # noqa: E402
+
+RNG = np.random.default_rng(0)
 
 
-def settings_get(key: str, **env) -> str:
-    e = dict(os.environ, **env)
-    for k in ("RAMMP_SET", "RAMMP_CAMERA", "RAMMP_SCENE_CAMERA", "RAMMP_NO_LOCAL"):
-        if k not in env:
-            e.pop(k, None)
-    return subprocess.run([sys.executable, "-m", "settings", "get", key], cwd=ROOT, env=e, capture_output=True,
-                          text=True, check=True).stdout.strip()
+def site(sc: Scene) -> None:
+    (state_dir() / "scene_state.json").write_text(json.dumps(dict(
+        bowl_xy=list(sc.bowl_xy), table_z=sc.table_z, bowl_top_z=sc.table_z + 0.06, rim_radius_m=sc.bowl_radius, t=time.time())))
 
 
-class Settings(unittest.TestCase):
-    def test_root_and_name_templates(self):
-        self.assertEqual(settings_get("deployment.venvs.detector", RAMMP_NO_LOCAL="1", RAMMP_ROOT="/opt/x"),
-                         "/opt/x/venvs/la")
-        self.assertEqual(settings_get("deployment.containers.driver", RAMMP_NO_LOCAL="1",
-                                      RAMMP_SET="deployment.name=site"), "site_driver")
+class Geometry(unittest.TestCase):
+    def test_rotations(self):
+        for _ in range(50):
+            w = RNG.normal(size=3) * RNG.uniform(0, 3)
+            R = g.rodrigues(w)
+            self.assertTrue(np.allclose(g.rodrigues(g.rot_log(R)), R, atol=1e-9))
+            self.assertTrue(np.allclose(g.quat_matrix(g.matrix_quat(R)), R, atol=1e-9))
 
-    def test_by_camera_applies_only_with_that_camera(self):
-        self.assertEqual(settings_get("utensil.camera_to_tip_m", RAMMP_NO_LOCAL="1", RAMMP_CAMERA="realsense_d405"), "0.26")
-        self.assertEqual(settings_get("utensil.camera_to_tip_m", RAMMP_NO_LOCAL="1", RAMMP_CAMERA="kinova_wrist"), "0.265")
-
-    def test_local_yaml_picks_profiles(self):
-        conf = TMP / "config"
-        subprocess.run(["cp", "-R", str(ROOT / "config"), str(conf)], check=True)
-        (conf / "local.yaml").write_text("profiles: {camera: realsense_d405}\n")
-        self.assertEqual(settings_get("camera.streams.kind", RAMMP_CONFIG=str(conf)), "ros2")
-        self.assertEqual(settings_get("camera.streams.kind", RAMMP_CONFIG=str(conf), RAMMP_NO_LOCAL="1"), "kinova_vision")
+    def test_fold(self):
+        self.assertAlmostEqual(g.fold(190.0), -170.0)
+        self.assertAlmostEqual(g.max_step([179] + [0] * 6, [-179] + [0] * 6), 2.0)
 
 
-class Camera(unittest.TestCase):
-    def test_mount_file_and_rotation(self):
-        f = TMP / "mount.yaml"
-        f.write_text("parent_frame: end_effector_link\nmount_xyz: [0.0, 0.075, -0.005]\nmount_quat_xyzw: [0, 0, 1, 0]\n")
-        out = subprocess.run([sys.executable, "-c", "from feeding.camera import CAM_IN_TOOL, CAM_ROT, DEFAULT_MOUNT;"
-                              "print(list(CAM_IN_TOOL.round(4)), DEFAULT_MOUNT)"], cwd=ROOT, capture_output=True,
-                             text=True, check=True,
-                             env=dict(os.environ, RAMMP_SET="camera.mount.file=%s" % f, RAMMP_NO_LOCAL="1")).stdout
-        self.assertIn("[0.0, 0.075, -0.125] True", out.replace("np.float64(", "").replace(")", ""))
+class Kinematics(unittest.TestCase):
+    kin = chain()
 
-    def test_any_rotation_goes_through_cam_to_tool(self):
-        import feeding.camera as C
-        with mock.patch.object(C, "CAM_ROT", np.eye(3)):
-            self.assertTrue(np.allclose(C.cam_to_tool([0.01, 0.02, 0.3]), C.CAM_IN_TOOL + [0.01, 0.02, 0.3]))
-        self.assertTrue(np.allclose(C.cam_to_tool([0.01, 0.02, 0.3]), C.CAM_IN_TOOL + [-0.01, -0.02, 0.3]))
+    def test_jacobian_matches_finite_differences(self):
+        q = scene.captured("overlook")
+        J = self.kin.jacobian(q)
+        p0, R0 = self.kin.fk(q)
+        for i in range(7):
+            dq = np.zeros(7); dq[i] = 1e-4
+            p1, R1 = self.kin.fk(np.asarray(q) + dq)
+            num = np.concatenate([(p1 - p0), g.rot_log(R1 @ R0.T)]) / np.radians(1e-4)
+            self.assertTrue(np.allclose(J[:, i], num, atol=1e-4), "joint %d" % (i + 1))
 
+    def test_ik_round_trip(self):
+        for name in ("home", "overlook"):
+            q0 = scene.captured(name)
+            n = 0
+            while n < 10:
+                qt = np.asarray(q0) + RNG.normal(scale=6, size=7)
+                if any(not lo <= qt[i] <= hi for i, (lo, hi) in self.kin.limits.items()):
+                    continue                                  # past a limit: no solution is the right answer
+                n += 1
+                T, R = self.kin.fk(qt)
+                q = self.kin.ik(T, R, q0)
+                self.assertIsNotNone(q)
+                T2, R2 = self.kin.fk(q)
+                self.assertLess(np.linalg.norm(T2 - T), 2e-4)
+                self.assertLess(np.linalg.norm(g.rot_log(R2 @ R.T)), 2e-3)
 
-class SceneCamera(unittest.TestCase):
-    """A synthetic scene ray-cast into the Orbbec's depth image through the same extrinsic: table + a bowl."""
-
-    def test_table_is_the_dominant_surface_and_a_blocked_bowl_is_refused(self):
-        import feeding.locate_scene as L
-        rng = np.random.default_rng(0)
-        z = np.concatenate([rng.normal(-0.024, 0.002, 3000), rng.uniform(0.1, 0.6, 2500), np.full(500, -0.8)])
-        self.assertAlmostEqual(L.table_height(z), -0.024, delta=0.002)   # not the arm above it, not the floor
-        n = 400                                         # a box full of an arm (0.3 m up), a few bowl points
-        box_pts = np.column_stack([np.full(n, 0.29), np.full(n, 0.158), np.where(np.arange(n) < 300, 0.3, 0.03)])
-        ring_pts = np.column_stack([rng.uniform(0.1, 0.5, 400), rng.uniform(0.0, 0.3, 400), np.full(400, -0.024)])
-        uv = np.vstack([np.tile([50.0, 50.0], (n, 1)), np.tile([30.0, 65.0], (400, 1))])   # in the box; the ring
-        m = L.measure([40, 40, 60, 60], uv, np.vstack([box_pts, ring_pts]))
-        self.assertIn("in front of the bowl", m.get("rejected", ""))
-
-    def test_bowl_and_table_recovered(self):
-        import feeding.locate_scene as L
-        table_z, top_z, r, c = -0.024, 0.046, 0.054, np.array([0.290, 0.158])
-        d = cfg.scene_camera.depth
-        R, t, _ = L.extrinsic()
-        v, u = np.mgrid[0:int(d.height), 0:int(d.width)]
-        ray_opt = np.stack([(u - float(d.cx)) / float(d.fx), (v - float(d.cy)) / float(d.fy), np.ones(u.shape)], -1)
-        ray = ray_opt.reshape(-1, 3) @ L.OPT_TO_LINK.T @ R.T            # base-frame directions (depth along z_opt = 1)
-        o = t
-        depth = np.zeros(len(ray))
-        s_tab = (table_z - o[2]) / ray[:, 2]
-        hit = (ray[:, 2] < 0) & (s_tab > 0)
-        depth[hit] = s_tab[hit]
-        # the bowl's outer wall: a cylinder from the table to its rim
-        a = (ray[:, :2] ** 2).sum(1)
-        b = 2 * (ray[:, :2] * (o[:2] - c)).sum(1)
-        cc = ((o[:2] - c) ** 2).sum() - r * r
-        disc = b * b - 4 * a * cc
-        ok = disc > 0
-        s_w = np.full(len(ray), np.inf)
-        s_w[ok] = (-b[ok] - np.sqrt(disc[ok])) / (2 * a[ok])
-        z_w = o[2] + s_w * ray[:, 2]
-        wall = ok & (s_w > 0) & (z_w > table_z) & (z_w < top_z) & ((depth == 0) | (s_w < depth))
-        depth[wall] = s_w[wall]
-        # the rim's top face (a thin ring) and the floor inside
-        s_top = (top_z - o[2]) / ray[:, 2]
-        p_top = o[:2] + s_top[:, None] * ray[:, :2]
-        rr = np.linalg.norm(p_top - c, axis=1)
-        rim = (s_top > 0) & (rr < r) & (rr > r - 0.006) & ((depth == 0) | (s_top < depth))
-        depth[rim] = s_top[rim]
-        img = depth.reshape(u.shape)
-        p_link, _ = L.depth_points(img)
-        p_base = p_link @ R.T + t
-        uv = L.project_colour(p_link)
-        sel = np.linalg.norm(p_base[:, :2] - c, axis=1) < r + 0.003
-        sel &= p_base[:, 2] > table_z + 0.005
-        bx = [float(uv[sel, 0].min()), float(uv[sel, 1].min()), float(uv[sel, 0].max()), float(uv[sel, 1].max())]
-        m = L.measure(bx, uv, p_base)
-        self.assertNotIn("rejected", m, m.get("rejected"))
-        self.assertLess(abs(m["table_z"] - table_z), 0.002)
-        self.assertLess(np.linalg.norm(np.array(m["bowl_xy"]) - c), 0.012, m["bowl_xy"])
-        self.assertLess(abs(m["bowl_top_z"] - top_z), 0.005)
+    def test_tool_frame_is_flange_plus_tcp(self):
+        q = scene.captured("home")
+        F = self.kin.flange(q)
+        T, _ = self.kin.fk(q)
+        self.assertTrue(np.allclose(T, F[:3, 3] + F[:3, :3] @ np.array(cfg.arm.tool_from_flange_m)))
 
 
-class Preflight(unittest.TestCase):
-    def test_tool_mismatch(self):
-        from kinova.scripts import safe_move
-        tool = SimpleNamespace(tool_transform=SimpleNamespace(x=0, y=0, z=0.2, theta_x=0, theta_y=0, theta_z=0),
-                               tool_mass=1.025)
-        stub = mock.MagicMock()
-        stub.return_value.GetToolConfiguration.return_value = tool
-        with mock.patch("kortex_api.autogen.client_stubs.ControlConfigClientRpc.ControlConfigClient", stub):
-            bad = safe_move.tool_mismatch(SimpleNamespace(_tcp_router=object()))
-            self.assertEqual(len(bad), 2, bad)                        # the frame and the mass
-            with self.assertRaises(safe_move.MoveError):
-                safe_move.check_tool(SimpleNamespace(_tcp_router=object()))
-            tool.tool_transform.z, tool.tool_mass = 0.12, 0.831
-            self.assertEqual(safe_move.tool_mismatch(SimpleNamespace(_tcp_router=object())), [])
-        self.assertEqual(safe_move.tool_mismatch(SimpleNamespace()), [])      # the fake controller: ours
+class Motion(unittest.TestCase):
+    def test_time_scale_caps(self):
+        path = [[0.0] * 7, [30.0] + [0] * 6, [60.0] + [0] * 6]
+        dt = time_scale(path, 20.0, 72.0)
+        self.assertGreaterEqual(sum(dt), 3.0)                    # 60 deg at <= 20 deg/s
+        v = [30.0 / d for d in dt]
+        self.assertTrue(all(x <= 20.0 + 1e-6 for x in v))
 
-    def test_other_clients(self):
-        from kinova.scripts import preflight as P
+    def test_torque_guard(self):
+        G = TorqueGuard(2.5)
+        for k in range(40):                                      # a slow ramp: no contact
+            self.assertIsNone(G.update([0.05 * k] + [0] * 6))
+        hits = [G.update([2.0 + 3.0] + [0] * 6) for _ in range(3)]
+        self.assertTrue(any(hits))
 
-        def conn(*infos):
-            sock = SimpleNamespace(getsockname=lambda: ("192.168.1.11", 4000))
-            lst = SimpleNamespace(connection=[SimpleNamespace(connection_information=i) for i in infos])
-            return SimpleNamespace(_tcp_transport=SimpleNamespace(sock=sock),
-                                   _tcp_session=SimpleNamespace(GetConnections=lambda: lst))
-        rep = P.Report()
-        P.check_clients(conn("type=TCP;ip=127.0.0.1;port=1", "type=TCP;ip=192.168.1.11;port=4000"), rep)
-        self.assertEqual(rep.rows[-1][0], "OK")
-        P.check_clients(conn("type=TCP;ip=127.0.0.1;port=1", "type=TCP;ip=192.168.1.11;port=4000",
-                             "type=TCP;ip=192.168.1.11;port=5216"), rep)
-        self.assertEqual(rep.rows[-1][0], "FAIL")
-        self.assertIn("192.168.1.11:5216", rep.rows[-1][2])
-
-
-class Scene(unittest.TestCase):
-    def setUp(self):
-        (TMP / "scene_state.json").write_text(json.dumps(dict(t=__import__("time").time(), bowl_xy=[0.29, 0.158],
-                                                              table_z=-0.024, bowl_top_z=0.046, rim_radius_m=0.054)))
-
-    def test_computed_overlook_puts_the_camera_over_the_bowl(self):
-        from kinova import scene
-        from kinova.frames import R_from_kortex
-        from feeding.camera import CAM_IN_TOOL
-        t = scene.overlook_pose()["tool_pose"]
-        cam = np.array([t["x_m"], t["y_m"], t["z_m"]]) + R_from_kortex(t["theta_x_deg"], t["theta_y_deg"],
-                                                                        t["theta_z_deg"]) @ CAM_IN_TOOL
-        self.assertTrue(np.allclose(cam, [0.29, 0.158, -0.024 + 0.35], atol=1e-9), cam)
-
-    def test_tip_floor_bowl_table_and_beside_it(self):
-        from kinova import scene
-        e = 0.05                                             # scene_camera.extrinsic.error_m
-        self.assertAlmostEqual(scene.tip_floor(0.29, 0.158), 0.046 + 0.015 + e)
-        self.assertAlmostEqual(scene.tip_floor(0.29 + 0.054 + 0.039 + e, 0.158), 0.046 + 0.015 + e)
-        self.assertAlmostEqual(scene.tip_floor(0.29 + 0.054 + 0.041 + e, 0.158), -0.024 + 0.05 + e)
-        self.assertEqual(scene.tip_floor(0.058, -0.181), -np.inf)   # feeding_start: beside the table, below its top
-
-    def test_world_grows_by_the_error(self):
-        from kinova.curobo_world import world
-        ws = dict(bowl_xy=[0.29, 0.158], table_z=-0.024, bowl_top_z=0.046, bowl_radius=0.054)
-        a = {o["name"]: o for o in world(ws, [-0.277, 0.306, 0.397], chair=[])["obstacles"]}
-        b = {o["name"]: o for o in world(dict(ws, error_m=0.05), [-0.277, 0.306, 0.397], chair=[])["obstacles"]}
-        self.assertAlmostEqual(b["table"]["position"][2] - a["table"]["position"][2], 0.05)
-        self.assertAlmostEqual(b["bowl_wall_0"]["dims"][0] - a["bowl_wall_0"]["dims"][0], 0.10)
+    def test_plunge_guard_is_zoned(self):
+        """A torque step above the food stops the plunge; the same step once the tines are in the food does not."""
+        from rammp_feeding.acquire import plunge
+        sc = Scene()
+        site(sc)
+        for step, stops in ((4.0, True), (5.0, False)):
+            robot = FakeRobot(sc, scene.captured("home"))
+            arm = Arm(robot)
+            robot.raw = np.radians(scene.overlook_joints(arm))
+            tip = arm.tip()
+            H = tip[2] - sc.table_z                               # the tip over the table (a clear bowl reads it)
+            u = dict(top_z=sc.table_z + 0.055, gap_top=H - 0.055, floor_z=sc.table_z, gap_floor=H, height=0.055)   # 55 mm
+            robot.inject[0] = (0.5 if stops else 0.97, [step] + [0] * 6)   # half way: above the food; at the end: in it
+            if stops:
+                with self.assertRaises(MoveError):
+                    plunge(arm, u, scoop_after=False)
+            else:
+                plunge(arm, u, scoop_after=False)
+                self.assertLess(arm.tip()[2], tip[2] - 0.1)
 
 
-class CuroboWorld(unittest.TestCase):
-    """The planner's world and utensil model (kinova/curobo_world.py): plain data, no GPU."""
+class Restored(unittest.TestCase):
+    """What the port keeps from the stack before it."""
 
-    def test_hollow_bowl_user_and_floats(self):
-        from kinova.curobo_world import no_pad_names, world
-        w = world(dict(bowl_xy=[0.29, 0.158], table_z=-0.024, bowl_top_z=0.046, bowl_radius=0.054),
-                  [-0.277, 0.306, 0.397], chair=[])
+    def _at_overlook(self):
+        sc = Scene(floor_lift=0.007)
+        site(sc)
+        robot = FakeRobot(sc, scene.captured("home"))
+        arm = Arm(robot)
+        robot.raw = np.radians(scene.overlook_joints(arm))
+        sc.piece_xy = tuple(arm.tip()[:2])
+        return sc, robot, arm
+
+    def test_bite_waits_for_the_force_to_settle(self):
+        """3 N at the tool for 0.4 s (a bite), then gone: detected, and the wait ends once it has settled."""
+        from rammp_feeding.deliver import bite
+        sc, robot, arm = self._at_overlook()
+        J = arm.kin.jacobian(arm.q())[:3]
+        t0 = time.time()
+        f = lambda t: J.T @ np.array([0, 0, 3.0]) if 1.0 < t - t0 < 1.4 else np.zeros(7)   # noqa: E731
+        robot.effort_fn = f
+        self.assertEqual(bite(robot, arm, 5.0), 0)
+        self.assertLess(time.time() - t0, 3.5)                   # settled soon after, not bite_settle_s
+        robot.effort_fn = lambda t: np.zeros(7)
+        self.assertEqual(bite(robot, arm, 1.0), 4)               # no bite
+
+    def test_hover_route_then_punch_then_scoop(self):
+        from rammp_feeding.acquire import acquire
+        sc, robot, arm = self._at_overlook()
+        out = Path(tempfile.mkdtemp())
+        acquire(robot, arm, dict(tool_goal=list(arm.tool()[0])), out, stop_after="hover10")
+        self.assertAlmostEqual(arm.tip()[2] - (sc.table_z + sc.floor_lift + sc.piece_height), 0.010, delta=0.002)
+        acquire(robot, arm, {}, out, start_at="punch", stop_after="punch")
+        want = sc.table_z + float(cfg.bowl.floor_above_table_m) + float(cfg.utensil.punch_floor_margin_m)
+        self.assertAlmostEqual(arm.tip()[2], want, delta=0.002)
+        acquire(robot, arm, {}, out, start_at="scoop")
+        self.assertGreater(g.axis(arm.tool()[1])[1], 0.95)       # level, pointing at the user
+
+    def test_direct_home(self):
+        from rammp_feeding.cli import home
+        sc, robot, arm = self._at_overlook()
+        home(robot, arm, direct=True)
+        self.assertLess(g.max_step(arm.q(), scene.captured("home")), 0.1)
+
+
+class Perception(unittest.TestCase):
+    def test_food_filters(self):
+        from rammp_feeding.perception import food, mask_of
+        rgb = np.full((480, 848, 3), (200, 170, 90), np.uint8)
+        bowl = mask_of(Detection("b", 1.0, [300, 100, 600, 400]), rgb.shape[:2])
+        dets = [Detection("f", 0.9, [400, 200, 440, 240]),          # kept
+                Detection("f", 0.8, [402, 202, 441, 241]),          # the same piece again
+                Detection("f", 0.7, [450, 380, 480, 420]),          # inside the utensil's region
+                Detection("f", 0.6, [100, 100, 140, 140]),          # outside the bowl
+                Detection("f", 0.5, [500, 200, 505, 260]),          # a sliver
+                Detection("f", 0.4, [320, 120, 560, 380])]          # bowl-sized
+        self.assertEqual([d.box for d in food(rgb, dets, bowl)], [[400, 200, 440, 240]])
+
+    def test_under_tip_from_the_rendered_depth(self):
+        from rammp_feeding.perception import under_tip
+        sc = Scene()
+        site(sc)
+        robot = FakeRobot(sc, scene.captured("home"))
+        arm = Arm(robot)
+        robot.raw = np.radians(scene.overlook_joints(arm))
+        tip = arm.tip()
+        sc.piece_xy = tuple(tip[:2])                              # the piece right under the tip
+        u = under_tip(robot.render_depth(), arm)
+        self.assertAlmostEqual(u["top_z"], sc.table_z + sc.piece_height, delta=0.002)
+        self.assertAlmostEqual(u["gap_top"], tip[2] - (sc.table_z + sc.piece_height), delta=0.002)
+        self.assertAlmostEqual(u["gap_floor"], tip[2] - sc.table_z, delta=0.002)
+
+
+class Plunge(unittest.TestCase):
+    def test_never_under_the_bowls_own_floor(self):
+        from rammp_feeding.acquire import plunge_depth
+        sc = Scene()
+        site(sc)
+        tip_z = sc.table_z + 0.20
+        u = dict(gap_top=0.175, gap_floor=0.20, height=0.025, top_z=sc.table_z + 0.025, floor_z=sc.table_z)   # the floor through the glass
+        down, food, mode = plunge_depth(u, tip_z)
+        self.assertEqual(mode, "floor")
+        self.assertAlmostEqual(tip_z - down, sc.table_z + float(cfg.bowl.floor_above_table_m)
+                               + float(cfg.utensil.punch_floor_margin_m), places=6)
+
+    def test_packed_food(self):
+        from rammp_feeding.acquire import plunge_depth
+        sc = Scene()
+        site(sc)
+        down, food, mode = plunge_depth(dict(gap_top=0.15, top_z=sc.table_z + 0.05), sc.table_z + 0.20)
+        self.assertEqual(mode, "below top")
+        self.assertAlmostEqual(down, 0.15 + float(cfg.acquisition.plunge.no_floor.depth_below_top_m))
+
+
+class World(unittest.TestCase):
+    def test_world(self):
+        sc = Scene()
+        site(sc)
+        w = scene.world()
         names = [o["name"] for o in w["obstacles"]]
-        self.assertEqual(sum(n.startswith("bowl_wall_") for n in names), 12)
-        self.assertIn("bowl_floor", names)
-        self.assertNotIn("bowl", names)                      # no solid bowl: the utensil works over its opening
-        head = next(o for o in w["obstacles"] if o["name"] == "user_head")
-        self.assertAlmostEqual(head["position"][2], 0.447)
-        self.assertTrue(all(isinstance(v, float) for o in w["obstacles"] for v in o["position"] + o["dims"]))
-        self.assertEqual(set(no_pad_names(w)), {"pedestal", "bowl_floor"} | {"bowl_wall_%d" % k for k in range(12)})
+        self.assertEqual(sum(n.startswith("bowl_wall") for n in names), 12)
+        table = next(o for o in w["obstacles"] if o["name"] == "table")
+        top = table["position"][2] + table["dims"][2] / 2
+        self.assertAlmostEqual(top, sc.table_z + float(cfg.scene_camera.error_m) + float(cfg.motion.free_space.min_tip_above_table_m))
 
-    def test_spoon_spheres_end_at_the_tip(self):
-        from kinova.curobo_world import TOOL_Z, robot_config, spoon_spheres
-        tip = np.array([-0.0116, 0.0342, 0.135])
-        sp = spoon_spheres(tip, food=False)
-        c = np.array(sp[-1]["center"])                       # bracelet (x, -y, -0.061525 - z_flange)
-        self.assertTrue(np.allclose([c[0], -c[1], -0.061525 - c[2]], tip + [0, 0, TOOL_Z]))
-        self.assertEqual(len(spoon_spheres(tip, food=True)), len(sp) + 1)
-        base = dict(robot_cfg=dict(kinematics=dict(collision_spheres=dict(bracelet_link=[]), self_collision_ignore={})))
-        r = robot_config(base, tip, food=True)
-        k = r["robot_cfg"]["kinematics"]
-        self.assertEqual(len(k["collision_spheres"]["bracelet_link"]), len(sp) + 1)
-        self.assertIn("left_inner_finger_pad", k["self_collision_ignore"]["bracelet_link"])
-        self.assertEqual(base["robot_cfg"]["kinematics"]["collision_spheres"]["bracelet_link"], [])   # not mutated
+    def test_each_planned_move_pushes_our_world_and_the_command_restores_the_planners(self):
+        sc = Scene()
+        site(sc)
+        robot = FakeRobot(sc, scene.captured("home"))
+        arm = Arm(robot)
+        arm.travel(scene.overlook_joints(arm), "to food_detect_start")
+        self.assertTrue(robot.world_pushed)
+        self.assertEqual([b["name"] for b in robot.worlds[-1]["obstacles"]], [b["name"] for b in scene.world()["obstacles"]])
+        scene.restore_world(robot)                      # no `world` parameter: the config's
+        self.assertEqual((robot.worlds[-1], robot.world_pushed), (str(cfg.planner.restore_world), False))
+        robot.world_param = "world_empty.yaml"          # a planner run with one, as a profile sets it
+        scene.restore_world(robot)
+        self.assertEqual(robot.worlds[-1], "world_empty.yaml")
+
+    def test_the_utensil_is_kept_clear_of_our_boxes(self):
+        """A path that brings a utensil sphere into a box, or nearer than the clearance, is refused; one that keeps
+        clear passes. The geometry against a brute-force distance, a rotated box included."""
+        R = g.rpy_matrix(0.0, 0.0, math.radians(30))
+        boxes = (np.array([[0.4, 0.0, 0.1]]), np.array([R]), np.array([[0.05, 0.1, 0.02]]), ["box"])
+        rng = np.random.default_rng(1)
+        pts = rng.uniform(-0.3, 0.3, (200, 3)) + boxes[0][0]
+        got = g.sphere_box_clearance(pts[:, None, :], np.zeros(1), *boxes[:3])[:, 0, 0]
+        local = (pts - boxes[0][0]) @ R
+        grid = np.stack(np.meshgrid(*[np.linspace(-h, h, 41) for h in boxes[2][0]], indexing="ij"), -1).reshape(-1, 3)
+        brute = np.array([np.min(np.linalg.norm(grid - p, axis=1)) for p in local])
+        inside = np.all(np.abs(local) <= boxes[2][0], axis=1)
+        np.testing.assert_allclose(got[~inside], brute[~inside], atol=0.006)       # (the grid's spacing)
+        self.assertTrue(np.all(got[inside] <= 0))
+
+        sc = Scene()
+        site(sc)
+        robot = FakeRobot(sc, scene.captured("home"))
+        arm = Arm(robot)
+        q = scene.overlook_joints(arm)
+        tip = arm.tip(q)
+        spheres = scene.utensil_spheres(arm)
+        clear = float(cfg.motion.free_space.utensil_clearance_m)
+        half = np.array([0.02, 0.02, 0.02])
+        start, goal = list(q), list(q)
+        start[0] -= 20.0
+        goal[0] += 20.0                                  # a swing about the base: the tip passes over q's tip at mid-path
+
+        def probe(gap):                                  # a box under q's tip sphere, gap below it
+            return (np.array([tip + np.array([0.0, 0.0, -(spheres[-1][3] + gap + half[2])])]), np.array([np.eye(3)]),
+                    np.array([half]), ["probe"])
+        for gap, refused in ((-0.01, True), (clear - 0.003, True), (clear + 0.005, False)):
+            if refused:
+                with self.assertRaisesRegex(MoveError, "within .* of probe"):
+                    arm.check_path([start, q, goal], lambda x, y: -np.inf, None, spheres, probe(gap))
+            else:
+                arm.check_path([start, q, goal], lambda x, y: -np.inf, None, spheres, probe(gap))
+        # a path that starts that near (or inside) may leave from there, but never go nearer
+        arm.check_path([q, goal], lambda x, y: -np.inf, None, spheres, probe(clear - 0.005))
+        with self.assertRaisesRegex(MoveError, "within .* of probe"):     # out and back over it: nearer than either end
+            arm.check_path([goal, q, goal], lambda x, y: -np.inf, None, spheres, probe(clear - 0.005))
+
+    def test_the_utensil_checks_our_boxes_the_bowl_exact(self):
+        sc = Scene()
+        site(sc)
+        centres, rots, half, names = scene.utensil_boxes()
+        raw = {o["name"]: o for o in scene.world()["obstacles"]}
+        self.assertEqual(sorted(names), sorted(n for n in raw if n != "pedestal"))
+        pad = float(cfg.motion.free_space.utensil_padding_m)
+        for k, n in enumerate(names):
+            np.testing.assert_allclose(half[k] * 2, np.asarray(raw[n]["dims"]) + (0 if n.startswith("bowl_") else 2 * pad))
+            np.testing.assert_allclose(rots[k], g.rpy_matrix(*np.radians(raw[n]["rpy_deg"])))
+
+    def test_the_utensil_spheres_are_the_old_stacks(self):
+        """The old planner server's spoon_spheres (flange frame, from the pads at 0.17 m) as cuRobo used them -- on
+        bracelet_link, so grown by the robot model's 5 mm collision_sphere_buffer -- in the tool frame."""
+        robot = FakeRobot(Scene(), scene.captured("home"))
+        arm = Arm(robot)
+        tip_f, buf = np.asarray(arm.tip_tool) + [0, 0, 0.12], 0.005
+        old = [list(np.array([0, 0, 0.17]) + s * (tip_f - [0, 0, 0.17]) - [0, 0, 0.12]) + [(0.012 if s < 0.8 else 0.02) + buf]
+               for s in np.linspace(0, 1, 5)]
+        np.testing.assert_allclose(scene.utensil_spheres(arm), old, atol=1e-12)
+        np.testing.assert_allclose(scene.utensil_spheres(arm, food=True)[-1],
+                                   list(tip_f - [0, 0, 0.01] - [0, 0, 0.12]) + [0.02 + buf], atol=1e-12)
+
+    def test_tip_floor(self):
+        sc = Scene()
+        site(sc)
+        e = float(cfg.scene_camera.error_m)
+        self.assertAlmostEqual(scene.tip_floor(*sc.bowl_xy), sc.table_z + 0.06 + float(cfg.motion.free_space.min_tip_above_bowl_m) + e)
+        self.assertEqual(scene.tip_floor(-0.5, 0.0), -np.inf)
+
+
+class SceneCalibration(unittest.TestCase):
+    def test_recovers_a_moved_camera(self):
+        """Depth points on the arm's spheres (and the table), seen from a known pose; the fit from a guess 4 cm and
+        6 deg off finds it again."""
+        from rammp_feeding import scene_camera as sc_
+        robot = FakeRobot(Scene(), scene.captured("home"))
+        arm = Arm(robot)
+        R_true, t_true = g.rodrigues([0.1, -0.2, 2.0]), np.array([0.2, 0.7, 0.4])
+        caps = []
+        for q in (scene.captured("overlook"), scene.captured("home")):
+            S = sc_.spheres(arm, q)
+            pts = []
+            for c in S:
+                d = RNG.normal(size=(60, 3)); d /= np.linalg.norm(d, axis=1)[:, None]
+                p = c[:3] + c[3] * d
+                pts.append(p[(p - t_true) @ (c[:3] - t_true) < (c[:3] - t_true) @ (c[:3] - t_true)])   # the near side
+            P = np.vstack(pts)
+            caps.append(((P - t_true) @ R_true, S))                  # into the camera's frame
+        R0 = R_true @ g.rodrigues([0.0, 0.0, np.radians(6)])
+        R, t, rms, n = sc_._fit(caps, R0, t_true + np.array([0.03, -0.02, 0.02]), None)
+        self.assertLess(np.linalg.norm(t - t_true), 0.005)
+        self.assertLess(np.degrees(np.linalg.norm(g.rot_log(R @ R_true.T))), 0.5)
 
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    unittest.main(verbosity=1)

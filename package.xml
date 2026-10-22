@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>rammp_feeding</name>
+  <version>0.1.0</version>
+  <description>Robot-assisted feeding on the Kinova Gen3: the bowl from the scene camera, the food and the mouth from the
+    wrist camera, every move through kinova-gen3-ros2 and the RAMMP-CuRobo planner.</description>
+  <maintainer email="dd752@cornell.edu">Debajyoti Dasgupta</maintainer>
+  <license>Proprietary</license>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>builtin_interfaces</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>trajectory_msgs</exec_depend>
+  <exec_depend>control_msgs</exec_depend>
+  <exec_depend>rammp_arm_interfaces</exec_depend>
+  <exec_depend>rammp_common_interfaces</exec_depend>
+  <exec_depend>rammp_curobo_interfaces</exec_depend>
+  <exec_depend>rammp_perception_interfaces</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>python3-pil</exec_depend>
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

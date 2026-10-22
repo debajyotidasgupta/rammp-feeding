@@ -70,3 +70,12 @@ ring's most common height, and refuses a box mostly taller than a bowl (max_bloc
 judged on the truth: 0 of 517 plans touched the true scene, the true bowl framed in all; every plan succeeded for
 the bowl at x 0.30-0.50, y -0.05 to 0.40 except the far corner (0.30, 0.40); at x 0.20 (beside the arm's base) many
 had no plan. The bowl may move freely in x 0.28-0.50 m, y -0.05-0.40 m of the arm's base.
+
+- 2026-10-02, the plastic fork on the site D405 (config/utensil/fork.yaml by_camera.realsense_d405): ruler 233 mm glass
+  to tines (+3 mm the D405's glass to optical origin, camera profile); tip_px first read off an overlook frame as
+  [438, 388]; the 10 mm hover check put the tines ~10 mm toward base +x of the piece's centre, so tip_px moved 18 px
+  up the image (base +x at the overlook) to [438, 370]. The tine offset knob stays 0: tip_in_tool adds it to the
+  tip while OVER adds it to the goal (perceive aims the uncorrected tip), so one value cannot correct both.
+  The next hover check: x centred, the tines ~10 mm toward base -y (image right at the overlook): tip_px moved
+  18 px right, to [456, 370].
+  Then the tines ~2 mm short toward +x: 4 px down the image, [456, 374].

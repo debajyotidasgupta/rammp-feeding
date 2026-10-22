@@ -3,8 +3,11 @@
 The code and the config say what the stack does now; these say why, and what came before. Dated; nothing here is
 an instruction unless the README or CLAUDE.md repeats it.
 
+The files after port.md describe the Kortex-era code (kinova/, feeding/, sim/), which the port removed.
+
 | file | about |
 |---|---|
+| port.md | 2026-10-16: the port to the RAMMP stack -- what the platform replaced, what was measured, what is left |
 | history.md | the README's record until 2026-10-01: the demos, acquisition and delivery as built, perception studies, poses |
 | motion.md | the scripted free-space moves before cuRobo, and the cuRobo evaluation |
 | config.md | where config/rammp.yaml's numbers and the profiles' calibrations came from |
@@ -12,3 +15,4 @@ an instruction unless the README or CLAUDE.md repeats it.
 | perception.md | feeding/ and sim/: prompts, filters, depth, the face, the twin |
 | scene_error_study_20261001.json | tests/scene_error_study.py's raw rows (the overlook height and the scene camera's margin) |
 | planners.md, planner_compare_20261001.json | scripted / cuRobo / BLAST on the same moves; findings for BLAST's authors |
+| sim.md | the GPU strategy search (sim/isaac/): the pipeline, generation 0's findings, the cluster setup |

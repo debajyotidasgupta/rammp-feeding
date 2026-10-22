@@ -1,12 +1,5 @@
-# Whole strawberries, big (35-40 mm), spaced in the bowl -- the food the acquisition was frozen on (2026-09-24).
-
-# NOTE: the offset below was set with the fork calibration of 2026-09-24 (utensil fork_20260924), where it also
-# held the fork's own tine offset (-6 mm y). With today's fork.yaml (tip (685, 476), tine offset -5 mm y) re-check
-# it at a 10 mm hover before strawberries: likely (+5, 0).
+# Whole strawberries, big (35-40 mm), spaced in the bowl.
 
 name: strawberry
-prompt: food pieces
-aim_offset_base_m: [0.005, -0.006]   # (x, y) base frame, user-confirmed by eye at a 10 mm hover (2026-09-24,
-                                     # "this looks perfect"). X +5 mm: the fork's tines extend forward, so aim into
-                                     # the bulk of the flesh. Y -6 mm (away from the user): the fork head curves, so
-                                     # the tines meet the food ~5-7 mm off the tool axis.
+prompt: strawberry
+aim_offset_base_m: [0.005, 0.0] # +5 mm x: the tines go forward into the bulk of the flesh (re-check at a 10 mm hover)

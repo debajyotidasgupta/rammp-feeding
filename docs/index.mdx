@@ -1,0 +1,61 @@
+---
+title: Robot-assisted feeding
+---
+
+# Robot-assisted feeding
+
+`rammp_feeding` feeds a seated user from a bowl with a utensil held in the Kinova Gen3's gripper: it finds the bowl
+with the scene camera, picks a piece of food with the wrist camera's aim, carries it to the user, waits for an open
+mouth, presents it, waits for the bite and comes back -- bite after bite until the bowl is empty or the user declines.
+
+It is a module like any other: one image, one node in the deployment manifest, everything it needs from the stack's
+own nodes. It moves the arm only through [the arm node](/kinova-gen3-ros2): its free-space paths come from the
+[cuRobo planner](https://github.com/rammp-org/RAMMP-CuRobo), and its straight-line and contact moves (the slide over
+the food, the plunge, the scoop, the approach to the mouth) are joint trajectories it computes on the arm's own model.
+It never commands the gripper.
+
+## Run it
+
+Under sheppy, with the `december_2026` manifest: select `feeding -> rammp_feeding_docker` with `arm`,
+`arm_state_publisher`, `planner`, `wrist_camera`, `scene_camera`, `scene_segmenter` and `sam3`, and press `space`. The
+node runs `rammp feed` and exits when the session ends. Stopping it cancels the move in flight: the arm halts where
+it is.
+
+One step at a time, from the module's image on the robot (a person on the e-stop for every motion):
+
+```bash
+docker run --rm -it --network host --ipc host -v /home/abra/.config/rammp_feeding:/config \
+  -v /home/abra/rammp_runs:/runs ghcr.io/rammp-org/rammp-feeding:0.1.0 ros2 run rammp_feeding rammp <command>
+```
+
+| Command | What it does |
+| --- | --- |
+| `check` | Every node the module needs, as it is served. Never moves. |
+| `state` | Where the arm is: joints, tool, utensil tip and tilt. |
+| `home` | To feeding_start, a planned path from anywhere. |
+| `locate-scene` | The bowl and the table from the scene camera. |
+| `detect [--plan]` | To food_detect_start, over the bowl. |
+| `perceive` | At food_detect_start: the target piece (starts a bite). |
+| `acquire [--stop-after over\|hover30\|hover10\|plunge] [--start-at scoop]` | Over the piece, plunge, scoop. |
+| `rise` | After a hover: straight back up. |
+| `deliver [--stop-after swing\|present\|bite] [--start-at ...] [--no-wait-open]` | To the user and back. |
+| `retract` | From the user back to food_detect_start. |
+| `feed [--bites N]` | The whole loop. |
+| `calibrate-scene [--reset]` | The scene camera's pose, measured from the arm. Never moves. |
+| `capture home\|overlook` | The arm's joints now, as feeding_start / food_detect_start's arm shape. |
+
+Exit codes: 0 done; 1 stopped or refused (the arm stationary where it stopped); 3 the bowl is empty; 5 food is left
+but none is pickable; 7 the user declined; 8 the presentation was refused (the arm retracted).
+
+## Setting up a site
+
+The module keeps what it measures on the robot in `/home/abra/.config/rammp_feeding` (mounted at `/config`):
+`local.yaml` (the machine's own settings, over `config/rammp.yaml`), the captured poses, the scene camera's measured
+pose and latest reading, and the collision world it hands the planner. Delete a file to reset what it holds.
+
+1. `capture home` and `capture overlook` with the arm placed by hand at feeding_start and over the bowl, utensil down.
+2. A rough guess of the scene camera's pose in `local.yaml` (`scene_camera.extrinsic`), then `calibrate-scene` at
+   food_detect_start. It writes the measured pose and publishes it on `/tf_static` as `base_link -> scene_camera_link`.
+3. The utensil: the ruler from the wrist camera's glass to the tip (`utensil.glass_to_tip_m`), then `tip_px` set by
+   10 mm hover checks (`acquire --stop-after hover10`, adjust, `rise`, again).
+4. `check`, then `feed --bites 1`.

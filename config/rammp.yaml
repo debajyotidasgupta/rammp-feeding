@@ -1,258 +1,221 @@
-# RAMMP -- everything that is tuned, switched on or off, or changes with the deployment.
-#
-# Read by settings.py (python: `from settings import cfg`; shell: `python3 -m settings get <key>`).
-# Layers, later wins:  this file  <  the selected profiles (camera / utensil / bowl)  <  config/local.yaml
-#                      (per machine, not committed)  <  RAMMP_SET="key=value,key=value" (one run).
+# rammp_feeding -- everything that is tuned, switched on or off, or changes with the deployment (rammp_feeding/config.py).
+# Layers, later wins: this file < the selected profiles < the machine's own local.yaml (in state_dir) < RAMMP_SET.
 # Units are in the key names: _m metres, _mps m/s, _dps deg/s, _dps2 deg/s^2, _nm N.m, _n N, _s s, _px pixels.
 
 profiles:
-  camera: kinova_wrist          # config/camera/<name>.yaml -- intrinsics, extrinsic, depth correction, streams
-                                # (kinova_wrist: the arm's own vision module; realsense_d405: a ROS 2 D405)
-  scene_camera: ""              # optional: a fixed camera on the scene (config/camera/<name>.yaml with an `extrinsic`),
-                                # for the COARSE bowl + table position (make locate-scene); "" = none: workspace below
-  utensil: fork                 # config/utensil/<name>.yaml -- camera-to-tip, tip pixel, aim offset, ...
-  bowl: front                   # config/bowl/<name>.yaml -- the overlook pose over it, where the scoop ends
-  food: cubes                   # config/food/<name>.yaml -- the detector prompt, the aim offset
+  camera: realsense_d405        # config/camera/<name>.yaml: the wrist camera -- topics, intrinsics, its mount
+  scene_camera: orbbec_gemini336l   # the fixed scene camera (the COARSE bowl + table); "" = none: workspace below
+  utensil: fork                 # config/utensil/<name>.yaml: camera-to-tip, tip pixel, ...
+  bowl: front                   # config/bowl/<name>.yaml: where the scoop ends, the bowl's floor
+  food: cubes                   # config/food/<name>.yaml: the detector prompt, the aim offset
 
 deployment:
-  # Per machine, in its config/local.yaml: `root`, `name`, the arm's `ip`, and a port only if one clashes.
-  # Everything else below is derived from them ({root}, {name}), so a machine's file holds only its own facts.
-  root: "~"                     # where this machine keeps our things (venvs, models, runs, sources); RAMMP_ROOT wins
-  name: rammp                   # names our containers and images here (a shared box: one prefix to clean up)
-  arm:
-    ip: 192.168.2.67
-    username: admin             # KINOVA_USERNAME / KINOVA_PASSWORD in the environment win over these
-    password: admin
-    tcp_port: 10000
-    udp_port: 10001
-    soft_limits:                # ON the arm (Kinova ControlConfig); `make limits` applies these, saving the old ones
-      joint_speed_dps: [70.0, 70.0, 70.0, 70.0, 63.0, 63.0, 63.0]   # per joint, under the hard limits (80 / 70): at
-                                # the hard limit a tracking overshoot can fault the arm mid-move
-      modes: [ANGULAR_TRAJECTORY, CARTESIAN_TRAJECTORY, CARTESIAN_WAYPOINT_TRAJECTORY]
-    tool:                       # ON the arm (ControlConfig): every cartesian target and the tool pose are in this frame,
-                                # and the mass feeds the torque model the contact guard and bite detection read. The
-                                # tip model (camera.mount, utensil) is measured against it. Every move refuses on a
-                                # mismatch; `make tool APPLY=1` sets it (saving the values it replaces)
-      transform_m: [0.0, 0.0, 0.12]     # the 2F-85's TCP, flange frame (calibration/*_pose.json were captured with it)
-      rotation_deg: [0.0, 0.0, 0.0]
-      mass_kg: 0.831                    # gripper + utensil
-      mass_centre_m: [0.0, 0.0, 0.0473]
-      tolerance: {transform_m: 0.002, rotation_deg: 0.5, mass_kg: 0.02}
-  containers: {driver: "{name}_driver", vision: "{name}_vision", camera: "{name}_camera",
-               scene_camera: "{name}_scene_camera", planner: "{name}_planner"}   # make driver / depth / camera / planner
-  images: {driver: "{name}/driver:py310", vision: "{name}/kortex-vision:humble",   # make driver-image / vision
-           planner: "{name}/curobo:0.7.8"}   # torch + cuRobo v0.7.8 + rammp_curobo (RAMMP-CuRobo's docker/, or
-                                             # docker/Dockerfile.planner_x86 on x86); our tree is mounted into it
-  ros_domain_id: 0              # our ROS 2 traffic (the depth nodes); a box running other ROS 2 needs its own
-  venvs: {detector: "{root}/venvs/la", face: "{root}/venvs/mp"}
-  paths:
-    da3_src: "{root}/da3src"                  # the Depth Anything 3 checkout (on PYTHONPATH for the detector)
-    hf_home: "{root}/.cache/huggingface"      # the Hugging Face model cache (with root ~: its usual place)
-  runs_dir: "{root}/rammp_runs"
-  models:
-    face_landmarker: "{root}/models/face_landmarker.task"
-    depth_anything: depth-anything/DA3METRIC-LARGE
-  servers:                      # resident processes, all on localhost (make models)
-    detector_port: 8765         # LocateAnything + Depth Anything 3
-    face_port: 8766             # MediaPipe
-    camera_port: 8767           # the camera server (feeding/camera_server.py): depth medians, colour frames
-    scene_camera_port: 8768     # ... the scene camera's
-    planner_port: 8769          # the cuRobo planner server (make planner)
-    startup_timeout_s: 300      # make models waits this long for all of them
+  state_dir: /config            # the machine's own state, kept across runs: local.yaml, captured poses, the scene
+                                # camera's pose and latest reading (mounted from /home/abra/.config/rammp_feeding)
+  runs_dir: /runs               # the run record (mounted from the host)
 
-preflight:                      # make preflight (make feed runs it first): the arm as the calibration assumes it
-  kinematics_mm: 3.0            # at feeding_start, the tool pose the arm reports vs the captured one: more = re-capture
-  kinematics_deg: 1.0
-  allow_other_clients: false    # another program connected to the arm fails the preflight (true: a warning only)
+ros:                            # the RAMMP stack's interfaces this module uses
+  execute_action: /execute_joint_trajectory          # kinova-gen3-ros2
+  plan_action: /rammp_curobo/plan_to_joints          # RAMMP-CuRobo (plan only)
+  set_world_service: /rammp_curobo/set_world
+  planner_node: /rammp_curobo                        # (its parameters: the world it runs with, put back after us)
+  detect_service: /perception/sam3/detect            # rammp-perception's SAM3
+  segmenter_topic: /perception/object_detections     # rammp-perception's always-on scene segmenter
 
-workspace:                      # where the table and the bowl are (arm base frame, m), when no scene camera says
-  table_height_m: 0.2140        # the table surface beside the bowl
-  bowl_centre_m: [0.2692, 0.2765]
-  bowl_height_m: 0.06           # rim above the table
+planner:                         # the shared planner: the arm's paths; the utensil is ours to check (Arm.check_path)
+  utensil_spheres:               # the utensil as our check of each planned path takes it: spheres from the gripper's
+                                 # pads to the tip, tool frame (radii with the 5 mm the planner adds to the arm's own)
+    from_tool_m: [0.0, 0.0, 0.05]   # the first, at the pads (0.17 m out of the flange)
+    count: 5
+    radius_m: 0.017
+    tip_radius_m: 0.025         # the last, round the tines
+    food_radius_m: 0.025        # carrying (the swing): a ~25 mm piece riding the tip ...
+    food_back_m: 0.010          # ... centred this far back from it along the tool's z
+  world_file: /config/planner_world.yaml   # our collision world (scene.world), pushed before each planned move ...
+  world_file_in_planner: /config/planner_world.yaml   # ... where the planner's container reads it (the same mount)
+  restore_world: world_real_bench.yaml     # the planner's own world, put back when a command ends, where it has no
+                                           # `world` parameter: its config's (gen3_real.yaml)
+
+arm:
+  urdf: urdf/gen3_7dof_2f85.urdf    # the arm driver's model (kinova-gen3-driver models/, as built into kinova-gen3-ros2 1.1.0)
+  tool_from_flange_m: [0.0, 0.0, 0.12]   # the 2F-85's TCP: the tool frame the utensil and camera mount are measured in
+
+face:
+  model: /opt/models/face_landmarker.task   # MediaPipe's face landmarker (in the image)
+
+workspace:                      # where the table and the bowl are (arm base frame, m) when no scene camera says
+  table_height_m: -0.024        # the abra site (2026-09-30): the scene camera's reading
+  bowl_centre_m: [0.290, 0.158]
+  bowl_height_m: 0.07           # rim above the table
   bowl_radius_m: 0.08
-  table_extent_m: {x: [0.08, 0.76], y: [-0.30, 0.80]}   # its footprint: the planner's table box, and where the
-                                # utensil's floor applies (feeding_start parks beside it, below its top)
+  table_extent_m: {x: [0.08, 0.76], y: [-0.30, 0.80]}   # its footprint: the planner's table, where our tip floor applies
   overlook_camera_height_m: 0.45   # food_detect_start: the wrist camera this high above the table, over the bowl
-                                   # (with the scene camera's 5 cm error, 0.40 leaves no room: tests/scene_error_study.py)
-  scene_max_age_s: 3600         # the scene camera's reading (make locate-scene) counts for this long; it is trusted
-                                # to its extrinsic.error_m: the planner's table and bowl, and the utensil's floor,
-                                # keep that as extra clearance (the wrist camera then measures the food itself)
-  scoop_end_follows: bowl       # the scoop end (where the swing starts) moves with the bowl (x, y, z) or the table (z)
-
-features:                       # what to switch on and off
-  resident_models: true         # make feed starts the servers and waits until every model is warm
-  wait_for_open_mouth: true     # approach only once the user opens their mouth
-  depth_fallback: true          # fill sensor depth holes from Depth Anything 3
-  detect_from_the_side: true    # after the swing, step to the user's right before looking (food not in the way)
-  bowl_once_per_session: true   # detect the bowl on the first bite, then reuse its box
-  pick_in_one_program: true     # OVER + re-measure + plunge + scoop without restarting the arm program
-  face_detector: mediapipe      # mediapipe (LocateAnything as its fallback) | locateanything
-  food_detector:
-    crop_to_bowl: true
-    generation_mode: fast       # LocateAnything: fast | hybrid | slow
-    stop_on_repeat: true
-    max_new_tokens: 128
-  utensil_cross_check: false    # also detect the utensil, to check its stored image region
+  overlook_aim: tip             # what goes over the bowl's centre: tip (the utensil) or lens (the camera's axis)
+  overlook_offset_m: [0.0, 0.0] # the aim point this far (x, y) from the bowl's centre
+  scene_max_age_s: 3600         # rammp detect refuses a scene camera reading older than this (the bowl may have moved)
+  scoop_end_follows: table      # the scoop end moves with the bowl (x, y, z) or the table (z only)
 
 motion:
-  free_space:                   # detect, home, the swing, the retract's return: cuRobo paths (make planner)
-    dps: 61.0                   # cruise, the furthest joint (just under 0.98 x the slowest joint's soft limit, 63)
-    path_step_deg: 4            # cuRobo's dense path thinned to about this on the furthest joint (run_path re-times it)
+  joint_speed_cap_dps: 61.7     # every joint, every move: 0.98 x the slowest joint's soft limit the arm ran under (63)
+  joint_accel_dps2: 45.0        # every joint's speed changes at most this fast (72, the controller's cap, / 1.6: what the
+                                # arm measured against the plan)
+  joint_limits_deg: {2: 128.9, 4: 147.8, 6: 120.3}   # J2 / J4 / J6, ours (inside the URDF's 138 / 152 / 128)
+  joint_limit_margin_deg: 0.3   # an IK solution this close to a limit is no solution
+  plan_min_margin_deg: 3.0      # food_detect_start keeps at least this from every limit
+  max_tilt_deg: 25.0            # the utensil's worst tilt off straight down (but where a move turns it on purpose)
+  max_joint_step_deg: 8         # a continuous IK path: a bigger step on any joint is a jump, not a path
+  steer_within_deg: 25          # IK seeds steer J2 / J4 / J6 off a limit once within this of it ...
+  steer_step_deg: 3.0           # ... by this much per step
+  near_pose_deg: 1.0            # within this of a pose's joints = "at" that pose
+  arrived_m: 0.002              # a straight move this short is no move
+  settle_dps: 10.0              # a short joint move onto a goal (after a planned path)
+  direct_dps: 20.0              # rammp home --direct: one joint move to feeding_start, no planner
+  path_tolerance_deg: 20.0      # the driver aborts a move the arm diverges from by this much on any joint
+  goal_tolerance_deg: 1.0
+  watch_extra_s: 15             # a move not finished this long after its planned time: stopped
+  impedance:                    # compliant moves (ExecuteJointTrajectory control_mode 1): the driver's default gains
+    approach: {kq: [80, 80, 80, 80, 30, 30, 30], zeta: 0.7, torque_limit: [39, 39, 39, 39, 9, 9, 9]}
+  free_space:                   # detect, home, the swing, the retract's return: cuRobo paths
+    dps: 61.0                   # cruise, the furthest joint
+    path_step_deg: 4            # cuRobo's dense path thinned to about this on the furthest joint
     timeout_s: 30
-    activation_distance_m: 0.01 # cuRobo's soft standoff (its default 0.03 refuses a utensil over the rim)
-    world_padding_m: 0.01       # per side on every box (the bowl's pieces and the pedestal: none)
-    min_tip_above_table_m: 0.05 # our own floor for the utensil tip on these paths (scene.tip_floor) ...
+    floor_retries: 4            # a path under our floor: plan again (cuRobo's paths differ) this many times
+    check_step_deg: 0.5         # a planned path is checked as it will run: sampled this finely on the furthest joint
+    utensil_padding_m: 0.01     # the utensil check: our boxes grown this per side (the bowl's pieces exact) ...
+    utensil_clearance_m: 0.0    # ... and the utensil's spheres kept this clear of them (0: out of them; the boxes
+                                # already carry the tip floor and the scene camera's error)
+    min_tip_above_table_m: 0.05 # our floor for the utensil tip (scene.tip_floor): above the table ...
     min_tip_above_bowl_m: 0.015 # ... above the bowl's top over the bowl
     bowl_margin_m: 0.04         # "over the bowl": within its rim radius + this
     user_mouth_m: [-0.277, 0.306, 0.397]   # the user in the planner's world until a delivery measures the mouth
-  direct_dps: 20.0              # make start-direct: one joint move to feeding_start, no planner (SPEED=)
-  joint_accel_cap_dps2: 72.0    # per joint, every trajectory (the controller refuses above 80)
-  controller_accel_factor: 1.6  # the controller measures this much more acceleration than the time scaling plans:
-                                # plan with the cap / this
-  accel_retries: 4              # still refused on acceleration: rescale it by the controller's own measured /
-                                # limit ratio and validate again at the same speed, up to this many times
-  joint_limits_deg: {2: 128.9, 4: 147.8, 6: 120.3}   # J2 / J4 / J6; the others are continuous
-  joint_limit_margin_deg: 0.3   # a target this close to a limit is refused (Kortex silently ignores it)
-  plan_min_margin_deg: 3.0      # planned paths keep at least this from every limit
-  max_tilt_deg: 25.0            # the utensil's worst allowed tilt off straight down (except scoop / delivery)
-  no_progress_s: 3.0            # nothing moved by then: the controller ignored the move
-  near_pose_deg: 1.0            # within this of a pose's joints = "at" that pose
-  settle_dps: 10.0              # the final settle onto a measured pose
-  goto_pad_s: 0.3               # a joint move's duration = travel / speed + this (the ramp at each end), at least
-  goto_min_s: 0.8               # this
-  goto_duration_retries: 3      # refused as faster than the arm's joint limits: re-sent at the controller's
-                                # stated minimum (+5%), up to this many times
-  max_joint_step_deg: 8         # a continuous IK path: a bigger step on any joint is a jump, not a path
-  steer_within_deg: 25          # paths steer J2 / J4 / J6 away from a limit once within this of it ...
-  steer_step_deg: 3.0           # ... by this much of IK guess per step
-  speed_fallbacks: [1.0, 0.75, 0.5, 0.35]   # the controller refused a trajectory: retry at these fractions of its speed
-  watch_extra_s: 15             # a trajectory not ended this long after its planned time: stop watching
-  moved_deg: 0.05               # any joint this far from the start = the move began
-  settle_speed_dps: 0.2         # after arriving, wait (at most settle_max_s) until every joint is slower than this
-  settle_max_s: 2.0
-  cartesian_orientation_dps: 10.0   # orientation speed limit of straight-line tool moves
+    wheelchair: false           # the wheelchair's boxes (config/wheelchair_boxes.yaml) in the planner's world
 
-guards:                         # contact guard: a joint-torque step this big against recent history = stop
+guards:                         # the contact guard: a joint-torque step this big against recent history = stop
   torque_window: {span: 12, gap: 5}   # samples: the baseline window, and the gap before the sample compared to it
   torque_step_nm:
-    default: 2.5                # every move without its own entry
+    default: 2.5
     approach: 4.0               # the user moving in the chair shakes the arm's mount past 2.5
+    plunge_in_food: 8.0         # once the tines are in the food: firm food (grilled chicken) takes ~4 N.m to pierce
     scoop: 6.0                  # open air: 2.5 trips on the arm's own acceleration
     swing: 6.0
-    retract: 6.0                # empty utensil, moving away
-    free_space: 6.0             # detect / home: the braking on arrival reads up to ~3 N.m
-  scoop_food_off_path_m: 0.015  # the food drifting this far from its planned path stops the scoop
+    retract: 6.0
+    free_space: 6.0
+  scoop_food_off_path_m: 0.015  # the food point this far off its planned path stops the scoop ...
   scoop_food_drop_m: 0.010      # ... or this far below it
 
 acquisition:
   over_speed_mps: 0.15
   over_max_m: 0.10              # OVER is a small correction inside the bowl, never a transit
-  over_level_tol_m: 0.002       # OVER's goal must be at the overlook height, within this
-  over_depth_guess_m: 0.41      # where the floor measurement starts looking, from OVER (camera to food, m)
+  over_level_tol_m: 0.002
   plunge:
     fast_mps: 0.050
     slow_mps: 0.008             # through the food
     slow_above_food_m: 0.020    # the overlook reads the food top 4-7 mm high; this covers it
+    in_food_from_above_m: 0.003 # the guard treats the tines as in the food this far before the measured top
     ik_step_m: 0.006
-    speed_fallbacks: [1.0, 0.75, 0.5]   # the controller refused the plunge: retry at these fractions
     ramp_start_frac: 0.25       # the speed profile: starts at this fraction of fast_mps, full speed after ramp_m,
     ramp_m: 0.015               # and eases (smoothstep) to slow_mps over ease_m before the slow zone
     ease_m: 0.015
     sane_range_m: [0.080, 0.250]
     food_height_range_m: [0.010, 0.060]
-    refuse_if_floor_filled_over: 0.5   # fraction of the floor reading from the depth fallback
-    no_floor:                   # packed food: no bowl floor visible beside the target (the floor ring reads the
-                                # neighbouring pieces: food "thinner" than food_height_range_m, or no floor at all)
+    no_floor:                   # packed food: no bowl floor seen beside the target
       enabled: true
-      floor_max_above_table_m: 0.025   # a "floor" higher than this above the table is food, not the floor
-      depth_below_top_m: 0.025  # plunge this far below the target's top instead
-      min_tip_above_table_m: 0.010   # never deeper than this above the table (workspace.table_height_m), whatever
-                                     # the depth says ...
+      floor_max_above_table_m: 0.025   # a "floor" higher than this above the table is food
+      depth_below_top_m: 0.025  # plunge this far below the piece's top instead ...
+      min_tip_above_table_m: 0.010   # ... never closer than this to the table
       min_into_food_m: 0.010         # ... and refused if that leaves less than this into the food
-      refuse_if_top_filled_over: 0.5 # the top reading mostly from the Depth Anything 3 fallback: refused
   scoop:
-    speed_dps: 55.0             # faster also holds the food better
+    speed_dps: 55.0             # fast on purpose: food slides off a slowly tilting utensil
     rot_exp: 0.8                # turn angle = 90 * s**rot_exp: <1 starts turning the moment the food lifts
     waypoints: 40
-    backoff_from: 0.2           # fraction of the scoop before backing off toward the bowl's scoop end
+    backoff_from: 0.2           # fraction of the scoop before backing off toward the scoop end
     max_backoff_m: 0.300
-    max_joint_step_deg: 12      # the scoop's continuous IK path: a bigger step on any joint is a jump
-    default_food_height_m: 0.030   # a scoop run on its own with no record of the piece
-  stepped:                      # the hover route, for aim checks (STOP_AFTER=hover10)
-    hover_m: {hover30: 0.030, hover10: 0.010}          # the two hovers above the food top
-    depth_guess_m: {hover30: 0.29, hover10: 0.275}     # the floor measurement's starting depth at each hover
-    slow_zone_m: 0.020          # descend / punch: the last this-many mm at slow_mps
-    punch_range_m: [0.010, 0.060]
+    end_raise_m: 0.100          # the scoop ends this much above the bowl profile's scoop end (clear of the table)
+    max_joint_step_deg: 12
+    default_food_height_m: 0.030   # a scoop run on its own, no record of the piece
+  stepped:                      # the hover route, for aim checks (rammp acquire --stop-after hover10)
+    hover_m: {hover30: 0.030, hover10: 0.010}
+    slow_zone_m: 0.020
     approach_stop_m: 0.010
+    punch_range_m: [0.010, 0.060]   # --start-at punch: from a hover, on down to the floor
     descend_max_m: 0.200
-    fast_mps: 0.015
-    slow_mps: 0.005
+    fast_mps: 0.050
+    slow_mps: 0.010
+    rise_mps: 0.040
 
 perception:
-  scene:                        # the fixed scene camera (make locate-scene): the COARSE bowl + table
-    bowl_prompts: [dish, bowl, bowl with a glass jar]   # in order, until one yields a reachable bowl (~5 s each;
-                                # from the side a bowl reads as a dish)
-    max_reach_m: 0.75           # a candidate further than this from the arm's base is not the bowl
-    detect_width: 848           # detect on a copy this wide (the detector's time grows with the pixels)
-    max_bowl_height_m: 0.20     # inside the box, the bowl is what stands this high at most above the table ...
-    max_bowl_radius_m: 0.15     # ... within this of the points' middle (an arm or a head in front is not the bowl)
-    max_blocked_frac: 0.3       # more of the box than this taller than a bowl: the view is blocked, nothing located
+  score_threshold: 0.5          # SAM3
+  bowl_prompts: [bowl]          # SAM3's words for the bowl in the wrist camera (with the food's, one call)
+  depth_frames: 15              # per-pixel median over this many frames after the arm stopped
+  depth_wait_s: 3.0
   min_box_side_px: 25
   max_box_aspect: 3.0
   food_inside_bowl_min: 0.8     # fraction of a food box inside the bowl box
-  food_max_frac_of_bowl: 0.15   # a "food" box bigger than this is the bowl, not food
+  food_max_frac_of_bowl: 0.15   # a "food" box bigger than this is the bowl
   inside_utensil_max: 0.5
-  bowl_crop_margin_px: 20
-  depth_frames: 15              # per-pixel median over this many fresh frames
-  depth_fresh_wait_s: 3.0       # the depth server waits this long for fresh frames per try ...
-  colour_stream:                # the resident colour reader (feeding/colour_stream.py, in the face server)
-    gap_s: 0.5                  # no frame for this long = a gap, logged to runs_dir/colour_stream.jsonl
-    reconnect_after_s: 3.0      # no frame for this long = reopen the stream
-  depth_min_frames: 5           # the stream dropped out: a median of at least this many frames buffered since the
-                                # arm stopped will do (the server keeps 5 s)
-  depth_tries: 3                # ... this many times, before the caller falls back (the stream recovers in < 1 s)
-  food_half_width_m: 0.017      # the floor ring beside the food (half a strawberry)
-  aim_top_surface: true         # aim at the uppermost piece's top inside the chosen box, not the box centre
-  top_band_mm: 6.0              # its top = depth pixels within this of the box's nearest point
+  overlap_iou: 0.5              # a food box overlapping a better one this much is the same piece
+  food_half_width_m: 0.017      # the floor ring round the spot under the tip
+  tip_line_radius_m: 0.004      # "straight under the tip": depth points this near its vertical line
+  utensil_depth_margin_m: 0.005 # under the tip, depth no farther than the tip + this is the utensil itself
+  utensil_depth_border_px: 3
+  top_band_mm: 6.0              # a piece's top: its mask's points within this of its highest
   food_left_above_floor_mm: 15  # no food box: the bowl is empty only if under food_left_min_frac of its inner area
   food_left_min_frac: 0.05      # stands this far above its floor -- else "food left, none pickable" (exit 5)
+  scene:                        # the fixed scene camera (rammp locate-scene)
+    segmenter_classes: [food container]   # the scene segmenter's classes that are a bowl
+    segmenter_max_age_s: 2.0
+    bowl_prompts: [bowl, plastic container]   # SAM3's words for it, when the segmenter has none
+    score_threshold: 0.3
+    max_reach_m: 0.75
+    max_bowl_height_m: 0.20     # inside the box, the bowl is what stands this high at most above the table ...
+    max_bowl_radius_m: 0.15     # ... a rim wider than this is not a bowl
+    calibration:                # rammp calibrate-scene
+      stride: 4
+      gates_m: [0.06, 0.04, 0.025, 0.015]
+      iterations: 8
+      start_turns_deg: [6, 12]
+      max_rms_m: 0.008
+      min_points: 300
+      min_captures: 2
+      max_age_s: 3600
+      wrist_down_cos: 0.95
+      crop_m: 0.25
+      table_points: 3000
 
 delivery:
-  lift_m: 0.175                 # the swing's goal: this far above the scoop end, ...
+  lift_m: 0.075                 # the swing: this far above the scoop end, ...
   retract_tries_m: [0.120, 0.100, 0.080, 0.060, 0.040, 0.0]   # ... turned to the user, retracted the most of these
   swing_dps: 61.0
-  detect_sidestep_m: 0.050      # to the user's right (-Y) before looking
-  stop_m: 0.080                 # utensil tip short of the mouth (safe for any cube-sized piece)
-  stop_extra_if_depth_filled_m: 0.040
-  aim_dz_m: -0.010              # below the detected mouth
-  approach_mps: 0.077           # toward the face; stops stop_m short, torque-guarded
-  max_approach_m: 0.350
-  detection_max_age_s: 120.0
-  sidestep_m: 0.050             # occlusion retries: step this far, at most twice, then the nose estimate
-  nose_to_mouth: 0.84           # nose heights below the nose, upright image (0.81-0.87 measured)
-  mouth_behind_nose_m: 0.005
-  mouth_check:                  # a detected mouth box is used only if it is anatomically plausible against the nose
-    max_box_frac: 0.03          # of the (upright) frame -- bigger = junk (also for the nose box)
-    below_nose_heights: [0.4, 1.5]   # its centre this many nose heights below the nose's
-    max_sideways_nose_widths: 1.0
-    max_depth_diff_m: 0.030     # from the nose's depth
-    depth_range_m: [0.25, 0.75] # a mouth outside this is not a face at the utensil (a stale / misregistered depth
-                                # frame): look again, never approach
-    max_face_diff_m: 0.080      # the mouth's depth vs the face box's median depth
-  level_tol: 0.1                # |utensil axis z| below this = level (at the user)
-  pointing_tol_cos: 0.99        # the utensil points at the user (+Y) / back along the swing: cos of the angle
-  arrived_m: 0.003              # closer than this to a goal = already there
-  sidestep_mps: 0.044
-  goal_cache_tol_deg: 1.0       # the swing's goal is reused from within this of its start
-  bite_baseline_samples: 40     # force samples at rest before the wait (~1 s)
-  bite_settle_s: 10.0           # after the bite: watch at most this long for the force to settle
+  detect_sidestep_m: 0.050      # ... then to the user's right (-Y): the food out of the camera's view of the mouth
+  stop_m: 0.080                 # the utensil tip this far short of the mouth
+  aim_dz_m: -0.010              # below the mouth
+  approach_mps: 0.077
+  approach_impedance: approach  # motion.impedance's entry the approach runs with (null: position control)
+  max_approach_m: 0.800
+  approach_step_m: 0.005
+  max_turn_deg: 30.0            # the utensil turned toward the mouth by at most this
+  mouth_depth_range_m: [0.25, 1.00]   # a mouth outside this is not a face at the utensil: look again
+  level_tol: 0.1                # |utensil axis z| under this = level
+  pointing_tol_cos: 0.99        # the utensil points at the user (+Y) after the scoop
+  arrived_m: 0.003
   open_mouth_ratio: 0.20        # inner-lip gap / mouth width; closed reads <= 0.02
   open_mouth_hold_s: 0.30
-  open_mouth_timeout_s: 60.0    # no open mouth by then = the user declined: take the food back
-  bite_n: 1.0                   # tool-force estimate against a baseline at rest
+  open_mouth_gap_s: 0.30        # frames with no face found inside the hold: skipped, up to this long
+  open_mouth_timeout_s: 60.0    # no open mouth by then = the user declined
+  bite_n: 2.0                   # the tool-frame force (from the joint torques) against a baseline at rest
   bite_hold_s: 0.10
+  bite_settle_s: 10.0           # after the bite: at most this long for the force to settle (the user lets go)
   bite_timeout_s: 60.0
+  bite_baseline_samples: 40
+  face:
+    zoom_grid: 3                # no face in the whole frame: n x n half-overlapping crops (a far user); 0 = off
+    zoom_every_s: 0.5
+    eye_corners_m: 0.090        # the outer eye corners' spacing: the face's range without depth
+    depth_beyond_eyes_factor: 1.6   # lips' depth past this x the eye-spacing range (and 0.3 m beyond) is not theirs
   retract:
-    back_off_mps: 0.20          # straight back from the mouth
-    home_dps: 61.0              # the planned return to food_detect_start
-    max_from_swing_end_m: 0.400 # further than this from where the swing ended = not backing off from here
+    back_off_mps: 0.20
+    home_dps: 61.0
+    back_off_m: 0.10            # straight back this far toward where the swing ended (null: all the way), ...
+    tuck_radii_m: [0.35, 0.45, 0.55]   # ... on in toward the arm's base to the first of these it can hold level
+    reach_margin_m: 0.10        # the planned return keeps the tip within its start's / goal's reach + this
+    max_from_swing_end_m: 0.900

@@ -1,0 +1,13 @@
+.git
+.venv
+Dockerfile
+.dockerignore
+**/__pycache__
+**/*.pyc
+build/
+install/
+log/
+out/
+sim/
+docs/
+third_party/

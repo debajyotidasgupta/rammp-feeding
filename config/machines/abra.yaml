@@ -1,0 +1,11 @@
+# The site Jetson (abra@192.168.1.11): copy to /home/abra/.config/rammp_feeding/local.yaml (mounted at /config).
+# Only this machine's facts.
+
+scene_camera:
+  extrinsic:                    # the starting guess for rammp calibrate-scene (its fit, scene_extrinsic.json, wins)
+    xyz: [0.160, 0.662, 0.381]
+    quat_xyzw: null             # TODO: from the last scene_extrinsic.json on abra
+
+motion:
+  free_space:
+    wheelchair: false           # the arm is on the lab station's table here, not on the wheelchair

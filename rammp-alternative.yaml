@@ -1,0 +1,50 @@
+# This module's node for a rammp-deployments manifest (rammp-deployments/CONTRIBUTING.md: "a module's own
+# rammp-alternative*.yaml fragment is the source for what belongs in a node here"). Transcribed into
+# december_2026/sheppy-manifest.yaml, with one more change there: the planner node mounts
+# /home/abra/.config/rammp_feeding at /config read-only (set_world takes the world as a file path).
+- name: feeding
+  description: Robot-assisted feeding -- bite after bite until the bowl is empty or the user declines
+  select: single
+  alternatives:
+    # Transcribed from the feeding module's rammp-alternative.yaml. It moves the arm only through the arm node
+    # (execute_joint_trajectory, its own IK paths and the planner's paths), so `arm`, `arm_state_publisher` and
+    # `planner` must be selected alongside, with `wrist_camera`, `scene_camera`, `scene_segmenter` and `sam3`.
+    # Stopping the node cancels the move in flight: the arm halts where it is. It never commands the gripper.
+    # It uses the shared planner as configured for everyone: its own world goes in only while it plans, and the
+    # planner's comes back after.
+    #
+    # NOT A RELEASE: the module's repo is not under rammp-org yet, so there is no CI-published image to pin.
+    # Built locally (docker build -t ghcr.io/rammp-org/rammp-feeding:0.1.0 . in the module's repo) until it is.
+    - id: rammp_feeding_docker
+      kind: docker
+      container:
+        image: ghcr.io/rammp-org/rammp-feeding:0.1.0
+        network_mode: host
+        ipc: host
+        user: "1000:1000"
+        # State across runs (patterns/storing-state-across-runs): local.yaml, the captured poses, the scene
+        # camera's measured pose and latest reading, the world it hands the planner. The run record beside it.
+        volumes:
+          - /home/abra/.config/rammp_feeding:/config
+          - /home/abra/rammp_runs:/runs
+        environment:
+          ROS_DOMAIN_ID: "0"
+          HOME: /tmp
+        command: ros2 launch rammp_feeding feed.launch.py
+      subscribes:
+        - /robot_description
+        - /joint_states
+        - /control_status
+        - /tf_static
+        - /wrist_camera/color/image_raw
+        - /wrist_camera/depth/image_rect_raw
+        - /scene_camera/color/image_raw
+        - /scene_camera/depth/image_raw
+        - /perception/object_detections
+      publishes:
+        - /tf_static
+        - /estop
+    # Wiring only, like every mock here: the module is reached through its command, not a topic.
+    - id: feeding_mock
+      kind: process
+      command: "bash -lc 'sleep infinity'"

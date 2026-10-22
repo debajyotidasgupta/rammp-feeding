@@ -1,40 +1,15 @@
-# Orbbec Gemini 336L, fixed on the scene (the site, 2026-09-30), through ROS 2: the SCENE camera -- the coarse bowl +
-# table position (make locate-scene), never the aim. 1280x720 colour; depth 848x480, NOT aligned to colour.
-# Its driver runs elsewhere (on the site Jetson, the other team's sheppy-scene_camera container).
+# Orbbec Gemini 336L fixed on the scene, through ROS 2 (rammp-deployments: scene_camera -> gemini336l_docker): the
+# COARSE bowl + table (rammp locate-scene), never the aim. Its intrinsics and its internal transforms (link -> depth and
+# colour optical frames) are its driver's (camera_info, /tf_static).
 
 streams:
-  kind: ros2
   colour_topic: /scene_camera/color/image_raw
-  depth_topics: [/scene_camera/depth/image_raw]
-  colour_url: "http://127.0.0.1:{scene_camera_port}/mjpeg"
-  ros: {domain_id: 0, cyclonedds_uri: ""}             # the machine's: local.yaml
+  depth_topic: /scene_camera/depth/image_raw
 
-colour:                         # /scene_camera/color/camera_info, 2026-09-30 (k1 -0.032: not undistorted)
-  width: 1280
-  height: 720
-  fx: 612.653
-  fy: 612.747
-  cx: 635.361
-  cy: 360.973
+link_frame: scene_camera_link   # its driver's root frame (camera_name scene_camera): our calibration places it on the robot
 
-depth:                          # /scene_camera/depth/camera_info
-  width: 848
-  height: 480
-  fx: 410.103
-  fy: 410.103
-  cx: 425.988
-  cy: 237.350
-  scale: 1.0
-  offset_m: 0.0
+error_m: 0.05                   # how far its reading may be off: the planner's world and our tip floor keep it as clearance
 
-# The device's own transforms (its driver's /tf_static), link frame (x forward, y left, z up):
-link_to_depth_frame: {xyz: [0.0, 0.0, 0.0], quat_xyzw: [0.0, 0.0, 0.0, 1.0]}
-depth_frame_to_colour_frame: {xyz: [-0.00040, -0.02358, -0.00012], quat_xyzw: [-0.001079, 0.000440, -0.001170, 0.999999]}
-
-extrinsic:                      # where the camera is: base_link -> the camera's link frame
-  file: ""                      # a calibration file read in place (a machine's: local.yaml), e.g. the box-opening
-                                # stack's camera_scene.yaml (parent_frame base_link, child scene_camera_link, xyz,
-                                # quat_xyzw); else:
-  xyz: null
-  quat_xyzw: null
-  error_m: 0.05                 # how far off it may be (the user, 2026-09-30): coarse only -- the wrist camera aims
+extrinsic:                      # base_link <- link_frame: rammp calibrate-scene measures it (state_dir/scene_extrinsic.json,
+  xyz: null                     # which wins and is published on /tf_static); these are only the fit's starting guess
+  quat_xyzw: null               # (a machine's local.yaml)

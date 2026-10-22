@@ -1,15 +1,9 @@
-# The bowl in front of the user (2026-09-24).
-#
-# Where the bowl and table are now is the workspace's (rammp.yaml / the scene camera). This profile holds what was
-# captured with it: the overlook's orientation and arm shape (food_detect_start is computed over the bowl from it)
-# and the scoop end, moved with the bowl / table from `captured_at` (kinova/scene.py).
+# The bowl in front of the user. Where it is now is the workspace's (the scene camera / rammp.yaml); this profile
+# holds what was calibrated with it: where the scoop ends (moved with the bowl / table from captured_at) and its floor.
 
 name: front
-captured_at:                    # where the table and the bowl were when the poses below were captured
-                                # (feeding/locate_bowl.py on the 2026-09-24 perceive runs at this overlook)
-  table_height_m: 0.2140
-  bowl_centre_m: [0.2692, 0.2765]
-overlook_pose: calibration/food_detect_pose.json   # food_detect_start: joints + tool pose (written by the capture tool)
-scoop_end:                      # where the scoop carries the food to: the swing to the user starts here
-  tool_m: [0.2997, -0.0968, 0.4038]
+captured_at: {table_height_m: 0.2140, bowl_centre_m: [0.2692, 0.2765]}
+floor_above_table_m: 0.020      # the bowl's inner floor above the table (ruler): the plunge never aims under it -- a clear
+                                # bowl's floor is invisible to depth (it reads the table beneath). null: none
+scoop_end:                      # where the scoop carries the food (the swing to the user starts there): its arm shape
   joints_deg: [-102.4, -42.0, -37.2, -97.5, -41.1, -111.2, 131.8]

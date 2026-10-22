@@ -1,39 +1,14 @@
-# Intel RealSense D405 on the wrist, in the built-in camera's place (the site Jetson, 2026-09-30), through ROS 2:
-# 848x480 colour + depth aligned to colour (the same pixel grid). Its driver runs elsewhere (on the site Jetson, the
-# other team's sheppy-wrist_camera container); the camera server (make camera) only subscribes.
-# The ROS domain / DDS config of those topics are the machine's: set camera.streams.ros in config/local.yaml.
+# Intel RealSense D405 on the wrist, through ROS 2 (rammp-deployments: wrist_camera -> d405_docker, its defaults:
+# align_depth off). Its intrinsics and its depth -> colour transform are its driver's (camera_info, /tf_static); its
+# colour comes off the depth module, so the two share one sensor.
 
 streams:
-  kind: ros2
   colour_topic: /wrist_camera/color/image_raw
-  depth_topics: [/wrist_camera/aligned_depth_to_color/image_raw]
-  colour_url: "http://127.0.0.1:{camera_port}/mjpeg"   # the camera server's colour stream (face server, grab_frame)
-  ros: {domain_id: 0, cyclonedds_uri: ""}             # "" = the image's default DDS config
+  depth_topic: /wrist_camera/depth/image_rect_raw
 
-colour:                         # /wrist_camera/color/camera_info, 2026-09-30 (plumb_bob, k1 -0.054: not undistorted)
-  width: 848
-  height: 480
-  fx: 434.884
-  fy: 434.330
-  cx: 423.960
-  cy: 237.798
-  vertical_vp: [423.960, 237.798]   # PROVISIONAL (= the principal point): measure at food_detect_start
+glass_to_optical_m: 0.003       # its optical origin behind the front glass (a utensil's ruler reading starts at the glass)
 
-depth:                          # aligned to colour: the colour intrinsics, no offset between the two
-  width: 848
-  height: 480
-  fx: 434.884
-  fy: 434.330
-  cx: 423.960
-  cy: 237.798
-  depth_to_colour_m: [0.0, 0.0, 0.0]
-  scale: 1.0
-  offset_m: 0.0
-
-mount:
-  file: ""                      # a calibration file read in place (a machine's: local.yaml), e.g. the box-opening
-                                # stack's camera_d405_wrist.yaml (end_effector_link, measured 2026-08-25); it wins over
-  camera_in_tool_m: [0.0, 0.075, -0.125]       # ... this, the same numbers (75 mm off-axis, lens ~ the flange plane)
-  rotation_quat_xyzw: [0.0, 0.0, 1.0, 0.0]      # the optical frame in the tool frame: a half turn about the tool axis
-                                               # (image +u = tool -x, +v = tool -y); any mount works (feeding/camera.py)
-  image_rotated_at_delivery: true              # as mounted: world-up is image-left at the delivery pose
+mount:                          # where it sits on the arm (ours): the colour optical frame in the tool frame
+  camera_in_tool_m: [0.0, 0.075, -0.125]       # 75 mm off the axis, the lens about the flange's plane
+  rotation_quat_xyzw: [0.0, 0.0, 1.0, 0.0]      # a half turn about the tool axis (image +u = tool -x, +v = tool -y)
+  image_rotated_at_delivery: true              # the face is upright after a quarter turn at the user

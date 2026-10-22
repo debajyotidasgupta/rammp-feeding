@@ -2,12 +2,7 @@
 __pycache__/
 *.py[cod]
 .DS_Store
-presentation/data/
-presentation/out/
-config/local.yaml
-# SMPL-X is licensed: the body model and the meshes posed from it stay local (sim/pose_human.py makes them)
-sim/assets/smplx/
-sim/assets/human/
 out/
-MUJOCO_LOG.TXT
-sim/assets/wheelchair/*.obj
+build/
+install/
+log/

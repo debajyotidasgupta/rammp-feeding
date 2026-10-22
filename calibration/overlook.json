@@ -1,0 +1,13 @@
+{
+ "label": "food_detect_start (its arm shape and orientation)",
+ "captured": "2026-09-24T18:33:00",
+ "joints_deg": [
+  154.812,
+  -9.686,
+  -31.181,
+  -59.005,
+  4.715,
+  -113.549,
+  35.326
+ ]
+}

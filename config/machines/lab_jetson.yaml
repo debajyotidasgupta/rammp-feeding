@@ -1,7 +1,0 @@
-# The lab Jetson (debajyoti@jetson, until 2026-09-25): this file IS its config/local.yaml (make local
-# MACHINE=lab_jetson). Root ~ and name rammp are the defaults; its containers and driver image were made
-# before the {name} scheme, so their names are recorded here.
-deployment:
-  arm: {ip: 192.168.2.67}
-  containers: {driver: tcp_rec, vision: kinova_vision}
-  images: {driver: "kinova-gen3-ros2:kortex"}

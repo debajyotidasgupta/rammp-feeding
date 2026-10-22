@@ -1,22 +1,11 @@
-# The fork in the gripper. Re-measure all of this whenever the utensil is changed OR re-seated (a robot restart
-# re-initialises the gripper, which can pivot the utensil).
-# A new utensil: copy this file (e.g. spoon.yaml), measure, select it in rammp.yaml (profiles.utensil).
+# The plastic four-tine fork in the gripper, against the wrist D405 (2026-10-02). Re-measure whenever the utensil is
+# changed or re-seated (a robot restart re-initialises the gripper, which can pivot it): a ruler for glass_to_tip_m,
+# then tip_px from 10 mm hover checks (rammp acquire --stop-after hover10).
 
 name: fork
-camera_to_tip_m: 0.265          # measured 260-261; stored long on purpose, so every stop errs high
-tip_px: [690, 436]              # the tine tips in the colour image (fixed to the camera: the same pixels at every
-                                # pose), measured 2026-09-25 18:00 after a power-cycle re-seated the fork
-image_region_px: [640, 420, 760, 719]   # its pixels at the overlook -- never detected, never mistaken for food
-tine_offset_tool_m: [-0.005, 0.0, 0.0]   # the tines' offset from tip_px's tip, TOOL frame (the fork head curves):
-                                    # part of the tip model (kinova/motion.tip_in_tool) and of OVER's aim
-head_width_m: 0.023             # the fork head, across the tines (ruler)
-# the aim offset depends on the food as much as the fork: config/food/<name>.yaml
-punch_floor_margin_m: 0.0       # nominal margin above the measured bowl floor (really ~5-10 mm: camera_to_tip)
-
-by_camera:                      # measured against a camera other than the built-in one (settings.py applies the
-                                # section of the selected camera)
-  realsense_d405:               # the site D405 (2026-09-30), holding a spoon run as this fork
-    camera_to_tip_m: 0.26       # ruler, the D405 to the spoon tip
-    tip_px: [435, 306]          # the calibrated tip re-projected through the D405 (the spoon is hidden behind the
-                                # gripper in this view: the 10 mm hover check confirms it)
-    image_region_px: [280, 300, 660, 480]   # the gripper (black, four knobs) across the bottom of the D405 image
+glass_to_tip_m: 0.233           # the camera's front glass to the tines (camera_to_tip_m adds the camera's glass_to_optical_m)
+tip_px: [456, 374]              # the tine tips in the colour image (fixed to the camera: the same pixel at every pose)
+image_region_px: [280, 365, 660, 480]   # the tines (from y ~372) and the gripper across the bottom: never food (a piece
+head_width_m: 0.023
+punch_floor_margin_m: 0.008     # the plunge stops this far above the bowl floor (the scoop's first turn sweeps the tines
+                                # down and across: at the floor they caught the glass bowl)

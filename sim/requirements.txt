@@ -1,8 +1,0 @@
-# The digital twin (sim/), on a machine with a GPU display (the Mac): .venv/bin/pip install -r sim/requirements.txt
-mujoco>=3.3        # MjSpec attach, camera intrinsics (focal / principal pixel)
-numpy
-pillow
-scipy              # kinova.motion (the tip model) imports it
-# once, to pose the person (sim/pose_human.py); the licensed SMPL-X model goes in sim/assets/smplx/
-# torch
-# smplx

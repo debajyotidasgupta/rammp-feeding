@@ -1,11 +1,7 @@
-# Cut cubes, ~20-30 mm (melon, apple, pineapple, cheese, cooked meat), often packed with no bowl floor showing
-# between them -- the plunge then goes a fixed depth below the piece's top (acquisition.plunge.no_floor).
-# A different food: copy this file, set what differs, select it in rammp.yaml (profiles.food) or RAMMP_FOOD=<name>.
+# Cut cubes, ~20-30 mm (melon, apple, pineapple, cheese, cooked meat), often packed with no bowl floor showing between
+# them (the plunge then goes a fixed depth below the piece's top: acquisition.plunge.no_floor).
 
 name: cubes
-prompt: piece of food           # what the detector is asked for -- generic (fruit, steak, chicken cubes). One food
-                                # on the day: give it a profile with its own prompt, and test it first
-fallback_prompts: [fruit cube] # asked only when the prompt leaves no usable box
+prompt: piece of food           # SAM3's words for it
 exclude_grapes: true            # never target a dark red / purple box: grapes roll off the fork
-aim_offset_base_m: [0.0, 0.0]   # (x, y) base frame, added (with the utensil's tine offset) to the detected centre
-                                # in OVER; a cube is about as wide as the fork head: its centre
+aim_offset_base_m: [0.0, 0.0]   # (x, y) base frame, added to the target piece's centre

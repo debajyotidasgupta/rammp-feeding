@@ -278,6 +278,18 @@ class World(unittest.TestCase):
         with self.assertRaisesRegex(MoveError, "within .* of probe"):     # out and back over it: nearer than either end
             arm.check_path([goal, q, goal], lambda x, y: -np.inf, None, spheres, probe(clear - 0.005))
 
+    def test_a_planned_path_that_tilts_too_far_is_refused_before_it_runs(self):
+        sc = Scene()
+        site(sc)
+        robot = FakeRobot(sc, scene.captured("home"))
+        arm = Arm(robot)
+        path = [scene.captured("home"), scene.overlook_joints(arm)]
+        worst = max(g.tilt_deg(arm.tool(q)[1]) for q in g.densify(path, 0.5))
+        arm.check_path(path, lambda x, y: -np.inf, None, max_tilt=worst + 0.5)
+        with self.assertRaisesRegex(MoveError, "tilts the utensil"):
+            arm.check_path(path, lambda x, y: -np.inf, None, max_tilt=worst - 0.5)
+        self.assertEqual(robot.moves, [])
+
     def test_the_utensil_checks_our_boxes_the_bowl_exact(self):
         sc = Scene()
         site(sc)

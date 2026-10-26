@@ -53,13 +53,36 @@ The module keeps what it measures on the robot in `/home/abra/.config/rammp_feed
 `local.yaml` (the machine's own settings, over `config/rammp.yaml`), the captured poses, the scene camera's measured
 pose and latest reading, and the collision world it hands the planner. Delete a file to reset what it holds.
 
-1. `capture home` and `capture overlook` with the arm placed by hand at feeding_start and over the bowl, utensil down.
-   The delivery look ships in `calibration/deliver.json` (the swing's end as tuned at abra: the utensil level toward
-   the user's mouth, about 50 mm to their right); `capture deliver` only to change it. Where the user sits goes in
-   `local.yaml` (`motion.free_space.user_mouth_m`): the planner's world places their head and torso there. Both hold
-   for every session until the setup changes.
-2. A rough guess of the scene camera's pose in `local.yaml` (`scene_camera.extrinsic`), then `calibrate-scene` at
-   food_detect_start. It writes the measured pose and publishes it on `/tf_static` as `base_link -> scene_camera_link`.
-3. The utensil: the ruler from the wrist camera's glass to the tip (`utensil.glass_to_tip_m`), then `tip_px` set by
-   10 mm hover checks (`acquire --stop-after hover10`, adjust, `rise`, again).
-4. `check`, then `feed --bites 1`.
+What is fixed to the arm ships in the tree and stays when the rig moves; what the room changes is set per site.
+
+**Fixed to the arm** (in the tree; re-set only if the arm, the user and the bowl are arranged differently):
+
+- feeding_start and food_detect_start's arm shape: `calibration/home.json`, `overlook.json` (`capture home|overlook`).
+- The delivery look: `calibration/deliver.json` (`capture deliver`), and the second look `delivery.second_look_m`
+  (-Y: the user's right).
+- Where the user sits: `motion.free_space.user_mouth_m`. The planner's world has their head and torso there, facing
+  the arm along +x.
+- Where the scoop ends: the bowl profile's `scoop_end` (it moves with the table's height), set with the bowl about at
+  its `captured_at.bowl_centre_m`.
+- The wrist camera's mount on the arm (the camera profile's `mount`), and the arm's own mount: level (the deployed
+  planner's model).
+
+**Per site** (its `local.yaml`; `config/machines/<name>.yaml` is the versioned copy):
+
+1. The table's footprint in the arm's base frame, `workspace.table_extent_m` (x, y): the planner's table and our tip
+   floor.
+2. The wheelchair: `motion.free_space.wheelchair` (true when the arm is on it; its boxes in
+   `config/wheelchair_boxes.yaml`).
+3. The scene camera: a rough guess of its pose (`scene_camera.extrinsic`), then `calibrate-scene` at
+   food_detect_start. It writes the measured pose (`scene_extrinsic.json`) and publishes it on `/tf_static` as
+   `base_link -> scene_camera_link`. Again whenever the camera is moved.
+4. The bowl: its profile's `floor_above_table_m` (a ruler), and the bowl laid about where the scoop end was set.
+5. The deployment: the state and run folders mounted in the manifest (`rammp-alternative.yaml`), the planner's
+   `/config` read-only.
+
+**After any utensil change, re-seat or power-cycle:**
+
+6. The ruler from the wrist camera's glass to the tines (`utensil.glass_to_tip_m`), then `tip_px` set by 10 mm hover
+   checks (`acquire --stop-after hover10`, adjust, `rise`, again).
+
+**Then:** `check`, and `feed --bites 1`.

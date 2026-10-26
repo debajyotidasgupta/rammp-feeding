@@ -87,7 +87,6 @@ motion:
     min_tip_above_bowl_m: 0.015 # ... above the bowl's top over the bowl
     bowl_margin_m: 0.04         # "over the bowl": within its rim radius + this
     user_mouth_m: [-0.277, 0.306, 0.397]   # where the operator seats the user: their head and torso in the planner's world
-    wheelchair: false           # the wheelchair's boxes (config/wheelchair_boxes.yaml) in the planner's world
 
 guards:                         # the contact guard: a joint-torque step this big against recent history = stop
   torque_window: {span: 12, gap: 5}   # samples: the baseline window, and the gap before the sample compared to it

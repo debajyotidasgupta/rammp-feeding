@@ -10,7 +10,7 @@ follow from them (base frame, m).
   food_detect_start  computed: the wrist camera overlook_camera_height_m above the table, the tip over the bowl, in
                      the captured overlook's orientation (calibration overlook.json), by continuous IK from it
   the planner world  the table (raised to our tip floor), a hollow bowl, the user round user_mouth_m, the
-                     wheelchair, the pedestal -- RAMMP-CuRobo's world schema, cuboids only
+                     pedestal -- RAMMP-CuRobo's world schema, cuboids only
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ import time
 import numpy as np
 import yaml
 
-from rammp_feeding.config import ROOT, calibration, cfg, state_dir
+from rammp_feeding.config import calibration, cfg, state_dir
 from rammp_feeding.geometry import quat_matrix, rpy_matrix
 
 # ------------------------------------------------------------------ the wrist camera on the arm
@@ -161,7 +161,7 @@ def scoop_end(arm) -> dict:
 def world() -> dict:
     """RAMMP-CuRobo's world (base_link): the table raised to our tip floor, a hollow bowl (a floor and 12 wall boxes:
     a solid box would put the utensil over its opening inside it), the user's head and torso round the mouth, the
-    wheelchair, the pedestal. The table and the bowl grow by the workspace's error_m."""
+    pedestal. The table and the bowl grow by the workspace's error_m."""
     ws = workspace()
     e = float(ws["error_m"])
     tz, top = ws["table_z"] + e, ws["bowl_top_z"] + e
@@ -182,10 +182,6 @@ def world() -> dict:
         obs.append(dict(name="bowl_wall_%d" % k, position=[bx + r * math.cos(a), by + r * math.sin(a), (tz + top) / 2],
                         dims=[0.006 + 2 * e, 2 * (r + e) * math.tan(math.pi / 12) + 0.004, top - tz],
                         rpy_deg=[0.0, 0.0, math.degrees(a)]))
-    if cfg.motion.free_space.wheelchair:
-        doc = yaml.safe_load((ROOT / "config" / "wheelchair_boxes.yaml").read_text())
-        obs += [dict(name="chair_" + str(b["name"]), position=b["position"], dims=b["dims"],
-                     rpy_deg=b.get("rpy_deg", [0, 0, 0])) for b in doc["boxes"]]
     for o in obs:
         o["position"], o["dims"] = [float(v) for v in o["position"]], [float(v) for v in o["dims"]]
         o["rpy_deg"] = [float(v) for v in o.get("rpy_deg", [0.0, 0.0, 0.0])]

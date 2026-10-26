@@ -71,18 +71,16 @@ What is fixed to the arm ships in the tree and stays when the rig moves; what th
 
 1. The table's footprint in the arm's base frame, `workspace.table_extent_m` (x, y): the planner's table and our tip
    floor.
-2. The wheelchair: `motion.free_space.wheelchair` (true when the arm is on it; its boxes in
-   `config/wheelchair_boxes.yaml`).
-3. The scene camera: a rough guess of its pose (`scene_camera.extrinsic`), then `calibrate-scene` at
+2. The scene camera: a rough guess of its pose (`scene_camera.extrinsic`), then `calibrate-scene` at
    food_detect_start. It writes the measured pose (`scene_extrinsic.json`) and publishes it on `/tf_static` as
    `base_link -> scene_camera_link`. Again whenever the camera is moved.
-4. The bowl: its profile's `floor_above_table_m` (a ruler), and the bowl laid about where the scoop end was set.
-5. The deployment: the state and run folders mounted in the manifest (`rammp-alternative.yaml`), the planner's
+3. The bowl: its profile's `floor_above_table_m` (a ruler), and the bowl laid about where the scoop end was set.
+4. The deployment: the state and run folders mounted in the manifest (`rammp-alternative.yaml`), the planner's
    `/config` read-only.
 
 **After any utensil change, re-seat or power-cycle:**
 
-6. The ruler from the wrist camera's glass to the tines (`utensil.glass_to_tip_m`), then `tip_px` set by 10 mm hover
+5. The ruler from the wrist camera's glass to the tines (`utensil.glass_to_tip_m`), then `tip_px` set by 10 mm hover
    checks (`acquire --stop-after hover10`, adjust, `rise`, again).
 
 **Then:** `check`, and `feed --bites 1`.

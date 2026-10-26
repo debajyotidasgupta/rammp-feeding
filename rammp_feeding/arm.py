@@ -6,7 +6,7 @@ here, executed by the driver (/execute_joint_trajectory, position or impedance),
   CHECKS    a move's own (the plunge's depth zone, the scoop's food path)
   DRIVER    its path tolerance (the arm diverging from the path) and its own refusals
 Any of them cancels the goal (the driver halts the arm) and raises MoveError. Free-space moves are cuRobo's paths
-(travel), checked against our tip floor before they run.
+(travel), the utensil on them checked against our boxes before they run.
 """
 
 from __future__ import annotations
@@ -250,10 +250,10 @@ class Arm:
         return path
 
     # ------------------------------------------------------------------ free space: cuRobo
-    def check_path(self, path, floor: Callable[[float, float], float], max_reach_m: float | None = None,
-                   spheres=None, boxes=None, max_tilt: float | None = None) -> tuple[float, float]:
+    def check_path(self, path, max_reach_m: float | None = None, spheres=None, boxes=None,
+                   max_tilt: float | None = None) -> tuple[float, float]:
         """(lowest, highest) utensil tip z along the path as it runs (sampled every check_step_deg); MoveError if the tip
-        dips under floor(x, y) or reaches past max_reach_m, the utensil tilts past max_tilt off straight down, or a
+        reaches past max_reach_m, the utensil tilts past max_tilt off straight down, or a
         sphere ([x, y, z, r], tool frame) comes nearer a box (scene.utensil_boxes) than utensil_clearance_m -- or than
         it already is at the start or will be at the goal, where that is nearer (feeding_start parks the utensil beside
         the table): the planner knows the arm, not what it holds."""
@@ -266,9 +266,6 @@ class Arm:
             if worst > max_tilt + 1e-6:
                 raise MoveError("the path tilts the utensil %.1f deg off vertical (limit %.0f)" % (worst, max_tilt))
         for t in tips:
-            if t[2] < floor(t[0], t[1]) - 1e-6:
-                raise MoveError("the path takes the utensil tip to z %.3f at (%.3f, %.3f), under the floor there (%.3f)"
-                                % (t[2], t[0], t[1], floor(t[0], t[1])))
             if max_reach_m is not None and math.hypot(t[0], t[1]) > max_reach_m + 1e-6:
                 raise MoveError("the path swings the utensil tip %.0f mm out from the arm's base (at most %.0f)"
                                 % (1000 * math.hypot(t[0], t[1]), 1000 * max_reach_m))
@@ -287,10 +284,10 @@ class Arm:
     def travel(self, goal: Sequence[float], label: str, dps: float | None = None, go: bool = True,
                max_reach_m: float | None = None, carrying: bool = False, **kw) -> list[Joints]:
         """A collision-free path from the shared planner, from here to goal (go=False: plan only), with our world pushed
-        to it first; thinned, checked as it will run against our tip floor, the utensil's tilt (no further than its
-        start or its goal already is, unless max_tilt says) and, for the utensil (and, carrying, the piece), against
-        our boxes -- re-planned when it fails any -- run, and settled exactly onto goal."""
-        from rammp_feeding.scene import push_world, tip_floor, utensil_boxes, utensil_spheres
+        to it first; thinned, checked as it will run for the utensil's tilt (no further than its start or its goal
+        already is, unless max_tilt says) and the utensil (and, carrying, the piece) against our boxes -- re-planned
+        when it fails either -- run, and settled exactly onto goal."""
+        from rammp_feeding.scene import push_world, utensil_boxes, utensil_spheres
         FS = M.free_space
         q = self.q()
         if max_step(q, goal) <= float(M.near_pose_deg):
@@ -300,7 +297,7 @@ class Arm:
         push_world(self.robot)                        # another client may have changed the planner's world since
         spheres, boxes = utensil_spheres(self, carrying), utensil_boxes()
         kw.setdefault("max_tilt", max(float(M.max_tilt_deg), tilt_deg(self.tool(q)[1]) + 5, tilt_deg(self.tool(goal)[1]) + 5))
-        for k in range(int(FS.floor_retries) + 1):
+        for k in range(int(FS.replans) + 1):
             try:
                 pos, _ = self.robot.plan_joints(q, goal, float(FS.timeout_s))
             except RuntimeError as e:
@@ -312,12 +309,12 @@ class Arm:
                     keep.append(i)
             path = [list(map(float, pos[i])) for i in keep + [len(pos) - 1]]
             try:
-                lo, hi = self.check_path(path, tip_floor, max_reach_m, spheres, boxes, kw["max_tilt"])
+                lo, hi = self.check_path(path, max_reach_m, spheres, boxes, kw["max_tilt"])
                 break
             except MoveError as e:
-                if k == int(FS.floor_retries):
+                if k == int(FS.replans):
                     raise MoveError("%s: %s -- not moving" % (label, e))
-                log.info("    %-28s re-planning (%d/%d): %s", label, k + 1, int(FS.floor_retries), e)
+                log.info("    %-28s re-planning (%d/%d): %s", label, k + 1, int(FS.replans), e)
         log.info("    %-28s planned: %d waypoints, utensil tip z %.3f .. %.3f%s", label, len(path), lo, hi,
                  "" if go else "  (plan only)")
         if go:

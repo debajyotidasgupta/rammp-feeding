@@ -46,7 +46,7 @@ face:
 workspace:                      # arm base frame, m (where the bowl and the table are: the scene camera's reading)
   bowl_centre_m: [0.290, 0.158] # where the operator lays the bowl: the scene camera's candidate nearest it is the bowl
   bowl_radius_m: 0.08           # the bowl's rim radius where the scene camera's rim fit has none
-  table_extent_m: {x: [0.08, 0.76], y: [-0.30, 0.80]}   # its footprint: the planner's table, where our tip floor applies
+  table_extent_m: {x: [0.08, 0.76], y: [-0.30, 0.80]}   # its footprint: the planner's table
   overlook_camera_height_m: 0.45   # food_detect_start: the wrist camera this high above the table, over the bowl
 
 motion:
@@ -73,14 +73,12 @@ motion:
     dps: 61.0                   # cruise, the furthest joint
     path_step_deg: 4            # cuRobo's dense path thinned to about this on the furthest joint
     timeout_s: 30
-    floor_retries: 4            # a path under our floor: plan again (cuRobo's paths differ) this many times
+    replans: 4                  # a path that fails our check: plan again (cuRobo's paths differ), at most this often
     check_step_deg: 0.5         # a planned path is checked as it will run: sampled this finely on the furthest joint
     utensil_padding_m: 0.01     # the utensil check: our boxes grown this per side (the bowl's pieces exact) ...
     utensil_clearance_m: 0.0    # ... and the utensil's spheres kept this clear of them (0: out of them; the boxes
-                                # already carry the tip floor and the scene camera's error)
-    min_tip_above_table_m: 0.05 # our floor for the utensil tip (scene.tip_floor): above the table ...
-    min_tip_above_bowl_m: 0.015 # ... above the bowl's top over the bowl
-    bowl_margin_m: 0.04         # "over the bowl": within its rim radius + this
+                                # already carry the raised table and the scene camera's error)
+    min_tip_above_table_m: 0.05 # the planner's table is raised this much (the utensil hangs below the gripper)
     user_mouth_m: [-0.277, 0.306, 0.397]   # where the operator seats the user: their head and torso in the planner's world
 
 guards:                         # the contact guard: a joint-torque step this big against recent history = stop
@@ -150,7 +148,8 @@ perception:
   scene:                        # the fixed scene camera (rammp locate-scene)
     segmenter_classes: [food container]   # the scene segmenter's classes that are a bowl
     segmenter_max_age_s: 2.0
-    bowl_prompts: [bowl, plastic container]   # SAM3's words for it, when the segmenter has none
+    bowl_prompts: [dish, bowl, bowl with a glass jar]   # SAM3's words for it, when the segmenter has none (from the
+                                # side a bowl reads as a dish or a plate with a jar; "bowl" alone boxed a lidded box)
     score_threshold: 0.3
     max_reach_m: 0.75
     max_bowl_height_m: 0.20     # inside the box, the bowl is what stands this high at most above the table ...
@@ -178,7 +177,6 @@ delivery:
   aim_dz_m: -0.010              # below the mouth
   approach_mps: 0.077
   approach_impedance: approach  # motion.impedance's entry the approach runs with (null: position control)
-  max_approach_m: 0.800
   approach_step_m: 0.005
   max_turn_deg: 30.0            # the utensil turned toward the mouth by at most this
   mouth_depth_range_m: [0.25, 1.00]   # a mouth outside this is not a face at the utensil: the second look

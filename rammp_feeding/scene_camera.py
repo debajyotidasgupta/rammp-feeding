@@ -65,8 +65,7 @@ def _points(robot, D: np.ndarray, base_from_link: np.ndarray):
     cam = robot.camera_model("scene_camera")
     p = cam.depth_points(D)                                          # the colour optical frame
     T = base_from_link @ robot.transform(str(SC.link_frame), robot.cameras["scene_camera"].colour_frame)
-    uv = np.stack([cam.colour.fx * p[:, 0] / p[:, 2] + cam.colour.cx, cam.colour.fy * p[:, 1] / p[:, 2] + cam.colour.cy], 1)
-    return p @ T[:3, :3].T + T[:3, 3], np.round(uv).astype(int)
+    return p @ T[:3, :3].T + T[:3, 3], np.round(np.stack(cam.pixel(p.T), 1)).astype(int)
 
 
 def table_height(p: np.ndarray, at_xy) -> float:

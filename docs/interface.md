@@ -25,7 +25,7 @@ Feeds a seated user from a bowl (see the [introduction](index.mdx)). One node, `
 | Name | Type | On | Use |
 | --- | --- | --- | --- |
 | `/execute_joint_trajectory` | `rammp_arm_interfaces/action/ExecuteJointTrajectory` | `arm` | Every move. Position control; the approach to the mouth in impedance. Cancelled to stop. |
-| `/rammp_curobo/plan_to_joints` | `rammp_curobo_interfaces/action/PlanToJoints` | `planner` | Free-space paths from the shared planner, as it is configured for everyone; each checked as it will run against our utensil-tip floor and, for the utensil's spheres, against our boxes before it runs. |
+| `/rammp_curobo/plan_to_joints` | `rammp_curobo_interfaces/action/PlanToJoints` | `planner` | Free-space paths from the shared planner, as it is configured for everyone; each checked as it will run, the utensil's spheres against our boxes, before it runs. |
 | `/rammp_curobo/set_world` | `rammp_curobo_interfaces/srv/SetWorld` | `planner` | Our table, bowl, user and pedestal by file (`/config/planner_world.yaml`, mounted read-only into the planner) before each planned move; the planner's own world back when a command ends. |
 | `/rammp_curobo/get_parameters` | `rcl_interfaces/srv/GetParameters` | `planner` | Its `world` parameter: the world to put back (`planner.restore_world` where it has none). |
 | `/perception/sam3/detect` | `rammp_perception_interfaces/srv/Detect` | `sam3` | The bowl and the food in the wrist camera (boxes and masks); the bowl in the scene camera when the segmenter has none. |

@@ -42,7 +42,7 @@ class CameraModel:
         return c.fx * p[0] / p[2] + c.cx, c.fy * p[1] / p[2] + c.cy, float(p[2])
 
     def pixel(self, p) -> tuple[float, float]:
-        """A point in the colour optical frame -> its colour pixel."""
+        """A point in the colour optical frame -> its colour pixel (p: 3 x N -> two N arrays)."""
         c = self.colour
         return c.fx * p[0] / p[2] + c.cx, c.fy * p[1] / p[2] + c.cy
 

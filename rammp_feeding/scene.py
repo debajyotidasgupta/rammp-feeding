@@ -4,12 +4,12 @@ follow from them (base frame, m).
   the wrist camera   intrinsics and its mount in the tool frame (camera profile), pixel mappings
   the utensil tip    camera + camera_to_tip along the axis + the tip's sideways offset read off the image (tip_px)
   the workspace      the scene camera's reading (state_dir/scene_state.json: rammp locate-scene, once per rammp feed),
-                     trusted to its error_m, which the planner's world and our tip floor keep as extra clearance (the
+                     trusted to its error_m, which the planner's world and the utensil's boxes keep as clearance (the
                      wrist camera then measures the food itself)
   the user           where the operator seats them: motion.free_space.user_mouth_m, fixed for the session
   food_detect_start  computed: the wrist camera overlook_camera_height_m above the table, the tip over the bowl's
                      centre, in the captured overlook's orientation (calibration overlook.json), by continuous IK from it
-  the planner world  the table (raised to our tip floor), a hollow bowl, the user round user_mouth_m, the
+  the planner world  the table (raised by min_tip_above_table_m), a hollow bowl, the user round user_mouth_m, the
                      pedestal -- RAMMP-CuRobo's world schema, cuboids only
 """
 
@@ -67,18 +67,6 @@ def user_mouth() -> np.ndarray:
     return np.array(cfg.motion.free_space.user_mouth_m, float)
 
 
-def tip_floor(x: float, y: float) -> float:
-    """The lowest the utensil tip may pass at (x, y) on a free-space move: above the bowl's top over the bowl (and a
-    margin round it), above the table over its footprint -- each plus the workspace's error; elsewhere none of ours."""
-    w, fs, ext = workspace(), cfg.motion.free_space, cfg.workspace.table_extent_m
-    e = w["error_m"]
-    if math.hypot(x - w["bowl_xy"][0], y - w["bowl_xy"][1]) < w["bowl_radius"] + float(fs.bowl_margin_m) + e:
-        return w["bowl_top_z"] + float(fs.min_tip_above_bowl_m) + e
-    if ext.x[0] <= x <= ext.x[1] and ext.y[0] <= y <= ext.y[1]:
-        return w["table_z"] + float(fs.min_tip_above_table_m) + e
-    return -math.inf
-
-
 # ------------------------------------------------------------------ poses
 def captured(name: str) -> list[float]:
     return [float(v) for v in calibration(name)["joints_deg"]]
@@ -129,7 +117,7 @@ def scoop_end(arm) -> dict:
 
 # ------------------------------------------------------------------ the planner's world
 def world() -> dict:
-    """RAMMP-CuRobo's world (base_link): the table raised to our tip floor, a hollow bowl (a floor and 12 wall boxes:
+    """RAMMP-CuRobo's world (base_link): the table raised min_tip_above_table_m, a hollow bowl (a floor and 12 wall boxes:
     a solid box would put the utensil over its opening inside it), the user's head and torso round the mouth, the
     pedestal. The table and the bowl grow by the workspace's error_m."""
     ws = workspace()
@@ -190,9 +178,14 @@ def restore_world(robot) -> None:
 
 def utensil_boxes() -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str]]:
     """Our boxes as the utensil check takes them (centres, rotations base <- box, half extents, names): world() but the
-    pedestal, the bowl's pieces exact and the rest grown by utensil_padding_m per side."""
+    pedestal, and a lid over the bowl's opening at its top (a planned move passes over the bowl, never into it); the
+    bowl's pieces exact, the rest grown by utensil_padding_m per side."""
     pad = float(cfg.motion.free_space.utensil_padding_m)
     boxes = [o for o in world()["obstacles"] if o["name"] != "pedestal"]
+    floor = next(o for o in boxes if o["name"] == "bowl_floor")
+    top = max(o["position"][2] + o["dims"][2] / 2 for o in boxes if o["name"].startswith("bowl_wall"))
+    boxes.append(dict(name="bowl_lid", position=[floor["position"][0], floor["position"][1], top - 0.004],
+                      dims=[floor["dims"][0], floor["dims"][1], 0.008], rpy_deg=[0.0, 0.0, 0.0]))
     grow = [0.0 if o["name"].startswith("bowl_") else pad for o in boxes]
     return (np.array([o["position"] for o in boxes]),
             np.array([rpy_matrix(*np.radians(o["rpy_deg"])) for o in boxes]),

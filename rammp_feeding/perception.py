@@ -49,8 +49,7 @@ def world_points(cam, arm, D: np.ndarray, q=None):
     depth from the camera N)."""
     o, Rc = scene.camera_pose(arm, q)
     p = cam.depth_points(D)
-    uv = np.stack([cam.colour.fx * p[:, 0] / p[:, 2] + cam.colour.cx, cam.colour.fy * p[:, 1] / p[:, 2] + cam.colour.cy], 1)
-    return o + p @ Rc.T, np.round(uv).astype(int), p[:, 2]
+    return o + p @ Rc.T, np.round(np.stack(cam.pixel(p.T), 1)).astype(int), p[:, 2]
 
 
 def _in(mask: np.ndarray, uv: np.ndarray) -> np.ndarray:

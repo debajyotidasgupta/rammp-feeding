@@ -352,16 +352,16 @@ class Robot:
         if not r.success:
             raise RobotError("the planner refused the world %s: %s" % (path, r.message))
 
-    def planner_parameter(self, name: str) -> str | float | None:
-        """One of the planner node's own parameters (a string or a double), or None where it has none, it is empty, or
-        the planner does not answer."""
+    def planner_parameter(self, name: str) -> str | None:
+        """One of the planner node's own string parameters, or None where it has none, it is empty, or the planner does
+        not answer."""
         if not self._params.wait_for_service(timeout_sec=2.0):
             return None
         r = self._wait(self._params.call_async(self._types["GetParameters"].Request(names=[name])), 5.0, "no parameters")
         v = r.values[0] if r.values else None
         if v is None:
             return None
-        return float(v.double_value) if v.type == 3 else (v.string_value or None) if v.type == 4 else None   # DOUBLE, STRING
+        return (v.string_value or None) if v.type == 4 else None     # (4: PARAMETER_STRING)
 
     # ------------------------------------------------------------------ perception
     def detect(self, role: str, prompts: list[str], threshold: float) -> list[Detection]:

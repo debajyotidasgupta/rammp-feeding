@@ -77,8 +77,6 @@ def approach(arm: Arm, mouth: np.ndarray) -> None:
     L = float(np.linalg.norm(Tg - T0))
     record.event("approach_goal", mouth=mouth, goal_tip=goal_tip, distance_m=L, yaw_deg=yaw)
     log.info("    stop: the tip %.0f mm short of the mouth, turned %.0f deg; %.0f mm to go", 1000 * float(DL.stop_m), yaw, 1000 * L)
-    if L > float(DL.max_approach_m):
-        raise MoveError("an approach of %.0f mm is too long -- the user out of reach" % (1000 * L))
     n = max(40, int(math.ceil(L / float(DL.approach_step_m))))
     path, err = arm.homotopy(q0, lambda s: (T0 + (Tg - T0) * s, rot("z", yaw * s) @ R), n)
     if path is None:

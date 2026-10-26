@@ -1,5 +1,0 @@
-# Whole strawberries, big (35-40 mm), spaced in the bowl.
-
-name: strawberry
-prompt: strawberry
-aim_offset_base_m: [0.005, 0.0] # +5 mm x: the tines go forward into the bulk of the flesh (re-check at a 10 mm hover)

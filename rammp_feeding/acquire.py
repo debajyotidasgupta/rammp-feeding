@@ -2,20 +2,17 @@
 
   over     at the overlook height, a level slide until the tip's vertical line passes through the target piece
            (refused unless at food_detect_start, small and level: a correction inside the bowl, never a transit)
-  plunge   straight down through the piece to the bowl floor (never under the bowl profile's own floor: a clear bowl
-           reads the table through it) -- or, packed food with no floor seen, a fixed depth below its top -- in one
-           move: fast, easing to slow above the piece; the contact guard strict above the food, a firm piece's
-           piercing allowed once the tines are in it
+  plunge   straight down beside the piece to the bowl floor (never under the bowl profile's own floor: a clear bowl
+           reads the table through it), in one move: fast, easing to slow above the piece; the contact guard strict
+           above the food, a firm piece's piercing allowed once the tines are in it
   scoop    the piece rises while the utensil turns from vertical to level about it, backing off to the bowl's scoop
            end (where the swing starts); stopped if the food point leaves its path or drops
   pick     over -> a fresh depth reading from there -> plunge -> scoop, planned before the plunge starts (no pause)
-  descend / punch / rise   the hover route for aim checks: down to a hover above the piece; on down slowly to the
-           floor (then the scoop); or straight back up
+  descend / rise   the hover route for aim checks (tip_px): down to a hover above the piece, and straight back up
 """
 
 from __future__ import annotations
 
-import itertools
 import json
 import logging
 import math
@@ -28,12 +25,11 @@ import numpy as np
 from rammp_feeding import record, scene
 from rammp_feeding.arm import Arm, MoveError, TorqueGuard
 from rammp_feeding.config import cfg
-from rammp_feeding.geometry import fold, max_step, rot
+from rammp_feeding.geometry import max_step, rot
 from rammp_feeding.perception import under_tip
 
 log = logging.getLogger("rammp")
 A = cfg.acquisition
-NF = A.plunge.no_floor
 G = cfg.guards.torque_step_nm
 
 
@@ -74,47 +70,24 @@ def over(arm: Arm, target: dict) -> None:
     arm.straight(goal, R, float(A.over_speed_mps), "OVER")
 
 
-def plunge_depth(u: dict, tip_z: float) -> tuple[float, Food, str]:
-    """(m down from here, the piece as the scoop will see it, mode): to the bowl floor beside the piece, never under
-    the bowl's own floor (bowl.floor_above_table_m); packed food (no floor seen): no_floor.depth_below_top_m below its
-    top, never closer than no_floor.min_tip_above_table_m to the table."""
-    ws = scene.workspace()
-    floor_m = float(cfg.utensil.punch_floor_margin_m)
-    lo, hi = (float(v) for v in A.plunge.sane_range_m)
-    why = None
+def plunge_depth(u: dict, tip_z: float) -> tuple[float, Food]:
+    """(m down from here, the piece as the scoop will see it): to the bowl floor beside the piece, never under the bowl's
+    own floor (bowl.floor_above_table_m: a clear bowl's depth reads the table beneath it)."""
     if "floor_z" not in u:
-        why = "no floor reading beside it"
-    elif u["height"] <= float(A.plunge.food_height_range_m[0]):
-        why = "the floor ring reads the neighbours (%.0f mm \"tall\")" % (1000 * u["height"])
-    elif tip_z - u["gap_floor"] - ws["table_z"] > float(NF.floor_max_above_table_m):
-        why = "the \"floor\" beside it is %.0f mm above the table: food" % (1000 * (tip_z - u["gap_floor"] - ws["table_z"]))
-    if why is None or not NF.enabled:
-        if "floor_z" not in u:
-            raise MoveError("no floor reading under the tip -- not plunging")
-        down, height = u["gap_floor"] - floor_m, u["height"]
-        if not float(A.plunge.food_height_range_m[0]) < height < float(A.plunge.food_height_range_m[1]):
-            raise MoveError("food %.0f mm tall is implausible -- re-measure" % (1000 * height))
-        bf = cfg.bowl.get("floor_above_table_m", None)
-        if bf is not None and tip_z - down < ws["table_z"] + float(bf) + floor_m:
-            lowest = ws["table_z"] + float(bf) + floor_m
-            log.info("    the floor reads %.0f mm under the bowl's own floor (seen through it): stopping above that floor",
-                     1000 * (lowest - (tip_z - down)))
-            down, height = tip_z - lowest, (tip_z - u["gap_top"]) - (lowest - floor_m)
-        if not lo < down < hi:
-            raise MoveError("a plunge of %.0f mm is outside the sane range (%.0f-%.0f) -- re-measure" % (1000 * down, 1000 * lo, 1000 * hi))
-        return down, Food(height, floor_m), "floor"
-    below = float(NF.depth_below_top_m)
-    down = u["gap_top"] + below
-    lowest = ws["table_z"] + float(NF.min_tip_above_table_m)
+        raise MoveError("no floor reading beside the piece -- not plunging")
+    floor_m = float(cfg.utensil.punch_floor_margin_m)
+    down, height = u["gap_floor"] - floor_m, u["height"]
+    if not float(A.plunge.food_height_range_m[0]) < height < float(A.plunge.food_height_range_m[1]):
+        raise MoveError("food %.0f mm tall is implausible -- re-measure" % (1000 * height))
+    lowest = scene.workspace()["table_z"] + float(cfg.bowl.floor_above_table_m) + floor_m
     if tip_z - down < lowest:
-        down = tip_z - lowest
-        below = down - u["gap_top"]
-        if below < float(NF.min_into_food_m):
-            raise MoveError("packed food, but the table is only %.0f mm under its top -- not plunging" % (1000 * below))
+        log.info("    the floor reads %.0f mm under the bowl's own floor (seen through it): stopping above that floor",
+                 1000 * (lowest - (tip_z - down)))
+        down, height = tip_z - lowest, (tip_z - u["gap_top"]) - (lowest - floor_m)
+    lo, hi = (float(v) for v in A.plunge.sane_range_m)
     if not lo < down < hi:
-        raise MoveError("a plunge of %.0f mm is outside the sane range -- re-measure" % (1000 * down))
-    log.info("    packed food (%s): %.0f mm below its top", why, 1000 * below)
-    return down, Food(below, 0.0), "below top"
+        raise MoveError("a plunge of %.0f mm is outside the sane range (%.0f-%.0f) -- re-measure" % (1000 * down, 1000 * lo, 1000 * hi))
+    return down, Food(height, floor_m)
 
 
 def _speed(slow_at: float):
@@ -131,7 +104,7 @@ def _speed(slow_at: float):
 def plunge(arm: Arm, u: dict, scoop_after: bool = True) -> Food:
     q0 = arm.q()
     T0, R0 = arm.tool(q0)
-    down, food, mode = plunge_depth(u, float((T0 + R0 @ arm.tip_tool)[2]))
+    down, food = plunge_depth(u, float((T0 + R0 @ arm.tip_tool)[2]))
     n = int(math.ceil(down / float(A.plunge.ik_step_m)))
     path, err = arm.homotopy(q0, lambda s: (T0 - np.array([0, 0, down * s]), R0), n)
     if path is None:
@@ -141,8 +114,8 @@ def plunge(arm: Arm, u: dict, scoop_after: bool = True) -> Food:
     dist = [down * k / n for k in range(n + 1)]
     durations = [(dist[k] - dist[k - 1]) / v(0.5 * (dist[k] + dist[k - 1])) for k in range(1, n + 1)]
     scoop = plan_scoop(arm, path[-1], T0 - np.array([0, 0, down]), R0, food) if scoop_after else None
-    log.info("    plunge: %.0f mm down (%s), slow from %.0f mm; %.1f s", 1000 * down, mode, 1000 * slow_at, sum(durations))
-    record.event("plunge_plan", mode=mode, down_m=down, food_height_m=food.height, slow_at_m=slow_at, under=u)
+    log.info("    plunge: %.0f mm down, slow from %.0f mm; %.1f s", 1000 * down, 1000 * slow_at, sum(durations))
+    record.event("plunge_plan", down_m=down, food_height_m=food.height, slow_at_m=slow_at, under=u)
     # the contact guard, zoned by depth: strict above the food (the rim, a wrong reading), a firm piece's piercing
     # allowed once the tines are in it; the bowl is kept off by where the plunge ends, not by the guard
     guard, in_food = TorqueGuard(float(G.default)), u["gap_top"] - float(A.plunge.in_food_from_above_m)
@@ -184,19 +157,6 @@ def plan_scoop(arm: Arm, q0, T0, R0, food: Food) -> dict:
         return piv_at(s) - R @ o_piv, R
     n, jump = int(S.waypoints), float(S.max_joint_step_deg)
     path, _ = arm.homotopy(q0, at, n, toward=se["joints_deg"], max_jump=jump)
-    if path is None:                                    # the calibrated end shape failed: other end shapes, nearest first
-        T, R = at(1.0)
-        ends = []
-        for j1, j2, j3, j4, j6 in itertools.product((q0[0], 150, 120, 100), (-30, 0, 30, 60), (q0[2], 30, 60, 85),
-                                                    (-135, -110), (-85, -50, 50, 85)):
-            for flip in (0, 180):
-                qe = arm.ik(T, R, [j1, j2, j3, j4, float(fold(q0[4] + flip)), j6, float(fold(q0[6] + flip))])
-                if qe and arm.margin(qe) > 8:
-                    ends.append(qe)
-        for qe in sorted(ends, key=lambda q: max_step(q, q0))[:10]:
-            path, _ = arm.homotopy(q0, at, n, toward=qe, max_jump=jump)
-            if path:
-                break
     if path is None:
         raise MoveError("no continuous scoop path from here -- nothing moved")
     log.info("    scoop: the food rises %.0f mm, backing off %.0f mm, turning 90 deg; joint margin >= %.1f deg",
@@ -244,25 +204,6 @@ def descend(arm: Arm, u: dict, to_above: float) -> None:
     arm.straight(T - np.array([0, 0, down]), R, float(S.slow_mps), "descend, slow")
 
 
-def punch(arm: Arm, u: dict) -> Food:
-    """From a hover: straight down, slowly, to punch_floor_margin_m above the bowl floor (the hover route's last move)."""
-    if "floor_z" not in u:
-        raise MoveError("no floor reading under the tip -- not punching")
-    floor_m = float(cfg.utensil.punch_floor_margin_m)
-    tip = arm.tip()
-    floor_z = u["floor_z"]
-    bf = cfg.bowl.get("floor_above_table_m", None)
-    if bf is not None:                                  # never under the bowl's own floor (a clear bowl: the table beneath)
-        floor_z = max(floor_z, scene.workspace()["table_z"] + float(bf))
-    down = tip[2] - floor_z - floor_m
-    lo, hi = (float(v) for v in A.stepped.punch_range_m)
-    if not lo < down < hi:
-        raise MoveError("a punch of %.0f mm is outside the sane range (%.0f-%.0f)" % (1000 * down, 1000 * lo, 1000 * hi))
-    T, R = arm.tool()
-    arm.straight(T - np.array([0, 0, down]), R, float(A.stepped.slow_mps), "punch")
-    return Food(height=max(0.0, u["top_z"] - floor_z), floor_m=floor_m)
-
-
 def rise(arm: Arm) -> None:
     """Straight back up to food_detect_start's height, where it is (after a hover)."""
     T, R = arm.tool()
@@ -277,13 +218,6 @@ def rise(arm: Arm) -> None:
 def acquire(robot, arm: Arm, target: dict, out: Path, stop_after: str = "", start_at: str = "over") -> int:
     """over -> measure -> plunge + scoop (the default), or the hover route (stop_after hover30 / hover10)."""
     H = A.stepped
-    if start_at == "punch":                              # after a hover check: on down from where the arm is
-        food = punch(arm, measure(robot, arm, out, "punch"))
-        if stop_after != "punch":
-            q = arm.q()
-            T, R = arm.tool(q)
-            run_scoop(arm, plan_scoop(arm, q, T, R, food))
-        return 0
     if start_at == "scoop":
         q = arm.q()
         T, R = arm.tool(q)

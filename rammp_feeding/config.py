@@ -5,9 +5,8 @@
     cfg.get("guards.torque_step_nm.approach")
     cfg.utensil.camera_to_tip_m             # the selected profiles: cfg.camera / .scene_camera / .utensil / .bowl / .food
 
-Layers, later wins: config/rammp.yaml < the selected profiles (config/<kind>/<name>.yaml; a utensil's by_camera.<camera>
-section with that camera) < the machine's own file (RAMMP_LOCAL, default <state_dir>/local.yaml: e.g. /config/local.yaml
-in the container) < RAMMP_SET="a.b=1,c=[1, 2]" (one run). Profiles can be swapped per run: RAMMP_UTENSIL=spoon etc.
+Layers, later wins: config/rammp.yaml < the selected profiles (config/<kind>/<name>.yaml) < the machine's own file
+(<state_dir>/local.yaml: /config/local.yaml in the container) < RAMMP_SET="a.b=1,c=[1, 2]" (one run; the tests).
 Units are in the key names (_m, _mps, _dps, _nm, _n, _s, _px).
 """
 
@@ -22,9 +21,7 @@ import yaml
 
 
 def _root() -> Path:
-    """Where config/, calibration/ and urdf/ are: RAMMP_ROOT_DIR, the source tree, or the installed package's share."""
-    if os.environ.get("RAMMP_ROOT_DIR"):
-        return Path(os.environ["RAMMP_ROOT_DIR"])
+    """Where config/ and calibration/ are: the source tree, or the installed package's share."""
     src = Path(__file__).resolve().parent.parent
     if (src / "config" / "rammp.yaml").exists():
         return src
@@ -33,7 +30,7 @@ def _root() -> Path:
 
 
 ROOT = _root()
-CONFIG = Path(os.environ.get("RAMMP_CONFIG", ROOT / "config"))
+CONFIG = ROOT / "config"
 
 
 class Cfg(dict):
@@ -82,17 +79,12 @@ def _set(d, dotted, value):
 def load() -> Cfg:
     c = yaml.safe_load((CONFIG / "rammp.yaml").read_text())
     state = Path(os.path.expanduser(os.environ.get("RAMMP_STATE_DIR", c["deployment"]["state_dir"])))
-    local_path = Path(os.environ.get("RAMMP_LOCAL", state / "local.yaml"))
+    local_path = state / "local.yaml"
     local = {} if os.environ.get("RAMMP_NO_LOCAL") or not local_path.exists() else (yaml.safe_load(local_path.read_text()) or {})
     _merge(c["profiles"], local.get("profiles") or {})
     for kind in ("camera", "scene_camera", "utensil", "bowl", "food"):
-        name = os.environ.get("RAMMP_" + kind.upper(), c["profiles"].get(kind) or "")
-        c["profiles"][kind] = name
         folder = "camera" if kind == "scene_camera" else kind
-        c[kind] = yaml.safe_load((CONFIG / folder / (name + ".yaml")).read_text()) if name else {}
-    over = (c["utensil"].pop("by_camera", None) or {}).get(c["profiles"]["camera"])
-    if over:
-        _merge(c["utensil"], over)
+        c[kind] = yaml.safe_load((CONFIG / folder / (str(c["profiles"][kind]) + ".yaml")).read_text())
     _merge(c, local)
     for item in filter(None, re.split(r",(?![^\[]*\])", os.environ.get("RAMMP_SET", ""))):
         k, _, v = item.partition("=")

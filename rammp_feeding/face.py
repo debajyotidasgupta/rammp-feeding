@@ -1,8 +1,6 @@
 """The user's face from the wrist camera, MediaPipe face landmarks on the CPU (~25 ms a frame).
 
 - The image is upright after a quarter turn at the delivery pose (camera.mount.image_rotated_at_delivery).
-- A far face (a user sitting back: a few dozen pixels) is below the landmarker's own detector: with none in the whole
-  frame, half-overlapping zoomed crops are searched (delivery.face.zoom_grid), at most every zoom_every_s.
 - The mouth's range: the lips' own depth (each lip landmark's 5 x 5 depth window), unless that is far beyond what the
   face's size allows (the depth past the sensor's range, or the food in front of the lips); else the face's size --
   the outer eye corners' spacing (delivery.face.eye_corners_m): a turned head looks narrower, so it reads FARTHER.
@@ -34,38 +32,19 @@ class Face:
         self.det = vision.FaceLandmarker.create_from_options(vision.FaceLandmarkerOptions(
             base_options=BaseOptions(model_asset_path=str(cfg.path("face.model"))), num_faces=1))
         self.rotated = bool(cfg.camera.mount.get("image_rotated_at_delivery", False))
-        self._crop, self._zoomed = None, 0.0
-
-    def _one(self, img: np.ndarray):
-        import mediapipe as mp
-        r = self.det.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(img)))
-        if not r.face_landmarks:
-            return None
-        h, w = img.shape[:2]
-        return np.array([[p.x * w, p.y * h] for p in r.face_landmarks[0]])
 
     def upright(self, rgb: np.ndarray) -> np.ndarray:
         return np.rot90(rgb, -1) if self.rotated else rgb
 
     def landmarks(self, rgb: np.ndarray):
-        """Face landmarks in the upright image (pixels): the whole frame, else its zoomed crops (a far face)."""
-        up = self.upright(rgb)
-        L = self._one(up)
-        n = int(FACE.zoom_grid)
-        if L is not None or n < 2 or time.time() - self._zoomed < float(FACE.zoom_every_s):
-            return L
-        h, w = up.shape[:2]
-        ch, cw = int(2 * h / (n + 1)), int(2 * w / (n + 1))
-        crops = [(int(i * (h - ch) / (n - 1)), int(j * (w - cw) / (n - 1))) for i in range(n) for j in range(n)]
-        if self._crop in crops:
-            crops.remove(self._crop); crops.insert(0, self._crop)
-        for y0, x0 in crops:
-            L = self._one(up[y0:y0 + ch, x0:x0 + cw])
-            if L is not None:
-                self._crop = (y0, x0)
-                return L + np.array([x0, y0])
-        self._zoomed = time.time()
-        return None
+        """Face landmarks in the upright image (pixels), or None."""
+        import mediapipe as mp
+        img = np.ascontiguousarray(self.upright(rgb))
+        r = self.det.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=img))
+        if not r.face_landmarks:
+            return None
+        h, w = img.shape[:2]
+        return np.array([[p.x * w, p.y * h] for p in r.face_landmarks[0]])
 
     def to_image(self, x, y, H: int):
         """An upright pixel -> the camera image's."""

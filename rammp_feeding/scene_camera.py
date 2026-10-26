@@ -8,7 +8,7 @@ driver's (camera_info, /tf_static); where its link frame sits on the robot is ou
 locate     the bowl: the always-on scene segmenter's latest "food container" (/perception/object_detections, with
            masks; SAM3 with perception.scene.bowl_prompts when it has none); its points in the base frame; the table
            round it (a plane fit to the dominant flat surface), its centre (a circle through the rim) and its top
-           -> state_dir/scene_state.json, the reachable bowl nearest the last reading
+           -> state_dir/scene_state.json, the reachable bowl nearest workspace.bowl_centre_m (where it is laid)
 calibrate  the arm's collision spheres (config/arm_spheres.yaml, at its joints by our FK) fitted to the camera's depth:
            every depth point near the arm's surface pulls the camera's pose so it lies on the nearest sphere, and, with
            the wrist camera looking straight down, the table's points so they lie level at the height it measures
@@ -37,8 +37,9 @@ SC, PS = cfg.scene_camera, cfg.perception.scene
 CAL = PS.calibration
 
 
-def extrinsic() -> tuple[np.ndarray, str]:
-    """base_link <- the camera's link frame (4 x 4): our calibration if there is one, else the configured guess."""
+def extrinsic(guess: bool = False) -> tuple[np.ndarray, str]:
+    """base_link <- the camera's link frame (4 x 4): our calibration (state_dir/scene_extrinsic.json); guess=True (the
+    calibration's start): the configured guess where there is none yet."""
     f = state_dir() / "scene_extrinsic.json"
     T = np.eye(4)
     if f.exists():
@@ -46,9 +47,9 @@ def extrinsic() -> tuple[np.ndarray, str]:
         T[:3, :3], T[:3, 3] = quat_matrix(d["quat_xyzw"]), d["xyz"]
         return T, str(f)
     e = SC.extrinsic
-    if e.get("xyz") is None or e.get("quat_xyzw") is None:
-        raise RuntimeError("no scene camera pose: rammp calibrate-scene, from a rough guess in local.yaml "
-                           "(scene_camera.extrinsic xyz, quat_xyzw)")
+    if not guess or e.get("xyz") is None or e.get("quat_xyzw") is None:
+        raise RuntimeError("the scene camera is not calibrated (%s): rammp calibrate-scene, from a rough guess in "
+                           "local.yaml (scene_camera.extrinsic xyz, quat_xyzw)" % f)
     T[:3, :3], T[:3, 3] = quat_matrix(e.quat_xyzw), e.xyz
     return T, "the configured guess"
 
@@ -122,10 +123,7 @@ def locate(robot, out: Path) -> dict:
     how = "the scene segmenter"
     if not dets:
         dets, how = robot.detect("scene_camera", list(PS.bowl_prompts), float(PS.score_threshold)), "SAM3"
-    try:
-        ref = json.loads((state_dir() / "scene_state.json").read_text())["bowl_xy"]
-    except (OSError, ValueError, KeyError):
-        ref = list(cfg.workspace.bowl_centre_m)
+    ref = list(cfg.workspace.bowl_centre_m)                # where the operator lays the bowl
     cands = []
     for d in sorted(dets, key=lambda d: -d.score):
         m = bowl_at(mask_of(d, rgb.shape[:2]), d.box, uv, p)
@@ -230,7 +228,8 @@ def _fit(caps, R, t, table_z):
 
 
 def calibrate(robot, arm, reset: bool = False) -> dict | None:
-    """One capture at the arm's pose now, then the fit over the recent captures; written and published if accepted."""
+    """One capture at the arm's pose now, then the fit over every capture kept (--reset forgets them: the camera was
+    moved); written and published if accepted."""
     caps_dir = state_dir() / "scene_calib"
     caps_dir.mkdir(parents=True, exist_ok=True)
     if reset:
@@ -245,12 +244,11 @@ def calibrate(robot, arm, reset: bool = False) -> dict | None:
     caps, tzs = [], []
     for f in sorted(caps_dir.glob("cap_*.npz")):
         z = np.load(f)
-        if time.time() - float(z["t"]) < float(CAL.max_age_s):
-            caps.append((z["points"].astype(float), z["spheres"]))
-            if np.isfinite(z["table_z"]):
-                tzs.append(float(z["table_z"]))
+        caps.append((z["points"].astype(float), z["spheres"]))
+        if np.isfinite(z["table_z"]):
+            tzs.append(float(z["table_z"]))
     table_z = float(np.median(tzs)) if tzs else None
-    T0, source = extrinsic()
+    T0, source = extrinsic(guess=True)
     R0, t0 = T0[:3, :3], T0[:3, 3]
     cropped = []
     for P, S in caps:                                   # only what the fit can use: near the arm, and the table's level

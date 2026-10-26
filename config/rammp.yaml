@@ -4,10 +4,10 @@
 
 profiles:
   camera: realsense_d405        # config/camera/<name>.yaml: the wrist camera -- topics, intrinsics, its mount
-  scene_camera: orbbec_gemini336l   # the fixed scene camera (the COARSE bowl + table); "" = none: workspace below
+  scene_camera: orbbec_gemini336l   # the fixed scene camera: the COARSE bowl + table (rammp locate-scene)
   utensil: fork                 # config/utensil/<name>.yaml: camera-to-tip, tip pixel, ...
   bowl: front                   # config/bowl/<name>.yaml: where the scoop ends, the bowl's floor
-  food: cubes                   # config/food/<name>.yaml: the detector prompt, the aim offset
+  food: cubes                   # config/food/<name>.yaml: the detector prompt
 
 deployment:
   state_dir: /config            # the machine's own state, kept across runs: local.yaml, captured poses, the scene
@@ -43,16 +43,11 @@ arm:
 face:
   model: /opt/models/face_landmarker.task   # MediaPipe's face landmarker (in the image)
 
-workspace:                      # where the table and the bowl are (arm base frame, m) when no scene camera says
-  table_height_m: -0.024        # the abra site (2026-09-30): the scene camera's reading
-  bowl_centre_m: [0.290, 0.158]
-  bowl_height_m: 0.07           # rim above the table
-  bowl_radius_m: 0.08
+workspace:                      # arm base frame, m (where the bowl and the table are: the scene camera's reading)
+  bowl_centre_m: [0.290, 0.158] # where the operator lays the bowl: the scene camera's candidate nearest it is the bowl
+  bowl_radius_m: 0.08           # the bowl's rim radius where the scene camera's rim fit has none
   table_extent_m: {x: [0.08, 0.76], y: [-0.30, 0.80]}   # its footprint: the planner's table, where our tip floor applies
   overlook_camera_height_m: 0.45   # food_detect_start: the wrist camera this high above the table, over the bowl
-  overlook_aim: tip             # what goes over the bowl's centre: tip (the utensil) or lens (the camera's axis)
-  overlook_offset_m: [0.0, 0.0] # the aim point this far (x, y) from the bowl's centre
-  scoop_end_follows: table      # the scoop end moves with the bowl (x, y, z) or the table (z only)
 
 motion:
   joint_speed_cap_dps: 61.7     # every joint, every move: 0.98 x the slowest joint's soft limit the arm ran under (63)
@@ -116,12 +111,6 @@ acquisition:
     ease_m: 0.015
     sane_range_m: [0.080, 0.250]
     food_height_range_m: [0.010, 0.060]
-    no_floor:                   # packed food: no bowl floor seen beside the target
-      enabled: true
-      floor_max_above_table_m: 0.025   # a "floor" higher than this above the table is food
-      depth_below_top_m: 0.025  # plunge this far below the piece's top instead ...
-      min_tip_above_table_m: 0.010   # ... never closer than this to the table
-      min_into_food_m: 0.010         # ... and refused if that leaves less than this into the food
   scoop:
     speed_dps: 55.0             # fast on purpose: food slides off a slowly tilting utensil
     rot_exp: 0.8                # turn angle = 90 * s**rot_exp: <1 starts turning the moment the food lifts
@@ -131,11 +120,10 @@ acquisition:
     end_raise_m: 0.100          # the scoop ends this much above the bowl profile's scoop end (clear of the table)
     max_joint_step_deg: 12
     default_food_height_m: 0.030   # a scoop run on its own, no record of the piece
-  stepped:                      # the hover route, for aim checks (rammp acquire --stop-after hover10)
+  stepped:                      # the hover route, for aim checks (tip_px: rammp acquire --stop-after hover10, rise)
     hover_m: {hover30: 0.030, hover10: 0.010}
     slow_zone_m: 0.020
     approach_stop_m: 0.010
-    punch_range_m: [0.010, 0.060]   # --start-at punch: from a hover, on down to the floor
     descend_max_m: 0.200
     fast_mps: 0.050
     slow_mps: 0.010
@@ -175,7 +163,6 @@ perception:
       max_rms_m: 0.008
       min_points: 300
       min_captures: 2
-      max_age_s: 3600
       wrist_down_cos: 0.95
       crop_m: 0.25
       table_points: 3000
@@ -206,8 +193,6 @@ delivery:
   bite_timeout_s: 60.0
   bite_baseline_samples: 40
   face:
-    zoom_grid: 3                # no face in the whole frame: n x n half-overlapping crops (a far user); 0 = off
-    zoom_every_s: 0.5
     eye_corners_m: 0.090        # the outer eye corners' spacing: the face's range without depth
     depth_beyond_eyes_factor: 1.6   # lips' depth past this x the eye-spacing range (and 0.3 m beyond) is not theirs
   retract:

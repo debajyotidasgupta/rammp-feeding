@@ -126,18 +126,6 @@ def _stamp() -> str:
     return time.strftime("%H%M%S", time.localtime(t)) + ".%03d" % (int(t * 1000) % 1000)
 
 
-def save_json(name: str, obj: Any, d: Path | None = None) -> Path | None:
-    d = d or here()
-    if d is None:
-        return None
-    p = d / ("%s_%s.json" % (_stamp(), name))
-    try:
-        p.write_text(json.dumps(obj, indent=1, default=_jsonable))
-        return p
-    except (OSError, TypeError, ValueError):
-        return None
-
-
 def save_arrays(name: str, d: Path | None = None, **arrays: Any) -> Path | None:
     d = d or here()
     if d is None:

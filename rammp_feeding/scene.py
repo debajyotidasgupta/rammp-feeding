@@ -3,12 +3,12 @@ follow from them (base frame, m).
 
   the wrist camera   intrinsics and its mount in the tool frame (camera profile), pixel mappings
   the utensil tip    camera + camera_to_tip along the axis + the tip's sideways offset read off the image (tip_px)
-  the workspace      the scene camera's reading (state_dir/scene_state.json: rammp locate-scene, once per rammp feed)
-                     when one is configured, else config workspace: it is trusted to its error_m, which the planner's
-                     world and our tip floor keep as extra clearance (the wrist camera then measures the food itself)
+  the workspace      the scene camera's reading (state_dir/scene_state.json: rammp locate-scene, once per rammp feed),
+                     trusted to its error_m, which the planner's world and our tip floor keep as extra clearance (the
+                     wrist camera then measures the food itself)
   the user           where the operator seats them: motion.free_space.user_mouth_m, fixed for the session
-  food_detect_start  computed: the wrist camera overlook_camera_height_m above the table, the tip over the bowl, in
-                     the captured overlook's orientation (calibration overlook.json), by continuous IK from it
+  food_detect_start  computed: the wrist camera overlook_camera_height_m above the table, the tip over the bowl's
+                     centre, in the captured overlook's orientation (calibration overlook.json), by continuous IK from it
   the planner world  the table (raised to our tip floor), a hollow bowl, the user round user_mouth_m, the
                      pedestal -- RAMMP-CuRobo's world schema, cuboids only
 """
@@ -50,33 +50,16 @@ def camera_pose(arm, q=None) -> tuple[np.ndarray, np.ndarray]:
     return T + R @ CAM_IN_TOOL, R @ CAM_ROT
 
 
-def to_pixel(cam, o, Rc, p) -> tuple[float, float, float]:
-    """A base-frame point -> (u, v, depth along the optical axis)."""
-    c = Rc.T @ (np.asarray(p, float) - o)
-    return (*cam.pixel(c), float(c[2]))
-
-
-def from_pixel(cam, o, Rc, u, v, z) -> np.ndarray:
-    """A colour pixel at depth z (along the optical axis) -> the base-frame point."""
-    return o + Rc @ cam.ray(u, v, z)
-
-
 # ------------------------------------------------------------------ the workspace
 def workspace() -> dict:
-    """bowl_xy, table_z, bowl_top_z, bowl_radius, error_m (how far the reading may be off), source."""
-    w = cfg.workspace
-    if cfg.profiles.scene_camera:
-        try:
-            st = json.loads((state_dir() / "scene_state.json").read_text())
-            return dict(bowl_xy=[float(v) for v in st["bowl_xy"]], table_z=float(st["table_z"]),
-                        bowl_top_z=float(st["bowl_top_z"]), bowl_radius=float(st.get("rim_radius_m") or w.bowl_radius_m),
-                        error_m=float(cfg.scene_camera.error_m),
-                        source="scene camera, %s" % time.strftime("%H:%M:%S", time.localtime(st["t"])))
-        except (OSError, ValueError, KeyError):
-            pass
-    return dict(bowl_xy=[float(v) for v in w.bowl_centre_m], table_z=float(w.table_height_m),
-                bowl_top_z=float(w.table_height_m) + float(w.bowl_height_m), bowl_radius=float(w.bowl_radius_m),
-                error_m=0.0, source="config")
+    """The scene camera's reading: bowl_xy, table_z, bowl_top_z, bowl_radius, error_m (how far it may be off), when."""
+    f = state_dir() / "scene_state.json"
+    if not f.exists():
+        raise FileNotFoundError("no scene camera reading (%s) -- rammp locate-scene" % f)
+    st = json.loads(f.read_text())
+    return dict(bowl_xy=[float(v) for v in st["bowl_xy"]], table_z=float(st["table_z"]), bowl_top_z=float(st["bowl_top_z"]),
+                bowl_radius=float(st.get("rim_radius_m") or cfg.workspace.bowl_radius_m),
+                error_m=float(cfg.scene_camera.error_m), when=time.strftime("%H:%M:%S", time.localtime(st["t"])))
 
 
 def user_mouth() -> np.ndarray:
@@ -101,23 +84,14 @@ def captured(name: str) -> list[float]:
     return [float(v) for v in calibration(name)["joints_deg"]]
 
 
-def shift() -> np.ndarray:
-    """How far the bowl (x, y) and the table (z) are from where the bowl profile was captured."""
-    now, then = workspace(), cfg.bowl.captured_at
-    return np.array([now["bowl_xy"][0] - float(then.bowl_centre_m[0]), now["bowl_xy"][1] - float(then.bowl_centre_m[1]),
-                     now["table_z"] - float(then.table_height_m)])
-
-
 def overlook_goal(arm) -> tuple[np.ndarray, np.ndarray]:
-    """food_detect_start's tool pose: the captured overlook's orientation, the tip (or the lens: overlook_aim) over the
-    bowl's centre + overlook_offset_m, the camera overlook_camera_height_m above the table."""
+    """food_detect_start's tool pose: the captured overlook's orientation, the tip over the bowl's centre, the camera
+    overlook_camera_height_m above the table."""
     _, R = arm.tool(captured("overlook"))
-    ws, W = workspace(), cfg.workspace
-    cam = R @ CAM_IN_TOOL
-    aim = R @ arm.tip_tool if str(W.overlook_aim) == "tip" else cam
-    off = [float(v) for v in W.overlook_offset_m]
-    return np.array([ws["bowl_xy"][0] + off[0] - aim[0], ws["bowl_xy"][1] + off[1] - aim[1],
-                     ws["table_z"] + float(W.overlook_camera_height_m) - cam[2]]), R
+    ws = workspace()
+    cam, tip = R @ CAM_IN_TOOL, R @ arm.tip_tool
+    return np.array([ws["bowl_xy"][0] - tip[0], ws["bowl_xy"][1] - tip[1],
+                     ws["table_z"] + float(cfg.workspace.overlook_camera_height_m) - cam[2]]), R
 
 
 _RESOLVED: dict[tuple, list[float]] = {}
@@ -145,15 +119,11 @@ def overlook_joints(arm) -> list[float]:
 
 def scoop_end(arm) -> dict:
     """Where the scoop carries the food (the swing starts there): the bowl profile's scoop end (its joints, placed by
-    our FK) moved with the table (workspace.scoop_end_follows: table) or the bowl and the table (bowl), raised
-    acquisition.scoop.end_raise_m; joints_deg stays the IK seed (the arm's shape)."""
+    our FK) moved up or down with the table from where it was set, raised acquisition.scoop.end_raise_m; joints_deg
+    stays the IK seed (the arm's shape)."""
     se = dict(cfg.bowl.scoop_end)
-    se["tool_m"] = [float(v) for v in arm.tool(se["joints_deg"])[0]]
-    d = shift()
-    if str(cfg.workspace.scoop_end_follows) == "table":
-        d = np.array([0.0, 0.0, d[2]])
-    d = d + np.array([0.0, 0.0, float(cfg.acquisition.scoop.end_raise_m)])
-    se["tool_m"] = [float(se["tool_m"][i]) + float(d[i]) for i in range(3)]
+    dz = workspace()["table_z"] - float(cfg.bowl.captured_at.table_height_m) + float(cfg.acquisition.scoop.end_raise_m)
+    se["tool_m"] = [float(v) for v in arm.tool(se["joints_deg"])[0] + np.array([0.0, 0.0, dz])]
     return se
 
 

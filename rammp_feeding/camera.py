@@ -58,7 +58,3 @@ class CameraModel:
         z = depth_mm[v, u] / 1000.0
         p = np.stack([(u - d.cx) * z / d.fx, (v - d.cy) * z / d.fy, z], axis=1)
         return p @ self.d2c[:3, :3].T + self.d2c[:3, 3]
-
-    def depth_to_colour_shift_m(self) -> float:
-        """How far the depth sensor sits from the colour camera along its axis (0 for a D405: one sensor)."""
-        return float(self.d2c[2, 3])

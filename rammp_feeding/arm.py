@@ -285,15 +285,14 @@ class Arm:
         return min(t[2] for t in tips), max(t[2] for t in tips)
 
     def travel(self, goal: Sequence[float], label: str, dps: float | None = None, go: bool = True,
-               max_reach_m: float | None = None, start: Sequence[float] | None = None, carrying: bool = False,
-               **kw) -> list[Joints]:
-        """A collision-free path from the shared planner, from here (or `start`, plan only) to goal, with our world pushed
+               max_reach_m: float | None = None, carrying: bool = False, **kw) -> list[Joints]:
+        """A collision-free path from the shared planner, from here to goal (go=False: plan only), with our world pushed
         to it first; thinned, checked as it will run against our tip floor, the utensil's tilt (no further than its
         start or its goal already is, unless max_tilt says) and, for the utensil (and, carrying, the piece), against
         our boxes -- re-planned when it fails any -- run, and settled exactly onto goal."""
         from rammp_feeding.scene import push_world, tip_floor, utensil_boxes, utensil_spheres
         FS = M.free_space
-        q = list(start) if start is not None else self.q()
+        q = self.q()
         if max_step(q, goal) <= float(M.near_pose_deg):
             if go:
                 self.goto(goal, "settle " + label)

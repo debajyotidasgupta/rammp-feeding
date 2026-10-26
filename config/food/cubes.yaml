@@ -1,7 +1,4 @@
-# Cut cubes, ~20-30 mm (melon, apple, pineapple, cheese, cooked meat), often packed with no bowl floor showing between
-# them (the plunge then goes a fixed depth below the piece's top: acquisition.plunge.no_floor).
+# Cut cubes, ~20-30 mm (melon, apple, pineapple, cheese, cooked meat), laid out spaced in the bowl.
 
 name: cubes
 prompt: piece of food           # SAM3's words for it
-exclude_grapes: true            # never target a dark red / purple box: grapes roll off the fork
-aim_offset_base_m: [0.0, 0.0]   # (x, y) base frame, added to the target piece's centre

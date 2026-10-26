@@ -3,7 +3,7 @@ under the utensil tip. Everything is placed in the base frame: each depth pixel 
 driver's camera_info and /tf_static) and the camera's pose from the arm.
 
 perceive: one colour frame and a depth median from frames after the arm stopped; SAM3, one call, for the bowl and the
-food (boxes and masks); the food filtered (slivers, grapes, the utensil's own pixels, outside or too big for the bowl,
+food (boxes and masks); the food filtered (slivers, the utensil's own pixels, outside or too big for the bowl,
 overlaps); each piece's top (its mask's highest surface) and the floor round it; the most central piece (the most rim
 clearance), aimed at the middle of its top; the tool's goal the level slide that puts the utensil tip right above that
 point. Exit 3: the bowl is empty; 5: food is left but no piece is pickable.
@@ -78,10 +78,6 @@ def food(rgb: np.ndarray, dets, bowl: np.ndarray | None) -> list[Detection]:
         if bowl is not None and ((m & bowl).sum() / n <= float(P.food_inside_bowl_min)
                                  or n >= float(P.food_max_frac_of_bowl) * bowl.sum()):
             continue
-        if cfg.food.get("exclude_grapes", False):        # dark red / purple with little green (rolls off a fork), or blue
-            r, g, b = rgb[m].mean(0)
-            if (g < 110 and r > 1.5 * g) or (b > r and b > g):
-                continue
         if any((m & o).sum() / max(1, (m | o).sum()) > float(P.overlap_iou) for o in masks):
             continue
         out.append(d)
@@ -153,8 +149,7 @@ def perceive(robot, arm, out: Path) -> dict:
     d, g = min(geo, key=lambda dg: math.hypot(dg[1]["xy"][0] - ws["bowl_xy"][0], dg[1]["xy"][1] - ws["bowl_xy"][1]))
     T, _ = arm.tool(q)
     tip = arm.tip(q)
-    aim = [float(v) for v in cfg.food.get("aim_offset_base_m", [0.0, 0.0])]
-    goal = [float(T[0] + g["xy"][0] - tip[0] + aim[0]), float(T[1] + g["xy"][1] - tip[1] + aim[1]), float(T[2])]
+    goal = [float(T[0] + g["xy"][0] - tip[0]), float(T[1] + g["xy"][1] - tip[1]), float(T[2])]
     tgt = dict(piece=dict(g, box=d.box, score=d.score), tool_now=[float(v) for v in T], tool_goal=goal, t=time.time())
     (out / "target.json").write_text(json.dumps(tgt, indent=1))
     log.info("  target: the piece at (%.3f, %.3f), its top z %.3f; the tool slides %+.1f, %+.1f mm", *g["xy"], g["top_z"],

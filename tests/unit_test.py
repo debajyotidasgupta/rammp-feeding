@@ -143,17 +143,15 @@ class Restored(unittest.TestCase):
         robot.effort_fn = lambda t: np.zeros(7)
         self.assertEqual(bite(robot, arm, 1.0), 4)               # no bite
 
-    def test_hover_route_then_punch_then_scoop(self):
-        from rammp_feeding.acquire import acquire
+    def test_hover_then_rise(self):
+        """The aim check for tip_px: down to a 10 mm hover over the piece, then straight back up."""
+        from rammp_feeding.acquire import acquire, rise
         sc, robot, arm = self._at_overlook()
-        out = Path(tempfile.mkdtemp())
-        acquire(robot, arm, dict(tool_goal=list(arm.tool()[0])), out, stop_after="hover10")
+        z0 = arm.tip()[2]
+        acquire(robot, arm, dict(tool_goal=list(arm.tool()[0])), Path(tempfile.mkdtemp()), stop_after="hover10")
         self.assertAlmostEqual(arm.tip()[2] - (sc.table_z + sc.floor_lift + sc.piece_height), 0.010, delta=0.002)
-        acquire(robot, arm, {}, out, start_at="punch", stop_after="punch")
-        want = sc.table_z + float(cfg.bowl.floor_above_table_m) + float(cfg.utensil.punch_floor_margin_m)
-        self.assertAlmostEqual(arm.tip()[2], want, delta=0.002)
-        acquire(robot, arm, {}, out, start_at="scoop")
-        self.assertGreater(g.axis(arm.tool()[1])[1], 0.95)       # level, pointing at the user
+        rise(arm)
+        self.assertAlmostEqual(arm.tip()[2], z0, delta=0.002)
 
     def test_direct_home(self):
         from rammp_feeding.cli import home
@@ -232,18 +230,16 @@ class Plunge(unittest.TestCase):
         site(sc)
         tip_z = sc.table_z + 0.20
         u = dict(gap_top=0.175, gap_floor=0.20, height=0.025, top_z=sc.table_z + 0.025, floor_z=sc.table_z)   # the floor through the glass
-        down, food, mode = plunge_depth(u, tip_z)
-        self.assertEqual(mode, "floor")
+        down, food = plunge_depth(u, tip_z)
         self.assertAlmostEqual(tip_z - down, sc.table_z + float(cfg.bowl.floor_above_table_m)
                                + float(cfg.utensil.punch_floor_margin_m), places=6)
 
-    def test_packed_food(self):
+    def test_no_floor_seen_is_refused(self):
         from rammp_feeding.acquire import plunge_depth
         sc = Scene()
         site(sc)
-        down, food, mode = plunge_depth(dict(gap_top=0.15, top_z=sc.table_z + 0.05), sc.table_z + 0.20)
-        self.assertEqual(mode, "below top")
-        self.assertAlmostEqual(down, 0.15 + float(cfg.acquisition.plunge.no_floor.depth_below_top_m))
+        with self.assertRaises(MoveError):
+            plunge_depth(dict(gap_top=0.15, top_z=sc.table_z + 0.05), sc.table_z + 0.20)
 
 
 class World(unittest.TestCase):

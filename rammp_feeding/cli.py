@@ -6,7 +6,7 @@
                                    planner -- only for a workspace someone has checked is clear)
     rammp detect [--plan]          to food_detect_start, over the bowl (a cuRobo path; --plan: plan only)
     rammp perceive                 at food_detect_start: the target piece (a new bite)
-    rammp acquire [--stop-after over|hover30|hover10|plunge|punch] [--start-at over|punch|scoop]
+    rammp acquire [--stop-after over|hover30|hover10|plunge] [--start-at over|scoop]
     rammp rise                     after a hover: straight back up to the overlook height
     rammp deliver [--stop-after swing|present|bite] [--start-at swing|present|bite|retract] [--no-wait-open]
     rammp retract                  from the user back to food_detect_start
@@ -54,7 +54,7 @@ def report(arm, what: str) -> None:
 def detect(robot, arm, plan: bool = False) -> None:
     ws = scene.workspace()
     goal = scene.overlook_joints(arm)
-    log.info("  the bowl at (%.3f, %.3f), table z %.3f (%s)", *ws["bowl_xy"], ws["table_z"], ws["source"])
+    log.info("  the bowl at (%.3f, %.3f), table z %.3f (the scene camera, %s)", *ws["bowl_xy"], ws["table_z"], ws["when"])
     arm.travel(goal, "to food_detect_start", go=not plan)
 
 
@@ -90,9 +90,8 @@ def _target() -> dict:
 def feed(robot, arm, face, bites: int) -> int:
     from rammp_feeding.acquire import acquire
     from rammp_feeding.deliver import deliver
-    if cfg.profiles.scene_camera:
-        from rammp_feeding.scene_camera import locate
-        locate(robot, record.session("feed"))
+    from rammp_feeding.scene_camera import locate
+    locate(robot, record.session("feed"))
     detect(robot, arm)
     n = 0
     while n < bites:
@@ -154,10 +153,9 @@ def check(robot, arm) -> int:
                 % (m.colour.width, m.colour.height))
         except Exception as e:  # noqa: BLE001
             row(False, role, str(e))
-    if cfg.profiles.scene_camera:
-        seg = robot.segmented_objects(5.0)
-        row(seg is not None, "scene segmenter", "publishing (%d objects)" % len(seg) if seg is not None else
-            "%s silent: the bowl falls back to SAM3" % cfg.ros.segmenter_topic, warn=True)
+    seg = robot.segmented_objects(5.0)
+    row(seg is not None, "scene segmenter", "publishing (%d objects)" % len(seg) if seg is not None else
+        "%s silent: the bowl falls back to SAM3" % cfg.ros.segmenter_topic, warn=True)
     return 1 if bad else 0
 
 
@@ -187,9 +185,8 @@ def main(argv=None) -> int:
     rc = 0
     try:
         arm = Arm(robot)                           # (the arm's model, the wrist camera's camera_info and tf)
-        if cfg.profiles.scene_camera:
-            from rammp_feeding.scene_camera import publish
-            publish(robot)                         # our measured scene camera pose, on /tf_static
+        from rammp_feeding.scene_camera import publish
+        publish(robot)                             # our measured scene camera pose, on /tf_static
         c = a.command
         if c == "check":
             rc = check(robot, arm)

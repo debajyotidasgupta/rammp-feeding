@@ -104,6 +104,15 @@ class Face:
         return dict(cam_xyz=[float(x) for x in cam.ray(u, v, z)], source=src, open=opening,
                     range_from_eyes_m=z_eyes, px=[float(u), float(v)])
 
+    def find(self, cam, wait_s: float) -> bool:
+        """A face in the wrist camera's view within wait_s."""
+        t0, last = time.time(), 0.0
+        while time.time() - t0 < wait_s:
+            last, rgb = cam.frame(after=last, wait_s=2.0)
+            if self.landmarks(rgb) is not None:
+                return True
+        return False
+
     def wait_open(self, cam, timeout_s: float, out: Path) -> tuple[float, np.ndarray] | None:
         """Watch the wrist camera until the mouth has been open open_mouth_hold_s (frames with no face found are
         skipped, up to open_mouth_gap_s: a far face is not found in every frame): (that frame's time, RGB), or None

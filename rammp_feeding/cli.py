@@ -13,7 +13,8 @@
     rammp feed [--bites N]         the loop: bite after bite until the bowl is empty or the user declines
     rammp locate-scene             the bowl and the table from the scene camera (state_dir/scene_state.json)
     rammp calibrate-scene [--reset]   the scene camera's pose from the arm (one capture here; nothing moves)
-    rammp capture home|overlook    the arm's joints now as feeding_start / food_detect_start's arm shape (state_dir)
+    rammp capture home|overlook|deliver   the arm's joints now as feeding_start / food_detect_start's arm shape / the
+                                   delivery look (state_dir)
 
 Exit codes: 0 done; 1 stopped or refused (the arm stationary where it stopped); 3 the bowl is empty; 5 food left but
 none pickable; 7 the user declined (retracted); 8 the presentation refused (retracted).
@@ -51,10 +52,7 @@ def report(arm, what: str) -> None:
 
 
 def detect(robot, arm, plan: bool = False) -> None:
-    from rammp_feeding.arm import MoveError
     ws = scene.workspace()
-    if ws["age_s"] > float(cfg.workspace.scene_max_age_s):
-        raise MoveError("the scene camera's reading is %.0f min old -- rammp locate-scene first" % (ws["age_s"] / 60))
     goal = scene.overlook_joints(arm)
     log.info("  the bowl at (%.3f, %.3f), table z %.3f (%s)", *ws["bowl_xy"], ws["table_z"], ws["source"])
     arm.travel(goal, "to food_detect_start", go=not plan)
@@ -167,7 +165,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="rammp", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", choices=["check", "state", "home", "detect", "perceive", "acquire", "rise", "deliver",
                                         "retract", "feed", "locate-scene", "calibrate-scene", "capture"])
-    ap.add_argument("name", nargs="?", help="capture: home | overlook")
+    ap.add_argument("name", nargs="?", help="capture: home | overlook | deliver")
     ap.add_argument("--plan", action="store_true")
     ap.add_argument("--stop-after", default="")
     ap.add_argument("--start-at", default="")
@@ -226,8 +224,8 @@ def main(argv=None) -> int:
             from rammp_feeding.scene_camera import calibrate
             rc = 0 if calibrate(robot, arm, a.reset) else 1
         elif c == "capture":
-            if a.name not in ("home", "overlook"):
-                raise SystemExit("rammp capture home|overlook")
+            if a.name not in ("home", "overlook", "deliver"):
+                raise SystemExit("rammp capture home|overlook|deliver")
             qs = []
             for _ in range(30):
                 qs.append(arm.q())

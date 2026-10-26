@@ -6,8 +6,8 @@ cd "$(dirname "$0")/.."
 PY=${PY:-python3}
 fail=0
 echo "== unit tests"; $PY -W ignore tests/unit_test.py 2>&1 | tail -1 | grep -q OK || { $PY -W ignore tests/unit_test.py; fail=1; }
-for a in "" "--piece 0.03,0" "--piece -0.03,0.02" "--piece 0,-0.035" "--user-offset 0.1,0,0" "--user-offset -0.25,0.05,0.05" \
-         "--user-offset 0,-0.12,-0.05" "--user-offset -0.4,0,0 --expect 8"; do
+for a in "" "--piece 0.03,0" "--piece -0.03,0.02" "--piece 0,-0.035" "--user-offset 0.08,0,0" "--user-offset -0.06,0.04,0.04" \
+         "--user-offset 0,-0.07,-0.05" "--user-offset -0.25,0.05,0.05 --expect 8"; do
   printf "== bite %-38s " "$a"
   $PY tests/test_bite.py $a 2>&1 | tail -1 | tee /dev/stderr | grep -qE "GOES THROUGH|AS EXPECTED" || fail=1
 done 2>&1

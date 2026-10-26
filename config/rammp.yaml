@@ -52,7 +52,6 @@ workspace:                      # where the table and the bowl are (arm base fra
   overlook_camera_height_m: 0.45   # food_detect_start: the wrist camera this high above the table, over the bowl
   overlook_aim: tip             # what goes over the bowl's centre: tip (the utensil) or lens (the camera's axis)
   overlook_offset_m: [0.0, 0.0] # the aim point this far (x, y) from the bowl's centre
-  scene_max_age_s: 3600         # rammp detect refuses a scene camera reading older than this (the bowl may have moved)
   scoop_end_follows: table      # the scoop end moves with the bowl (x, y, z) or the table (z only)
 
 motion:
@@ -87,7 +86,7 @@ motion:
     min_tip_above_table_m: 0.05 # our floor for the utensil tip (scene.tip_floor): above the table ...
     min_tip_above_bowl_m: 0.015 # ... above the bowl's top over the bowl
     bowl_margin_m: 0.04         # "over the bowl": within its rim radius + this
-    user_mouth_m: [-0.277, 0.306, 0.397]   # the user in the planner's world until a delivery measures the mouth
+    user_mouth_m: [-0.277, 0.306, 0.397]   # where the operator seats the user: their head and torso in the planner's world
     wheelchair: false           # the wheelchair's boxes (config/wheelchair_boxes.yaml) in the planner's world
 
 guards:                         # the contact guard: a joint-torque step this big against recent history = stop
@@ -183,10 +182,12 @@ perception:
       table_points: 3000
 
 delivery:
-  lift_m: 0.075                 # the swing: this far above the scoop end, ...
-  retract_tries_m: [0.120, 0.100, 0.080, 0.060, 0.040, 0.0]   # ... turned to the user, retracted the most of these
-  swing_dps: 61.0
-  detect_sidestep_m: 0.050      # ... then to the user's right (-Y): the food out of the camera's view of the mouth
+  swing_dps: 61.0               # the swing to the delivery look (rammp capture deliver)
+  second_look_m: [0.0, -0.050, 0.0]   # no face or no usable mouth from the delivery look: this much further (base frame;
+                                # -Y: to the user's right), straight, and look again
+  look_mps: 0.044
+  face_find_s: 2.0              # a look with no face found in this long: the second look (from the first) or refused
+  seated_tol_m: 0.10            # a mouth measured further than this from user_mouth_m: refused (the planner's user is there)
   stop_m: 0.080                 # the utensil tip this far short of the mouth
   aim_dz_m: -0.010              # below the mouth
   approach_mps: 0.077
@@ -194,10 +195,8 @@ delivery:
   max_approach_m: 0.800
   approach_step_m: 0.005
   max_turn_deg: 30.0            # the utensil turned toward the mouth by at most this
-  mouth_depth_range_m: [0.25, 1.00]   # a mouth outside this is not a face at the utensil: look again
+  mouth_depth_range_m: [0.25, 1.00]   # a mouth outside this is not a face at the utensil: the second look
   level_tol: 0.1                # |utensil axis z| under this = level
-  pointing_tol_cos: 0.99        # the utensil points at the user (+Y) after the scoop
-  arrived_m: 0.003
   open_mouth_ratio: 0.20        # inner-lip gap / mouth width; closed reads <= 0.02
   open_mouth_hold_s: 0.30
   open_mouth_gap_s: 0.30        # frames with no face found inside the hold: skipped, up to this long
@@ -215,7 +214,5 @@ delivery:
   retract:
     back_off_mps: 0.20
     home_dps: 61.0
-    back_off_m: 0.10            # straight back this far toward where the swing ended (null: all the way), ...
-    tuck_radii_m: [0.35, 0.45, 0.55]   # ... on in toward the arm's base to the first of these it can hold level
     reach_margin_m: 0.10        # the planned return keeps the tip within its start's / goal's reach + this
-    max_from_swing_end_m: 0.900
+    max_from_look_m: 0.900      # backing off from further than this from the delivery look: refused

@@ -3,13 +3,14 @@ follow from them (base frame, m).
 
   the wrist camera   intrinsics and its mount in the tool frame (camera profile), pixel mappings
   the utensil tip    camera + camera_to_tip along the axis + the tip's sideways offset read off the image (tip_px)
-  the workspace      the scene camera's latest reading (state_dir/scene_state.json, rammp locate-scene) when one is
-                     configured, else config workspace: it is trusted to its error_m, which the planner's world and
-                     our tip floor keep as extra clearance (the wrist camera then measures the food itself)
+  the workspace      the scene camera's reading (state_dir/scene_state.json: rammp locate-scene, once per rammp feed)
+                     when one is configured, else config workspace: it is trusted to its error_m, which the planner's
+                     world and our tip floor keep as extra clearance (the wrist camera then measures the food itself)
+  the user           where the operator seats them: motion.free_space.user_mouth_m, fixed for the session
   food_detect_start  computed: the wrist camera overlook_camera_height_m above the table, the tip over the bowl, in
                      the captured overlook's orientation (calibration overlook.json), by continuous IK from it
-  the planner world  the table (raised to our tip floor), a hollow bowl, the user round the last measured mouth,
-                     the wheelchair, the pedestal -- RAMMP-CuRobo's world schema, cuboids only
+  the planner world  the table (raised to our tip floor), a hollow bowl, the user round user_mouth_m, the
+                     wheelchair, the pedestal -- RAMMP-CuRobo's world schema, cuboids only
 """
 
 from __future__ import annotations
@@ -62,32 +63,25 @@ def from_pixel(cam, o, Rc, u, v, z) -> np.ndarray:
 
 # ------------------------------------------------------------------ the workspace
 def workspace() -> dict:
-    """bowl_xy, table_z, bowl_top_z, bowl_radius, error_m (how far the reading may be off), age_s, source."""
+    """bowl_xy, table_z, bowl_top_z, bowl_radius, error_m (how far the reading may be off), source."""
     w = cfg.workspace
     if cfg.profiles.scene_camera:
         try:
             st = json.loads((state_dir() / "scene_state.json").read_text())
             return dict(bowl_xy=[float(v) for v in st["bowl_xy"]], table_z=float(st["table_z"]),
                         bowl_top_z=float(st["bowl_top_z"]), bowl_radius=float(st.get("rim_radius_m") or w.bowl_radius_m),
-                        error_m=float(cfg.scene_camera.error_m), age_s=time.time() - float(st["t"]),
+                        error_m=float(cfg.scene_camera.error_m),
                         source="scene camera, %s" % time.strftime("%H:%M:%S", time.localtime(st["t"])))
         except (OSError, ValueError, KeyError):
             pass
     return dict(bowl_xy=[float(v) for v in w.bowl_centre_m], table_z=float(w.table_height_m),
                 bowl_top_z=float(w.table_height_m) + float(w.bowl_height_m), bowl_radius=float(w.bowl_radius_m),
-                error_m=0.0, age_s=0.0, source="config")
+                error_m=0.0, source="config")
 
 
-def mouth_now() -> list[float]:
-    """The user's mouth: the last delivery's measurement (state_dir/mouth_state.json), else motion.free_space.user_mouth_m."""
-    try:
-        return [float(v) for v in json.loads((state_dir() / "mouth_state.json").read_text())["mouth"]]
-    except (OSError, ValueError, KeyError):
-        return [float(v) for v in cfg.motion.free_space.user_mouth_m]
-
-
-def keep_mouth(mouth) -> None:
-    (state_dir() / "mouth_state.json").write_text(json.dumps(dict(mouth=[float(v) for v in mouth], t=time.time())))
+def user_mouth() -> np.ndarray:
+    """Where the user's mouth is, as the operator seats them (fixed for the session; the approach measures the mouth itself)."""
+    return np.array(cfg.motion.free_space.user_mouth_m, float)
 
 
 def tip_floor(x: float, y: float) -> float:
@@ -173,7 +167,7 @@ def world() -> dict:
     tz, top = ws["table_z"] + e, ws["bowl_top_z"] + e
     bx, by = ws["bowl_xy"]
     r = float(ws["bowl_radius"])
-    m = np.array(mouth_now())
+    m = user_mouth()
     ext = cfg.workspace.table_extent_m
     tx, ty = [float(v) for v in ext.x], [float(v) for v in ext.y]
     tx[0] += e

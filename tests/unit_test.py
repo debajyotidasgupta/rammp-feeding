@@ -162,6 +162,41 @@ class Restored(unittest.TestCase):
         self.assertLess(g.max_step(arm.q(), scene.captured("home")), 0.1)
 
 
+class Delivery(unittest.TestCase):
+    def _at_look(self):
+        from fake_robot import FakeFace
+        sc = Scene()
+        site(sc)
+        robot = FakeRobot(sc, scene.captured("deliver"))
+        return sc, robot, Arm(robot), FakeFace(robot)
+
+    def test_no_face_from_the_delivery_look_then_the_second(self):
+        from rammp_feeding.deliver import present
+        sc, robot, arm, face = self._at_look()
+        look1, finds = arm.tool()[0], []
+        face.find = lambda cam, s: finds.append(arm.tool()[0]) or len(finds) > 1    # no face from the first look
+        self.assertEqual(present(robot, arm, face, Path(tempfile.mkdtemp())), 0)
+        self.assertLess(np.linalg.norm(finds[1] - (look1 + np.array(cfg.delivery.second_look_m))), 0.002)
+        mouth = np.array(sc.mouth) + [0, 0, float(cfg.delivery.aim_dz_m)]
+        self.assertAlmostEqual(np.linalg.norm(arm.tip() - mouth), float(cfg.delivery.stop_m), delta=0.01)
+
+    def test_no_face_from_either_look_is_refused(self):
+        from rammp_feeding.deliver import present
+        sc, robot, arm, face = self._at_look()
+        face.find = lambda cam, s: False
+        with self.assertRaises(MoveError):
+            present(robot, arm, face, Path(tempfile.mkdtemp()))
+
+    def test_the_user_in_the_planners_world_is_where_the_operator_seats_them(self):
+        from rammp_feeding.deliver import present
+        sc, robot, arm, face = self._at_look()
+        sc.mouth = tuple(np.array(sc.mouth) + [0.05, -0.03, 0.02])     # measured elsewhere: the world stays as set up
+        present(robot, arm, face, Path(tempfile.mkdtemp()))
+        head = next(o for o in scene.world()["obstacles"] if o["name"] == "user_head")
+        m = np.array(cfg.motion.free_space.user_mouth_m)
+        self.assertLess(np.linalg.norm(np.array(head["position"]) - (m + [-0.09, 0.0, 0.05])), 1e-9)
+
+
 class Perception(unittest.TestCase):
     def test_food_filters(self):
         from rammp_feeding.perception import food, mask_of

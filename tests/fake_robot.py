@@ -211,10 +211,17 @@ class FakeFace:
     def __init__(self, robot):
         self.robot = robot
 
+    def find(self, cam, wait_s):
+        return self.mouth(None, None, cam) is not None
+
     def wait_open(self, cam, timeout_s, out):
         return cam.frame()
 
     def mouth(self, rgb, depth, cam):
+        """None when the mouth is outside the image."""
         o, Rc = self.robot.camera_pose()
         c = Rc.T @ (np.asarray(self.robot.sc.mouth, float) - o)
+        u, v = CAM.pixel(c) if c[2] > 0 else (-1.0, -1.0)
+        if not (0 <= u < D405.width and 0 <= v < D405.height):
+            return None
         return dict(cam_xyz=[float(v) for v in c], source="depth", open=0.4)

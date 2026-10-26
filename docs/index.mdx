@@ -53,10 +53,11 @@ The module keeps what it measures on the robot in `/home/abra/.config/rammp_feed
 `local.yaml` (the machine's own settings, over `config/rammp.yaml`), the captured poses, the scene camera's measured
 pose and latest reading, and the collision world it hands the planner. Delete a file to reset what it holds.
 
-1. `capture home` and `capture overlook` with the arm placed by hand at feeding_start and over the bowl, utensil down;
-   `capture deliver` at the delivery look: the utensil level toward the user's mouth, about 50 mm to their right, the
-   wrist camera on their face. Where the user sits goes in `local.yaml` (`motion.free_space.user_mouth_m`): the
-   planner's world places their head and torso there. Both hold for every session until the setup changes.
+1. `capture home` and `capture overlook` with the arm placed by hand at feeding_start and over the bowl, utensil down.
+   The delivery look ships in `calibration/deliver.json` (the swing's end as tuned at abra: the utensil level toward
+   the user's mouth, about 50 mm to their right); `capture deliver` only to change it. Where the user sits goes in
+   `local.yaml` (`motion.free_space.user_mouth_m`): the planner's world places their head and torso there. Both hold
+   for every session until the setup changes.
 2. A rough guess of the scene camera's pose in `local.yaml` (`scene_camera.extrinsic`), then `calibrate-scene` at
    food_detect_start. It writes the measured pose and publishes it on `/tf_static` as `base_link -> scene_camera_link`.
 3. The utensil: the ruler from the wrist camera's glass to the tip (`utensil.glass_to_tip_m`), then `tip_px` set by

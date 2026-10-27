@@ -301,13 +301,13 @@ class World(unittest.TestCase):
         for gap, refused in ((-0.01, True), (clear - 0.003, True), (clear + 0.005, False)):
             if refused:
                 with self.assertRaisesRegex(MoveError, "within .* of probe"):
-                    arm.check_path([start, q, goal], None, spheres, probe(gap))
+                    arm.check_path([start, q, goal], lambda x, y: -np.inf, None, spheres, probe(gap))
             else:
-                arm.check_path([start, q, goal], None, spheres, probe(gap))
+                arm.check_path([start, q, goal], lambda x, y: -np.inf, None, spheres, probe(gap))
         # a path that starts that near (or inside) may leave from there, but never go nearer
-        arm.check_path([q, goal], None, spheres, probe(clear - 0.005))
+        arm.check_path([q, goal], lambda x, y: -np.inf, None, spheres, probe(clear - 0.005))
         with self.assertRaisesRegex(MoveError, "within .* of probe"):     # out and back over it: nearer than either end
-            arm.check_path([goal, q, goal], None, spheres, probe(clear - 0.005))
+            arm.check_path([goal, q, goal], lambda x, y: -np.inf, None, spheres, probe(clear - 0.005))
 
     def test_a_planned_path_that_tilts_too_far_is_refused_before_it_runs(self):
         sc = Scene()
@@ -316,9 +316,9 @@ class World(unittest.TestCase):
         arm = Arm(robot)
         path = [scene.captured("home"), scene.overlook_joints(arm)]
         worst = max(g.tilt_deg(arm.tool(q)[1]) for q in g.densify(path, 0.5))
-        arm.check_path(path, None, max_tilt=worst + 0.5)
+        arm.check_path(path, lambda x, y: -np.inf, None, max_tilt=worst + 0.5)
         with self.assertRaisesRegex(MoveError, "tilts the utensil"):
-            arm.check_path(path, None, max_tilt=worst - 0.5)
+            arm.check_path(path, lambda x, y: -np.inf, None, max_tilt=worst - 0.5)
         self.assertEqual(robot.moves, [])
 
     def test_the_utensil_checks_our_boxes_the_bowl_exact(self):
@@ -326,8 +326,7 @@ class World(unittest.TestCase):
         site(sc)
         centres, rots, half, names = scene.utensil_boxes()
         raw = {o["name"]: o for o in scene.world()["obstacles"]}
-        self.assertEqual(sorted(names), sorted([n for n in raw if n != "pedestal"] + ["bowl_lid"]))
-        raw["bowl_lid"] = dict(dims=list(half[names.index("bowl_lid")] * 2), rpy_deg=[0.0, 0.0, 0.0])
+        self.assertEqual(sorted(names), sorted(n for n in raw if n not in ("pedestal", "table")))
         pad = float(cfg.motion.free_space.utensil_padding_m)
         for k, n in enumerate(names):
             np.testing.assert_allclose(half[k] * 2, np.asarray(raw[n]["dims"]) + (0 if n.startswith("bowl_") else 2 * pad))
@@ -353,8 +352,16 @@ class World(unittest.TestCase):
         q = scene.overlook_joints(arm)
         T, R = arm.tool(q)
         low = arm.ik(T - np.array([0.0, 0.0, 0.17]), R, q)            # the tip down into the bowl's opening
-        with self.assertRaisesRegex(MoveError, "within .* of (bowl_lid|table)"):     # (the raised table spans under it)
-            arm.check_path([q, low, q], None, scene.utensil_spheres(arm), scene.utensil_boxes())
+        with self.assertRaisesRegex(MoveError, "under the floor"):
+            arm.check_path([q, low, q], scene.tip_floor, None, scene.utensil_spheres(arm), scene.utensil_boxes())
+
+    def test_tip_floor(self):
+        sc = Scene()
+        site(sc)
+        e = float(cfg.scene_camera.error_m)
+        self.assertAlmostEqual(scene.tip_floor(*sc.bowl_xy), sc.table_z + 0.06 + float(cfg.motion.free_space.min_tip_above_bowl_m) + e)
+        self.assertAlmostEqual(scene.tip_floor(0.5, 0.5), sc.table_z + float(cfg.motion.free_space.min_tip_above_table_m) + e)
+        self.assertEqual(scene.tip_floor(-0.5, 0.0), -np.inf)
 
 
 class SceneCalibration(unittest.TestCase):

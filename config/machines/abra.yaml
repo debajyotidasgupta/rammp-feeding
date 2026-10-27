@@ -2,7 +2,7 @@
 # Only this machine's facts.
 
 scene_camera:
-  extrinsic:                    # the starting guess for rammp calibrate-scene (its fit, scene_extrinsic.json, wins): the
-                                # site's calibration the old stack read in place (RAMMP-box-opening's camera_scene.yaml)
-    xyz: [-0.06506, 0.64157, 0.35206]
-    quat_xyzw: [0.044383, 0.020535, -0.265541, 0.962859]
+  extrinsic:                    # the starting guess for rammp calibrate-scene (its fit, scene_extrinsic.json, wins): abra's
+                                # own fit from the arm (2026-10-02, rms 4.1 mm, 3 captures)
+    xyz: [0.16173, 0.66081, 0.38067]
+    quat_xyzw: [0.074443, 0.120699, -0.317451, 0.937611]

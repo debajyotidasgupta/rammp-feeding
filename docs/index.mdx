@@ -69,8 +69,8 @@ What is fixed to the arm ships in the tree and stays when the rig moves; what th
 
 **Per site** (its `local.yaml`; `config/machines/<name>.yaml` is the versioned copy):
 
-1. The table's footprint in the arm's base frame, `workspace.table_extent_m` (x, y): the planner's table, and the
-   utensil's.
+1. The table's footprint in the arm's base frame, `workspace.table_extent_m` (x, y): the planner's table and our tip
+   floor.
 2. The scene camera: a rough guess of its pose (`scene_camera.extrinsic`), then `calibrate-scene` at
    food_detect_start. It writes the measured pose (`scene_extrinsic.json`) and publishes it on `/tf_static` as
    `base_link -> scene_camera_link`. Again whenever the camera is moved.

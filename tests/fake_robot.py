@@ -27,14 +27,14 @@ CAM = CameraModel(D405, D405, np.eye(4))
 
 @dataclass
 class Scene:
-    table_z: float = -0.024                         # the abra site (2026-09-30): the scene camera's reading
+    table_z: float = 0.0072                         # the abra site: its arm-fitted calibration's table (2026-10-02)
     bowl_xy: tuple = (0.290, 0.158)
     bowl_radius: float = 0.07
     piece_xy: tuple = (0.296, 0.152)
     piece_radius: float = 0.013
     piece_height: float = 0.025
     floor_lift: float = 0.0                         # the surface the depth reads under the bowl, above the table
-    mouth: tuple = (-0.277, 0.306, 0.397)
+    mouth: tuple = (-0.277, 0.306, 0.428)
 
 
 class FakeTrajectory:

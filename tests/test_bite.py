@@ -5,7 +5,7 @@ food_detect_start, perceive, acquire (OVER, plunge, scoop), deliver (swing, pres
         curobo: RAMMP-CuRobo's real planner (a CUDA box) as the deployment shares it: its default config, our world
         pushed before each planned move
 
-What it checks: every stage's refusals and the geometry (reachability, joint limits, continuity, the utensil's boxes, the
+What it checks: every stage's refusals and the geometry (reachability, joint limits, continuity, our tip floor, the
 plunge's stop above the bowl's own floor, where the tip ends at the mouth). What it cannot: contact, real food,
 images (SAM3 and the face are stand-ins; the depth is rendered from the arm's pose).
 """

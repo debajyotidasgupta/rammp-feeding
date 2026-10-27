@@ -46,7 +46,7 @@ face:
 workspace:                      # arm base frame, m (where the bowl and the table are: the scene camera's reading)
   bowl_centre_m: [0.290, 0.158] # where the operator lays the bowl: the scene camera's candidate nearest it is the bowl
   bowl_radius_m: 0.08           # the bowl's rim radius where the scene camera's rim fit has none
-  table_extent_m: {x: [0.08, 0.76], y: [-0.30, 0.80]}   # its footprint: the planner's table
+  table_extent_m: {x: [0.08, 0.76], y: [-0.30, 0.80]}   # its footprint: the planner's table, where our tip floor applies
   overlook_camera_height_m: 0.45   # food_detect_start: the wrist camera this high above the table, over the bowl
 
 motion:
@@ -75,11 +75,13 @@ motion:
     timeout_s: 30
     replans: 4                  # a path that fails our check: plan again (cuRobo's paths differ), at most this often
     check_step_deg: 0.5         # a planned path is checked as it will run: sampled this finely on the furthest joint
-    utensil_padding_m: 0.01     # the utensil check: our boxes grown this per side (the bowl's pieces exact) ...
-    utensil_clearance_m: 0.0    # ... and the utensil's spheres kept this clear of them (0: out of them; the boxes
-                                # already carry the raised table and the scene camera's error)
-    min_tip_above_table_m: 0.05 # the planner's table is raised this much (the utensil hangs below the gripper)
-    user_mouth_m: [-0.277, 0.306, 0.397]   # where the operator seats the user: their head and torso in the planner's world
+    utensil_padding_m: 0.01     # the utensil check: our boxes (the bowl, the user) grown this per side (the bowl exact) ...
+    utensil_clearance_m: 0.0    # ... and the utensil's spheres kept this clear of them (0: out of them)
+    min_tip_above_table_m: 0.05 # our floor for the utensil tip (scene.tip_floor): above the table (and the planner's
+                                # table raised to it: the utensil hangs below the gripper) ...
+    min_tip_above_bowl_m: 0.015 # ... above the bowl's top over the bowl
+    bowl_margin_m: 0.04         # "over the bowl": within its rim radius + this
+    user_mouth_m: [-0.277, 0.306, 0.428]   # where the operator seats the user: their head and torso in the planner's world
 
 guards:                         # the contact guard: a joint-torque step this big against recent history = stop
   torque_window: {span: 12, gap: 5}   # samples: the baseline window, and the gap before the sample compared to it

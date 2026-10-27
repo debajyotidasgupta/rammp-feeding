@@ -1,0 +1,13 @@
+# The lab Jetson (debajyoti@jetson, 192.168.1.20; the arm at 192.168.1.10): copy to ~/.config/rammp_feeding/local.yaml
+# (mounted at /config). Two D435i: on the wrist (RealSense serial 035422070556) and on the scene (036522071464; its
+# driver with camera_name scene_camera).
+
+profiles:
+  camera: realsense_d435i
+  scene_camera: realsense_d435i_scene
+
+utensil:                        # the fork against this wrist camera
+  glass_to_tip_m: null          # MEASURE with a ruler: the camera's front glass to the tines
+  tip_px: [438, 443]            # the tine tips in the colour image (640x480): read off it at feeding_start; set by 10 mm
+                                # hover checks (rammp acquire --stop-after hover10)
+  image_region_px: [420, 400, 510, 480]   # the tines across the bottom right: never food

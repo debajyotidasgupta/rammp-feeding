@@ -27,9 +27,11 @@ from rammp_feeding.geometry import quat_matrix, rpy_matrix
 
 # ------------------------------------------------------------------ the wrist camera on the arm
 # Its intrinsics and depth -> colour transform are its driver's (camera_info, /tf_static: rammp_feeding.camera); where
-# it sits on the arm is ours (the camera profile's mount: the colour optical frame in the tool frame).
-CAM_IN_TOOL = np.array(cfg.camera.mount.camera_in_tool_m, float)
-CAM_ROT = np.round(quat_matrix(cfg.camera.mount.rotation_quat_xyzw), 12) + 0.0   # optical axes in tool coordinates
+# it sits on the arm is ours (the camera profile's mount: the colour optical frame in the tool frame; CAM_ROT: the optical
+# axes in tool coordinates). None until it is measured (config.unmeasured: the arm is not built without it).
+_MOUNT = cfg.camera.mount
+CAM_IN_TOOL = None if _MOUNT.camera_in_tool_m is None else np.array(_MOUNT.camera_in_tool_m, float)
+CAM_ROT = None if _MOUNT.rotation_quat_xyzw is None else np.round(quat_matrix(_MOUNT.rotation_quat_xyzw), 12) + 0.0
 
 
 def cam_to_tool(p_cam) -> np.ndarray:

@@ -65,10 +65,13 @@ What is fixed to the arm ships in the tree and stays when the rig moves; what th
 - Where the scoop ends: the bowl profile's `scoop_end` (it moves with the table's height), set with the bowl about at
   its `captured_at.bowl_centre_m`.
 - The wrist camera's mount on the arm (the camera profile's `mount`), and the arm's own mount: level (the deployed
-  planner's model).
+  planner's model). A new wrist camera or bracket: its profile in `config/camera/`, the mount measured once with a
+  ruler. Until every measured value is in (`config.MEASURED`), no command builds the arm.
 
 **Per site** (its `local.yaml`; `config/machines/<name>.yaml` is the versioned copy):
 
+0. Its cameras: `profiles.camera` and `profiles.scene_camera` (`config/camera/`: `realsense_d405` and
+   `orbbec_gemini336l` at abra, `realsense_d435i` and `realsense_d435i_scene` in the lab).
 1. The table's footprint in the arm's base frame, `workspace.table_extent_m` (x, y): the planner's table and our tip
    floor.
 2. The scene camera: a rough guess of its pose (`scene_camera.extrinsic`), then `calibrate-scene` at

@@ -1,0 +1,16 @@
+# Intel RealSense D435i on the wrist, through ROS 2 (rammp-deployments: wrist_camera -> d435i_docker, 640x480 colour and
+# depth). Its intrinsics and its depth -> colour transform are its driver's (camera_info, /tf_static): its colour comes
+# off its own RGB sensor beside the stereo pair. Its depth starts about 0.15 m out (the D405's 7 cm): the overlook
+# (0.45 m), the floor round a piece from there and the mouth are well beyond that.
+
+streams:
+  colour_topic: /wrist_camera/color/image_raw
+  depth_topic: /wrist_camera/depth/image_rect_raw
+
+glass_to_optical_m: 0.0042      # its depth origin behind the front glass (Intel's datasheet; a utensil's ruler reading starts at the glass)
+
+mount:                          # where it sits on the arm (ours): the colour optical frame in the tool frame
+  camera_in_tool_m: null        # MEASURE with a ruler: the RGB lens's centre -- x, y off the gripper's axis, z along it
+                                # from the tool point (the 2F-85's TCP, 120 mm out of the flange; behind it is negative)
+  rotation_quat_xyzw: [0.0, 0.0, 1.0, 0.0]      # a half turn about the tool axis (image +u = tool -x, +v = tool -y)
+  image_rotated_at_delivery: true              # the face is upright after a quarter turn at the user

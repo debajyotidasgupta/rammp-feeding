@@ -98,6 +98,17 @@ def load() -> Cfg:
 
 cfg = load()
 
+# Measured on the robot (the wrist camera's mount, the utensil against that camera): null until they are, and nothing
+# builds the arm without them.
+MEASURED = ("camera.mount.camera_in_tool_m", "camera.mount.rotation_quat_xyzw", "utensil.glass_to_tip_m",
+            "utensil.tip_px", "utensil.image_region_px")
+
+
+def unmeasured(c: Cfg | None = None) -> list[str]:
+    """The MEASURED settings still null in this machine's config."""
+    c = cfg if c is None else c
+    return [k for k in MEASURED if c.get(k, None) is None]
+
 
 def state_dir() -> Path:
     """The machine's own state (calibrations measured on site): mounted at /config in the container."""

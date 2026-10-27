@@ -364,6 +364,23 @@ class World(unittest.TestCase):
         self.assertEqual(scene.tip_floor(-0.5, 0.0), -np.inf)
 
 
+class Profiles(unittest.TestCase):
+    def test_every_camera_profile_has_its_roles_keys(self):
+        import yaml
+        for f in sorted((ROOT / "config/camera").glob("*.yaml")):
+            c = yaml.safe_load(f.read_text())
+            role = {"glass_to_optical_m", "mount"} if "mount" in c else {"link_frame", "error_m", "extrinsic"}
+            self.assertLessEqual(role | {"streams"}, set(c), f.name)
+            self.assertLessEqual({"colour_topic", "depth_topic"}, set(c["streams"]), f.name)
+
+    def test_the_arm_is_not_built_until_the_robots_measurements_are_in(self):
+        from unittest import mock
+        robot = FakeRobot(Scene(), scene.captured("home"))
+        with mock.patch.dict(cfg["utensil"], {"glass_to_tip_m": None}), \
+                self.assertRaisesRegex(RuntimeError, r"not measured on this robot yet: utensil\.glass_to_tip_m"):
+            Arm(robot)
+
+
 class SceneCalibration(unittest.TestCase):
     def test_recovers_a_moved_camera(self):
         """Depth points on the arm's spheres (and the table), seen from a known pose; the fit from a guess 4 cm and

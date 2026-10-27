@@ -21,7 +21,7 @@ from typing import Callable, Sequence
 import numpy as np
 
 from rammp_feeding import record
-from rammp_feeding.config import ROOT, cfg
+from rammp_feeding.config import ROOT, cfg, unmeasured
 from rammp_feeding.geometry import densify, fold, max_step, sphere_box_clearance, tilt_deg
 from rammp_feeding.kinematics import Chain
 
@@ -91,6 +91,8 @@ def joint_cap(dps: float) -> float:
 
 class Arm:
     def __init__(self, robot, kin: Chain | None = None):
+        if unmeasured():
+            raise RuntimeError("not measured on this robot yet: %s (docs/index.mdx, setting up a site)" % ", ".join(unmeasured()))
         from rammp_feeding.scene import tip_in_tool       # (the tip model: the wrist camera's intrinsics and mount)
         self.robot, self.kin = robot, kin or chain(robot)
         self.cam = robot.camera_model("camera")

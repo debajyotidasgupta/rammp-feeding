@@ -1,6 +1,7 @@
-// Section navigation for the RAMMP docs site (this repo's docs/ mounted as a section). docs/notes/ is the design
-// history, not user-facing: excluded in the hub's sources.yml.
+// Section navigation for the RAMMP docs site (this repo's docs/ mounted as a section). docs/notes/ holds the
+// engineering notes and is excluded in the hub's sources.yml.
 export default {
   index: 'Introduction',
+  porting: 'Porting to a new site',
   interface: 'Interface reference'
 }

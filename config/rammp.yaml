@@ -1,17 +1,19 @@
 # rammp_feeding -- everything that is tuned, switched on or off, or changes with the deployment (rammp_feeding/config.py).
-# Layers, later wins: this file < the selected profiles < the machine's own local.yaml (in state_dir) < RAMMP_SET.
+# Layers, later wins: this file < the selected profiles < the machine's own local.yaml (in state_dir) < the measured
+# wrist mount (state_dir/wrist_mount.json) < RAMMP_SET. A site sets its own facts in local.yaml (docs/porting.md);
+# the keys marked SITE below are the ones it always sets.
 # Units are in the key names: _m metres, _mps m/s, _dps deg/s, _dps2 deg/s^2, _nm N.m, _n N, _s s, _px pixels.
 
 profiles:
-  camera: realsense_d405        # config/camera/<name>.yaml: the wrist camera -- topics, intrinsics, its mount
+  camera: realsense_d405        # config/camera/<name>.yaml: the wrist camera -- its topics (its mount: calibrate-wrist)
   scene_camera: orbbec_gemini336l   # the fixed scene camera: the COARSE bowl + table (rammp locate-scene)
-  utensil: fork                 # config/utensil/<name>.yaml: camera-to-tip, tip pixel, ...
-  bowl: front                   # config/bowl/<name>.yaml: where the scoop ends, the bowl's floor
+  utensil: fork                 # config/utensil/<name>.yaml: the utensil (its ruler reading and pixels: per site)
+  bowl: front                   # config/bowl/<name>.yaml: the bowl's floor
   food: cubes                   # config/food/<name>.yaml: the detector prompt
 
 deployment:
   state_dir: /config            # the machine's own state, kept across runs: local.yaml, captured poses, the scene
-                                # camera's pose and latest reading (mounted from /home/abra/.config/rammp_feeding)
+                                # camera's pose and latest reading (mounted from the host)
   runs_dir: /runs               # the run record (mounted from the host)
 
 ros:                            # the RAMMP stack's interfaces this module uses
@@ -19,8 +21,7 @@ ros:                            # the RAMMP stack's interfaces this module uses
   plan_action: /rammp_curobo/plan_to_joints          # RAMMP-CuRobo (plan only)
   set_world_service: /rammp_curobo/set_world
   planner_node: /rammp_curobo                        # (its parameters: the world it runs with, put back after us)
-  detect_service: /perception/sam3/detect            # rammp-perception's SAM3
-  segmenter_topic: /perception/object_detections     # rammp-perception's always-on scene segmenter
+  detect_service: /perception/sam3/detect            # rammp-perception's SAM3: every detection (bowl, food)
 
 planner:                         # the shared planner: the arm's paths; the utensil is ours to check (Arm.check_path)
   utensil_spheres:               # the utensil as our check of each planned path takes it: spheres from the gripper's
@@ -44,9 +45,8 @@ face:
   model: /opt/models/face_landmarker.task   # MediaPipe's face landmarker (in the image)
 
 workspace:                      # arm base frame, m (where the bowl and the table are: the scene camera's reading)
-  bowl_centre_m: [0.290, 0.158] # where the operator lays the bowl: the scene camera's candidate nearest it is the bowl
-  bowl_radius_m: 0.08           # the bowl's rim radius where the scene camera's rim fit has none
-  table_extent_m: {x: [0.08, 0.76], y: [-0.30, 0.80]}   # its footprint: the planner's table, where our tip floor applies
+  bowl_centre_m: [0.290, 0.158] # SITE: where the operator lays the bowl: the scene camera's candidate nearest it is the bowl
+  table_extent_m: {x: [0.08, 0.76], y: [-0.30, 0.80]}   # SITE: its footprint (the planner's table, where our tip floor applies)
   overlook_camera_height_m: 0.45   # food_detect_start: the wrist camera this high above the table, over the bowl
 
 motion:
@@ -81,7 +81,8 @@ motion:
                                 # table raised to it: the utensil hangs below the gripper) ...
     min_tip_above_bowl_m: 0.015 # ... above the bowl's top over the bowl
     bowl_margin_m: 0.04         # "over the bowl": within its rim radius + this
-    user_mouth_m: [-0.277, 0.306, 0.428]   # where the operator seats the user: their head and torso in the planner's world
+    user_mouth_m: [-0.277, 0.306, 0.428]   # SITE, per session: where the operator seats the user (their head and torso
+                                # in the planner's world; a measured mouth further than delivery.seated_tol_m is refused)
 
 guards:                         # the contact guard: a joint-torque step this big against recent history = stop
   torque_window: {span: 12, gap: 5}   # samples: the baseline window, and the gap before the sample compared to it
@@ -116,22 +117,18 @@ acquisition:
     rot_exp: 0.8                # turn angle = 90 * s**rot_exp: <1 starts turning the moment the food lifts
     waypoints: 40
     backoff_from: 0.2           # fraction of the scoop before backing off toward the scoop end
-    max_backoff_m: 0.300
-    end_raise_m: 0.100          # the scoop ends this much above the bowl profile's scoop end (clear of the table)
+    max_backoff_m: 0.300        # the scoop backs off to the captured scoop_end: refused when that is further
     max_joint_step_deg: 12
-    default_food_height_m: 0.030   # a scoop run on its own, no record of the piece
   stepped:                      # the hover route, for aim checks (tip_px: rammp acquire --stop-after hover10, rise)
     hover_m: {hover30: 0.030, hover10: 0.010}
-    slow_zone_m: 0.020
-    approach_stop_m: 0.010
-    descend_max_m: 0.200
-    fast_mps: 0.050
-    slow_mps: 0.010
+    descend_max_m: 0.300        # the whole descent from food_detect_start (the tip ~0.23 m above the table there)
+    descend_mps: 0.040          # one straight move down from food_detect_start, starting and stopping smoothly
     rise_mps: 0.040
 
 perception:
   score_threshold: 0.5          # SAM3
   bowl_prompts: [bowl]          # SAM3's words for the bowl in the wrist camera (with the food's, one call)
+  bowl_score_threshold: 0.3     # SAM3 on the bowl in the wrist camera (detect, perceive): it scores a dark bowl 0.4-0.6
   depth_frames: 15              # per-pixel median over this many frames after the arm stopped
   depth_wait_s: 3.0
   min_box_side_px: 25
@@ -144,29 +141,39 @@ perception:
   tip_line_radius_m: 0.004      # "straight under the tip": depth points this near its vertical line
   utensil_depth_margin_m: 0.005 # under the tip, depth no farther than the tip + this is the utensil itself
   utensil_depth_border_px: 3
-  top_band_mm: 6.0              # a piece's top: its mask's points within this of its highest
   food_left_above_floor_mm: 15  # no food box: the bowl is empty only if under food_left_min_frac of its inner area
   food_left_min_frac: 0.05      # stands this far above its floor -- else "food left, none pickable" (exit 5)
   scene:                        # the fixed scene camera (rammp locate-scene)
-    segmenter_classes: [food container]   # the scene segmenter's classes that are a bowl
-    segmenter_max_age_s: 2.0
-    bowl_prompts: [dish, bowl, bowl with a glass jar]   # SAM3's words for it, when the segmenter has none (from the
-                                # side a bowl reads as a dish or a plate with a jar; "bowl" alone boxed a lidded box)
+    bowl_prompts: [dish, bowl, bowl with a glass jar]   # SAM3's words for the bowl (from the side a bowl reads as a
+                                # dish or a plate with a jar; "bowl" alone boxed a lidded box)
     score_threshold: 0.3
     max_reach_m: 0.75
-    max_bowl_height_m: 0.20     # inside the box, the bowl is what stands this high at most above the table ...
-    max_bowl_radius_m: 0.15     # ... a rim wider than this is not a bowl
-    calibration:                # rammp calibrate-scene
-      stride: 4
-      gates_m: [0.06, 0.04, 0.025, 0.015]
-      iterations: 8
-      start_turns_deg: [6, 12]
-      max_rms_m: 0.008
-      min_points: 300
-      min_captures: 2
-      wrist_down_cos: 0.95
-      crop_m: 0.25
-      table_points: 3000
+    max_bowl_height_m: 0.20     # inside its mask, the bowl is what stands this high at most above the table ...
+    max_bowl_radius_m: 0.15     # ... and a circle through its rim wider than this is not a bowl's (both cameras)
+  wrist_calibration:            # the ChArUco board: rammp calibrate-wrist (the wrist camera's mount) and calibrate-scene
+    squares: [7, 9]             # across, down (rammp calibrate-wrist --board prints it)
+    square_m: 0.025             # SITE: a square's side as printed -- measure across all of them (printers scale)
+    marker_ratio: 0.72          # its marker's side / the square's
+    dictionary: DICT_5X5_100
+    legacy_pattern: false       # OpenCV's ChArUco layout before 4.6 (boards from calib.io and older OpenCV)
+    rise_m: 0.10                # from feeding_start: up this much, then this far out from the base's axis, over the board
+    out_m: 0.15
+    pivot_m: 0.30               # the poses pivot on the point this far along the tool axis (the board, under the tool)
+    tilt_deg: 10.0              # turned this much about the tool's x and y, each way ...
+    turn_deg: 20.0              # ... and this much about its axis
+    speed_dps: 10.0
+    settle_s: 0.5               # after each move, before the image
+    wait_board_s: 60.0          # at the first pose: how long to wait for the board to be laid under the camera
+    min_corners: 12
+    max_scale_error: 0.02       # at the first pose the board's distance by the camera's depth and by its image
+                                # (square_m) agree this well, or it refuses: a scaled print moves the camera as much
+    min_poses: 5                # of the 7
+    max_spread_m: 0.005         # accepted when the board's place in the base frame agrees across the poses this well
+    max_spread_deg: 1.0
+    fork_still_std: 8.0         # the utensil: pixels whose grey level varies less than this across the route's frames ...
+    fork_corridor_px: 60        # ... within this of the tool's axis as the camera sees it
+    tip_band_px: 6              # its tips: its pixels within this of its far end along that axis
+    fork_margin_px: 10          # image_region_px: its box, grown by this
 
 delivery:
   swing_dps: 61.0               # the swing to the delivery look (rammp capture deliver)

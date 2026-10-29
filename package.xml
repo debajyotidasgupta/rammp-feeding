@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>rammp_feeding</name>
-  <version>0.1.0</version>
+  <version>0.2.0</version>
   <description>Robot-assisted feeding on the Kinova Gen3: the bowl from the scene camera, the food and the mouth from the
     wrist camera, every move through kinova-gen3-ros2 and the RAMMP-CuRobo planner.</description>
   <maintainer email="dd752@cornell.edu">Debajyoti Dasgupta</maintainer>

@@ -113,7 +113,7 @@ def event(kind: str, **data: Any) -> None:
     if s is None:
         return
     try:
-        line = json.dumps(dict(t=round(time.time(), 3), kind=kind, **data), default=_jsonable)
+        line = json.dumps(dict(data, t=round(time.time(), 3), kind=kind), default=_jsonable)   # (the event's own time)
         with open(s / "events.jsonl", "a") as f:
             f.write(line + "\n")
         log.debug(line)

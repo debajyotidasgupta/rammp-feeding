@@ -1,9 +1,6 @@
-# The bowl in front of the user. Where it is now is the scene camera's reading; this profile holds what was calibrated
-# with it: where the scoop ends (moved up or down with the table from captured_at's height) and its floor.
+# The bowl in front of the user. Where it is is measured each session (the scene camera, then the wrist camera); this
+# profile holds what depth cannot see.
 
 name: front
-captured_at: {table_height_m: 0.2140, bowl_centre_m: [0.2692, 0.2765]}
-floor_above_table_m: 0.020      # the bowl's inner floor above the table (ruler): the plunge never aims under it -- a clear
-                                # bowl's floor is invisible to depth (it reads the table beneath)
-scoop_end:                      # where the scoop carries the food (the swing to the user starts there): its arm shape
-  joints_deg: [-102.4, -42.0, -37.2, -97.5, -41.1, -111.2, 131.8]
+floor_above_table_m: 0.020      # SITE: the bowl's inner floor above the table (a ruler): the plunge never aims under it --
+                                # a clear bowl's floor is invisible to depth (it reads the table beneath)

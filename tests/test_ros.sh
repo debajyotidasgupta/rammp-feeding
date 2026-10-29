@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # The module's ROS wiring against the real arm driver: kinova-gen3-ros2 1.1.0 in --sim (as rammp-deployments pins it),
-# the stand-ins (tests/ros_stubs.py), and tests/ros_wiring.py, all in one network namespace. Any arm64 host with Docker.
+# the stand-ins (tests/ros_stubs.py), and tests/ros_wiring.py, all in one network namespace; then `rammp check` there,
+# with the test site's measurements and poses. Any arm64 host with Docker.
 #   tests/test_ros.sh            (after: docker build -t rammp_feeding:dev .)
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -13,5 +14,12 @@ docker run -d --name rammp-arm-sim $ARM /module_ws/install/kinova_gen3_ros2/lib/
 docker run -d --name rammp-stubs --network container:rammp-arm-sim -v "$PWD/tests:/tests:ro" -v rammp-share:/share $IMG python3 /tests/ros_stubs.py >/dev/null
 sleep 4
 docker run --rm --network container:rammp-arm-sim -v "$PWD/tests:/tests:ro" -v rammp-share:/share $IMG python3 /tests/ros_wiring.py
-docker run --rm --network container:rammp-arm-sim -e RAMMP_NO_LOCAL=1 -e RAMMP_STATE_DIR=/tmp/s \
-  -e RAMMP_SET=deployment.runs_dir=/tmp/r $IMG ros2 run rammp_feeding rammp check
+out=$(docker run --rm --network container:rammp-arm-sim -v "$PWD/tests/poses:/tmp/s:ro" -e RAMMP_NO_LOCAL=1 -e RAMMP_STATE_DIR=/tmp/s \
+  -e RAMMP_SET="deployment.runs_dir=/tmp/r,utensil.glass_to_tip_m=0.233,utensil.tip_px=[456, 374],utensil.image_region_px=[280, 365, 660, 480],camera.mount.camera_in_tool_m=[0.0, 0.075, -0.125],camera.mount.rotation_quat_xyzw=[0.0, 0.0, 1.0, 0.0]" \
+  $IMG ros2 run rammp_feeding rammp check || true)
+echo "$out"
+for name in arm trajectories planner "planner world" sam3 measured poses camera scene_camera; do
+  echo "$out" | grep -qE "^  OK +$name( |$)" || { echo "CHECK FAILED: $name"; exit 1; }
+done
+echo "$out" | grep -qE "^  FAIL +scene pose +not measured" || { echo "CHECK FAILED: the scene pose row"; exit 1; }
+echo "ROS OK"

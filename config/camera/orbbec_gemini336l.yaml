@@ -9,7 +9,3 @@ streams:
 link_frame: scene_camera_link   # its driver's root frame (camera_name scene_camera): our calibration places it on the robot
 
 error_m: 0.05                   # how far its reading may be off: the planner's world and our tip floor keep it as clearance
-
-extrinsic:                      # base_link <- link_frame: rammp calibrate-scene measures it (state_dir/scene_extrinsic.json,
-  xyz: null                     # which wins and is published on /tf_static); these are only the fit's starting guess
-  quat_xyzw: null               # (a machine's local.yaml)

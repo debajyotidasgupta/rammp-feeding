@@ -1,13 +1,29 @@
 # The lab Jetson (debajyoti@jetson, 192.168.1.20; the arm at 192.168.1.10): copy to ~/.config/rammp_feeding/local.yaml
 # (mounted at /config). Two D435i: on the wrist (RealSense serial 035422070556) and on the scene (036522071464; its
-# driver with camera_name scene_camera).
+# driver with camera_name scene_camera). Not yet measured here, so config/rammp.yaml's defaults stand:
+# workspace.table_extent_m, workspace.bowl_centre_m, motion.free_space.user_mouth_m (docs/porting.md).
 
 profiles:
   camera: realsense_d435i
   scene_camera: realsense_d435i_scene
 
-utensil:                        # the fork against this wrist camera
-  glass_to_tip_m: null          # MEASURE with a ruler: the camera's front glass to the tines
-  tip_px: [438, 443]            # the tine tips in the colour image (640x480): read off it at feeding_start; set by 10 mm
-                                # hover checks (rammp acquire --stop-after hover10)
-  image_region_px: [420, 400, 510, 480]   # the tines across the bottom right: never food
+utensil:
+  glass_to_tip_m: 0.205         # the D435i's front glass straight out to the tines' level (a ruler)
+
+perception:
+  wrist_calibration:            # the lab's board: calib.io ChArUco, legacy layout, 8 rows x 6 columns, DICT_4X4 from ID 0
+    squares: [6, 8]             # columns, rows (OpenCV's order)
+    square_m: 0.027             # its checker as printed (a ruler: the A4 sheet printed at 91 %)
+    marker_ratio: 0.733         # its marker side / its checker (22 / 30, the board's caption)
+    dictionary: DICT_4X4_50
+    legacy_pattern: true
+
+guards:
+  torque_step_nm:               # 10 N.m on every move (docs/notes/motion.md: the contact guard)
+    default: 10.0
+    approach: 10.0
+    plunge_in_food: 10.0
+    scoop: 10.0
+    swing: 10.0
+    retract: 10.0
+    free_space: 10.0

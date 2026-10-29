@@ -5,9 +5,10 @@
   plunge   straight down beside the piece to the bowl floor (never under the bowl profile's own floor: a clear bowl
            reads the table through it), in one move: fast, easing to slow above the piece; the contact guard strict
            above the food, a firm piece's piercing allowed once the tines are in it
-  scoop    the piece rises while the utensil turns from vertical to level about it, backing off to the bowl's scoop
-           end (where the swing starts); stopped if the food point leaves its path or drops
-  pick     over -> a fresh depth reading from there -> plunge -> scoop, planned before the plunge starts (no pause)
+  scoop    the piece rises while the utensil turns from vertical to level about it, backing off to the captured
+           scoop_end (where the swing starts); stopped if the food point leaves its path or drops
+  pick     over -> a fresh depth reading from there -> plunge -> scoop, planned before the plunge starts (no pause);
+           the piece's height as the plunge measured it is kept with the bite (acquire/food.json: --start-at scoop)
   descend / rise   the hover route for aim checks (tip_px): down to a hover above the piece, and straight back up
 """
 
@@ -35,9 +36,9 @@ G = cfg.guards.torque_step_nm
 
 @dataclass
 class Food:
-    """The piece on the tines: where its centre (the scoop's pivot) is."""
-    height: float = float(A.scoop.default_food_height_m)
-    floor_m: float = float(cfg.utensil.punch_floor_margin_m)      # how far above the floor the tip stopped
+    """The piece on the tines, as the plunge measured it: where its centre (the scoop's pivot) is."""
+    height: float                       # m, the floor to its top
+    floor_m: float                      # how far above the floor the tip stopped
 
 
 def measure(robot, arm: Arm, out: Path, name: str) -> dict:
@@ -101,10 +102,11 @@ def _speed(slow_at: float):
     return v
 
 
-def plunge(arm: Arm, u: dict, scoop_after: bool = True) -> Food:
+def plunge(arm: Arm, u: dict, out: Path, scoop_after: bool = True) -> Food:
     q0 = arm.q()
     T0, R0 = arm.tool(q0)
     down, food = plunge_depth(u, float((T0 + R0 @ arm.tip_tool)[2]))
+    (out / "food.json").write_text(json.dumps(dict(height=food.height, floor_m=food.floor_m), indent=1))
     n = int(math.ceil(down / float(A.plunge.ik_step_m)))
     path, err = arm.homotopy(q0, lambda s: (T0 - np.array([0, 0, down * s]), R0), n)
     if path is None:
@@ -190,18 +192,15 @@ def run_scoop(arm: Arm, plan: dict) -> None:
 
 # ------------------------------------------------------------------ the hover route
 def descend(arm: Arm, u: dict, to_above: float) -> None:
-    """Straight down until the tip is to_above over the piece's top: fast, then the last slow_zone_m slowly."""
+    """Straight down, in one move, until the tip is to_above over the piece's top."""
     S = A.stepped
-    down = u["gap_top"] - max(to_above, float(S.approach_stop_m))
+    down = u["gap_top"] - to_above
     if down <= 0:
         return
     if down > float(S.descend_max_m):
         raise MoveError("a descent of %.0f mm is not an approach -- re-measure" % (1000 * down))
     T, R = arm.tool()
-    fast = max(0.0, down - float(S.slow_zone_m))
-    if fast > 0:
-        arm.straight(T - np.array([0, 0, fast]), R, float(S.fast_mps), "descend")
-    arm.straight(T - np.array([0, 0, down]), R, float(S.slow_mps), "descend, slow")
+    arm.straight(T - np.array([0, 0, down]), R, float(S.descend_mps), "descend")
 
 
 def rise(arm: Arm) -> None:
@@ -218,20 +217,21 @@ def rise(arm: Arm) -> None:
 def acquire(robot, arm: Arm, target: dict, out: Path, stop_after: str = "", start_at: str = "over") -> int:
     """over -> measure -> plunge + scoop (the default), or the hover route (stop_after hover30 / hover10)."""
     H = A.stepped
-    if start_at == "scoop":
+    if start_at == "scoop":                               # the tines in the piece, where this bite's plunge left them
+        f = out / "food.json"
+        if not f.exists():
+            raise FileNotFoundError("no plunge in this bite (%s) -- the scoop starts where a plunge ends" % f)
         q = arm.q()
         T, R = arm.tool(q)
-        run_scoop(arm, plan_scoop(arm, q, T, R, Food()))
+        run_scoop(arm, plan_scoop(arm, q, T, R, Food(**json.loads(f.read_text()))))
         return 0
     if start_at == "over":
         over(arm, target)
         if stop_after == "over":
             return 0
-    if stop_after in ("hover30", "hover10"):              # each descent from a reading taken where the arm is
-        for name in ("hover30", "hover10"):
-            descend(arm, measure(robot, arm, out, "to_" + name), float(H.hover_m[name]))
-            if stop_after == name:
-                return 0
+    if stop_after in ("hover30", "hover10"):              # one reading from here, one move down
+        descend(arm, measure(robot, arm, out, "to_" + stop_after), float(H.hover_m[stop_after]))
+        return 0
     u = measure(robot, arm, out, "over")
-    plunge(arm, u, scoop_after=stop_after != "plunge")
+    plunge(arm, u, out, scoop_after=stop_after != "plunge")
     return 0

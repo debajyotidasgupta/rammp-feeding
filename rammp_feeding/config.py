@@ -6,7 +6,8 @@
     cfg.utensil.camera_to_tip_m             # the selected profiles: cfg.camera / .scene_camera / .utensil / .bowl / .food
 
 Layers, later wins: config/rammp.yaml < the selected profiles (config/<kind>/<name>.yaml) < the machine's own file
-(<state_dir>/local.yaml: /config/local.yaml in the container) < RAMMP_SET="a.b=1,c=[1, 2]" (one run; the tests).
+(<state_dir>/local.yaml: /config/local.yaml in the container) < the wrist camera's measured mount and the utensil's
+pixels (<state_dir>/wrist_mount.json: rammp calibrate-wrist) < RAMMP_SET="a.b=1,c=[1, 2]" (one run; the tests).
 Units are in the key names (_m, _mps, _dps, _nm, _n, _s, _px).
 """
 
@@ -21,7 +22,7 @@ import yaml
 
 
 def _root() -> Path:
-    """Where config/ and calibration/ are: the source tree, or the installed package's share."""
+    """Where config/ and urdf/ are: the source tree, or the installed package's share."""
     src = Path(__file__).resolve().parent.parent
     if (src / "config" / "rammp.yaml").exists():
         return src
@@ -86,6 +87,13 @@ def load() -> Cfg:
         folder = "camera" if kind == "scene_camera" else kind
         c[kind] = yaml.safe_load((CONFIG / folder / (str(c["profiles"][kind]) + ".yaml")).read_text())
     _merge(c, local)
+    wm = state / "wrist_mount.json"     # rammp calibrate-wrist's measurement of this wrist camera's mount
+    if wm.exists():
+        m = json.loads(wm.read_text())
+        if m.get("camera") == c["profiles"]["camera"]:
+            c["camera"]["mount"].update(camera_in_tool_m=m["camera_in_tool_m"], rotation_quat_xyzw=m["rotation_quat_xyzw"])
+            if m.get("utensil") == c["profiles"]["utensil"]:                     # the utensil's pixels, the same run
+                c["utensil"].update(tip_px=m["tip_px"], image_region_px=m["image_region_px"])
     for item in filter(None, re.split(r",(?![^\[]*\])", os.environ.get("RAMMP_SET", ""))):
         k, _, v = item.partition("=")
         _set(c, k.strip(), yaml.safe_load(v))
@@ -123,12 +131,15 @@ def runs_dir() -> Path:
     return p
 
 
+CAPTURES = ("home", "overlook", "scoop_end", "deliver")    # the site's arm poses: rammp capture <name>
+
+
 def calibration(name: str) -> dict:
-    """A captured pose (joints_deg): the machine's own capture (state_dir/<name>.json) if there is one, else the tree's."""
-    for p in (state_dir() / (name + ".json"), ROOT / "calibration" / (name + ".json")):
-        if p.exists():
-            return json.loads(p.read_text())
-    raise FileNotFoundError("no %s.json in %s or calibration/ -- rammp capture %s" % (name, state_dir(), name))
+    """A captured pose (joints_deg): this site's capture, state_dir/<name>.json."""
+    p = state_dir() / (name + ".json")
+    if not p.exists():
+        raise FileNotFoundError("no %s -- pose the arm and rammp capture %s (docs/porting.md)" % (p, name))
+    return json.loads(p.read_text())
 
 
 def dump() -> str:

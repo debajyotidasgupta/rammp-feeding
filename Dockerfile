@@ -17,7 +17,7 @@ RUN git clone -q https://github.com/rammp-org/RAMMP-CuRobo.git /tmp/curobo && gi
     && git clone -q https://github.com/rammp-org/rammp-interfaces-ros2.git /tmp/ifc && git -C /tmp/ifc checkout -q ${INTERFACES_REF} \
     && cp -r /tmp/ifc/rammp_perception_interfaces src/ && rm -rf /tmp/ifc
 
-# MediaPipe's face landmarker (CPU), and its model
+# MediaPipe's face landmarker (CPU), and its model; its opencv-contrib-python is the OpenCV the ChArUco calibrations use
 RUN pip3 install --no-cache-dir "mediapipe==0.10.14" "numpy<2" \
     && mkdir -p /opt/models && curl -fsSL -o /opt/models/face_landmarker.task \
        https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task

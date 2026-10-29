@@ -38,8 +38,7 @@ class Joint:
 
 
 class Chain:
-    """base_link -> the flange, through the URDF's seven arm joints; every link on it (and the fixed ones hanging off
-    it, the gripper's) placed by fk()."""
+    """base_link -> the flange, through the URDF's seven arm joints."""
 
     def __init__(self, urdf: str | Path, tool_from_flange_m):
         root = ET.fromstring(urdf) if isinstance(urdf, str) and urdf.lstrip().startswith("<") else ET.parse(str(urdf)).getroot()
@@ -66,24 +65,6 @@ class Chain:
             el = root.find("joint[@name='%s']/limit" % j.name)
             if el is not None and el.get("lower") is not None:
                 self.limits[i] = (math.degrees(float(el.get("lower"))), math.degrees(float(el.get("upper"))))
-
-    def frames(self, q_deg) -> dict[str, np.ndarray]:
-        """Every link's pose (base <- link, 4x4) at joints q (deg): the chain and the fixed links off it, by name and
-        by name without a gen3_ prefix (the two models of the same arm)."""
-        q = np.radians(np.asarray(q_deg, float))
-        out = {self.base: np.eye(4)}
-        k = 0
-        for j in self.chain:
-            T = out[j.parent] @ j.origin
-            if j.moving:
-                T = T @ _axis_rot(j.axis, q[k])
-                k += 1
-            out[j.child] = T
-        for j in self.joints:                           # fixed links hanging off the chain (gripper, camera, ...)
-            if j.child not in out and j.parent in out and not j.moving:
-                out[j.child] = out[j.parent] @ j.origin
-        out.update({k[len("gen3_"):]: v for k, v in list(out.items()) if k.startswith("gen3_")})
-        return out
 
     def flange(self, q_deg) -> np.ndarray:
         q = np.radians(np.asarray(q_deg, float))

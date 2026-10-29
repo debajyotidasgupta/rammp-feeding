@@ -1,6 +1,6 @@
 """The module's ROS interface against the real arm driver (kinova-gen3-ros2 --sim) and the stand-ins (tests/ros_stubs.py):
 joint states, a trajectory that runs to the end, one cancelled mid-way, the planner, set_world (our world by file, then
-the planner's own back, read from its `world` parameter), SAM3, the cameras.
+the planner's own back, read from its `world` parameter), SAM3 (its masks), the cameras, our static transform.
 Run inside the module's image (tests/test_ros.sh)."""
 
 from __future__ import annotations
@@ -49,8 +49,8 @@ def main() -> int:
     print("set_world:", got)
     assert got == ["/share/world.yaml", "world_real_bench.yaml"]
     d = r.detect("camera", ["bowl", "piece of food"], 0.5)
-    print("sam3:", [(x.label, x.box, None if x.mask is None else int(x.mask.sum())) for x in d])
-    assert d and d[0].label == "piece of food" and d[0].mask is not None and d[0].mask.sum() == 41 * 41
+    print("sam3:", [(x.label, x.box, int(x.mask.sum())) for x in d])
+    assert d and d[0].label == "piece of food" and d[0].mask.sum() == 41 * 41
     for role, cam in r.cameras.items():
         t, rgb = cam.frame(wait_s=5)
         D = cam.depth_median(3, time.time() - 1, wait_s=5, min_frames=1)   # (the stand-ins publish slowly: Python)
@@ -58,9 +58,6 @@ def main() -> int:
         print("%s: colour %s, depth %s median %d mm; camera_info fx %.1f; depth -> colour %s" % (
             role, rgb.shape, D.shape, int(np.median(D)), m.colour.fx, np.round(m.d2c[:3, 3], 4)))
     assert abs(r.camera_model("scene_camera").d2c[0, 3] - 0.0235) < 1e-6
-    seg = r.segmented_objects(5.0)
-    print("segmenter:", [(x.label, x.box) for x in seg])
-    assert seg and seg[0].label == "food container"
     r.publish_static("base_link", "scene_camera_link", np.eye(4))
     T = r.transform("base_link", "scene_camera_depth_optical_frame")
     print("tf base_link <- the scene camera's depth frame, through our static transform:", np.round(T[:3, 3], 4))

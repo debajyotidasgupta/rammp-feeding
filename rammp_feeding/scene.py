@@ -1,14 +1,15 @@
 """Where things are: the wrist camera and the utensil on the arm, the table and the bowl, the user, and the poses that
 follow from them (base frame, m).
 
-  the wrist camera   intrinsics and its mount in the tool frame (camera profile), pixel mappings
+  the wrist camera   its driver's intrinsics; its mount in the tool frame (rammp calibrate-wrist), pixel mappings
   the utensil tip    camera + camera_to_tip along the axis + the tip's sideways offset read off the image (tip_px)
-  the workspace      the scene camera's reading (state_dir/scene_state.json: rammp locate-scene, once per rammp feed),
-                     trusted to its error_m, which the planner's world and our tip floor keep as extra clearance (the
-                     wrist camera then measures the food itself)
+  the workspace      the bowl and the table (state_dir/scene_state.json: rammp locate-scene, the scene camera's reading,
+                     once per rammp feed; the bowl's centre and radius then the wrist camera's, rammp detect), trusted
+                     to the scene camera's error_m, which the planner's world and our tip floor keep as extra clearance
   the user           where the operator seats them: motion.free_space.user_mouth_m, fixed for the session
   food_detect_start  computed: the wrist camera overlook_camera_height_m above the table, the tip over the bowl's
-                     centre, in the captured overlook's orientation (calibration overlook.json), by continuous IK from it
+                     centre, in the captured overlook's orientation, by continuous IK from it
+  the scoop end      the captured scoop_end pose: where the scoop carries the food and the swing starts
   the planner world  the table (raised to our tip floor), a hollow bowl, the user round user_mouth_m, the
                      pedestal -- RAMMP-CuRobo's world schema, cuboids only
 """
@@ -54,13 +55,13 @@ def camera_pose(arm, q=None) -> tuple[np.ndarray, np.ndarray]:
 
 # ------------------------------------------------------------------ the workspace
 def workspace() -> dict:
-    """The scene camera's reading: bowl_xy, table_z, bowl_top_z, bowl_radius, error_m (how far it may be off), when."""
+    """The bowl and the table: bowl_xy, table_z, bowl_top_z, bowl_radius, error_m (how far it may be off), when."""
     f = state_dir() / "scene_state.json"
     if not f.exists():
         raise FileNotFoundError("no scene camera reading (%s) -- rammp locate-scene" % f)
     st = json.loads(f.read_text())
     return dict(bowl_xy=[float(v) for v in st["bowl_xy"]], table_z=float(st["table_z"]), bowl_top_z=float(st["bowl_top_z"]),
-                bowl_radius=float(st.get("rim_radius_m") or cfg.workspace.bowl_radius_m),
+                bowl_radius=float(st["rim_radius_m"]),
                 error_m=float(cfg.scene_camera.error_m), when=time.strftime("%H:%M:%S", time.localtime(st["t"])))
 
 
@@ -120,13 +121,10 @@ def overlook_joints(arm) -> list[float]:
 
 
 def scoop_end(arm) -> dict:
-    """Where the scoop carries the food (the swing starts there): the bowl profile's scoop end (its joints, placed by
-    our FK) moved up or down with the table from where it was set, raised acquisition.scoop.end_raise_m; joints_deg
-    stays the IK seed (the arm's shape)."""
-    se = dict(cfg.bowl.scoop_end)
-    dz = workspace()["table_z"] - float(cfg.bowl.captured_at.table_height_m) + float(cfg.acquisition.scoop.end_raise_m)
-    se["tool_m"] = [float(v) for v in arm.tool(se["joints_deg"])[0] + np.array([0.0, 0.0, dz])]
-    return se
+    """Where the scoop carries the food (the swing starts there): the captured scoop_end -- its tool position (our FK),
+    and its joints, the IK seed (the arm's shape)."""
+    q = captured("scoop_end")
+    return dict(joints_deg=q, tool_m=[float(v) for v in arm.tool(q)[0]])
 
 
 # ------------------------------------------------------------------ the planner's world

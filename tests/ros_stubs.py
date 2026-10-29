@@ -1,7 +1,6 @@
 """Stand-ins for the RAMMP nodes this module calls, for the ROS wiring test (tests/test_ros.sh): the planner's
 plan_to_joints (a straight joint line), set_world (a file it can open, or a packaged world's name) and its `world`
-parameter (world_real_bench.yaml); SAM3's detect (one box and its mask), the scene segmenter's topic, and the two
-cameras as their drivers serve them (flat frames, camera_info, /tf_static between their frames). The worlds the
+parameter (world_real_bench.yaml); SAM3's detect (one box and its mask), and the two cameras as their drivers serve them (flat frames, camera_info, /tf_static between their frames). The worlds the
 planner was set to go to /share/planner_worlds.json. The arm is the real kinova-gen3-ros2 in its --sim mode."""
 
 from __future__ import annotations
@@ -15,7 +14,7 @@ from builtin_interfaces.msg import Duration
 from rammp_curobo_interfaces.action import PlanToJoints
 from rammp_curobo_interfaces.srv import SetWorld
 from geometry_msgs.msg import TransformStamped
-from rammp_perception_interfaces.msg import DetectedObject, ObjectDetections
+from rammp_perception_interfaces.msg import DetectedObject
 from rammp_perception_interfaces.srv import Detect
 from rclpy.action import ActionServer
 from rclpy.executors import MultiThreadedExecutor
@@ -78,8 +77,6 @@ def main() -> None:
         info.header.frame_id = frame
         pubs += [(n.create_publisher(Image, ns + "/" + kind, qos_profile_sensor_data), img),
                  (n.create_publisher(CameraInfo, ns + "/camera_info", qos_profile_sensor_data), info)]
-    seg = ObjectDetections(objects=[DetectedObject(perception_class="food container", score=0.7, box=[500.0, 300.0, 700.0, 450.0])])
-    pubs.append((n.create_publisher(ObjectDetections, "/perception/object_detections", 10), seg))
     n.create_timer(1 / 15, lambda: [p.publish(m) for p, m in pubs])
     tf = StaticTransformBroadcaster(n)                 # what the camera drivers put on /tf_static
     msgs = []

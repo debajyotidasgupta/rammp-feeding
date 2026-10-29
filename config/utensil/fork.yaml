@@ -1,10 +1,12 @@
-# The plastic four-tine fork in the gripper, against the wrist D405 (2026-10-02). Re-measure whenever the utensil is
-# changed or re-seated (a robot restart re-initialises the gripper, which can pivot it): a ruler for glass_to_tip_m,
-# then tip_px from 10 mm hover checks (rammp acquire --stop-after hover10).
+# The plastic four-tine fork in the gripper. Its numbers depend on how it sits against the wrist camera, so they are
+# each site's (its local.yaml, and state_dir/wrist_mount.json): glass_to_tip_m by a ruler, tip_px and image_region_px
+# by rammp calibrate-wrist. Re-measure whenever the utensil is changed or re-seated (an arm restart re-initialises the
+# gripper, which can pivot it).
 
 name: fork
-glass_to_tip_m: 0.233           # the camera's front glass to the tines (camera_to_tip_m adds the camera's glass_to_optical_m)
-tip_px: [456, 374]              # the tine tips in the colour image (fixed to the camera: the same pixel at every pose)
-image_region_px: [280, 365, 660, 480]   # the tines (from y ~372) and the gripper across the bottom: never food (a piece
+glass_to_tip_m: null            # SITE: the camera's front glass straight out to the tines' level (a ruler; camera_to_tip_m
+                                # adds the camera's glass_to_optical_m)
+tip_px: null                    # the tine tips in the colour image (fixed to the camera: the same pixel at every pose)
+image_region_px: null           # the utensil's box in the colour image: never food
 punch_floor_margin_m: 0.008     # the plunge stops this far above the bowl floor (the scoop's first turn sweeps the tines
-                                # down and across: at the floor they caught the glass bowl)
+                                # down and across: at the floor they catch the bowl)

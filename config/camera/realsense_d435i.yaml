@@ -9,8 +9,7 @@ streams:
 
 glass_to_optical_m: 0.0042      # its depth origin behind the front glass (Intel's datasheet; a utensil's ruler reading starts at the glass)
 
-mount:                          # where it sits on the arm (ours): the colour optical frame in the tool frame
-  camera_in_tool_m: null        # MEASURE with a ruler: the RGB lens's centre -- x, y off the gripper's axis, z along it
-                                # from the tool point (the 2F-85's TCP, 120 mm out of the flange; behind it is negative)
-  rotation_quat_xyzw: [0.0, 0.0, 1.0, 0.0]      # a half turn about the tool axis (image +u = tool -x, +v = tool -y)
+mount:                          # where it sits on the arm (ours): the colour optical frame in the tool frame, measured
+  camera_in_tool_m: null        # by rammp calibrate-wrist (state_dir/wrist_mount.json, which these take)
+  rotation_quat_xyzw: null
   image_rotated_at_delivery: true              # the face is upright after a quarter turn at the user

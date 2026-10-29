@@ -5,18 +5,12 @@ from __future__ import annotations
 import json
 import math
 import os
-import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "tests"))
-WORK = Path(tempfile.mkdtemp(prefix="rammp_unit_"))
-os.environ.update(RAMMP_NO_LOCAL="1", RAMMP_STATE_DIR=str(WORK / "state"),
-                  RAMMP_SET="deployment.runs_dir=%s,planner.world_file=%s,planner.world_file_in_planner=" % (WORK / "runs", WORK / "state/world.yaml"))
-
+from fixture import ROOT, WORK  # noqa: E402  (the test site: before rammp_feeding is imported)
 import numpy as np  # noqa: E402
 
 from fake_robot import FakeRobot, Scene  # noqa: E402
@@ -110,11 +104,14 @@ class Motion(unittest.TestCase):
             H = tip[2] - sc.table_z                               # the tip over the table (a clear bowl reads it)
             u = dict(top_z=sc.table_z + 0.055, gap_top=H - 0.055, floor_z=sc.table_z, gap_floor=H, height=0.055)   # 55 mm
             robot.inject[0] = (0.5 if stops else 0.97, [step] + [0] * 6)   # half way: above the food; at the end: in it
+            out = Path(tempfile.mkdtemp(dir=WORK))
             if stops:
                 with self.assertRaises(MoveError):
-                    plunge(arm, u, scoop_after=False)
+                    plunge(arm, u, out, scoop_after=False)
             else:
-                plunge(arm, u, scoop_after=False)
+                plunge(arm, u, out, scoop_after=False)
+                kept = json.loads((out / "food.json").read_text())["height"]       # for --start-at scoop: its top
+                self.assertAlmostEqual(kept, 0.055 - float(cfg.bowl.floor_above_table_m), places=6)   # over the bowl's floor
                 self.assertLess(arm.tip()[2], tip[2] - 0.1)
 
 
@@ -197,16 +194,52 @@ class Delivery(unittest.TestCase):
 
 class Perception(unittest.TestCase):
     def test_food_filters(self):
-        from rammp_feeding.perception import food, mask_of
+        from rammp_feeding.perception import food
         rgb = np.full((480, 848, 3), (200, 170, 90), np.uint8)
-        bowl = mask_of(Detection("b", 1.0, [300, 100, 600, 400]), rgb.shape[:2])
-        dets = [Detection("f", 0.9, [400, 200, 440, 240]),          # kept
-                Detection("f", 0.8, [402, 202, 441, 241]),          # the same piece again
-                Detection("f", 0.7, [450, 380, 480, 420]),          # inside the utensil's region
-                Detection("f", 0.6, [100, 100, 140, 140]),          # outside the bowl
-                Detection("f", 0.5, [500, 200, 505, 260]),          # a sliver
-                Detection("f", 0.4, [320, 120, 560, 380])]          # bowl-sized
+
+        def box(score, b):                                     # a detection whose mask fills its box
+            m = np.zeros(rgb.shape[:2], bool)
+            m[b[1]:b[3] + 1, b[0]:b[2] + 1] = True
+            return Detection("f", score, b, m)
+        bowl = box(1.0, [300, 100, 600, 400]).mask
+        dets = [box(0.9, [400, 200, 440, 240]),                 # kept
+                box(0.8, [402, 202, 441, 241]),                 # the same piece again
+                box(0.7, [450, 380, 480, 420]),                 # inside the utensil's region
+                box(0.6, [100, 100, 140, 140]),                 # outside the bowl
+                box(0.5, [500, 200, 505, 260]),                 # a sliver
+                box(0.4, [320, 120, 560, 380])]                 # bowl-sized
         self.assertEqual([d.box for d in food(rgb, dets, bowl)], [[400, 200, 440, 240]])
+
+    def test_no_bowl_in_view_is_refused(self):
+        from rammp_feeding.perception import perceive
+        sc = Scene()
+        site(sc)
+        robot = FakeRobot(sc, scene.captured("home"))
+        arm = Arm(robot)
+        robot.raw = np.radians(scene.overlook_joints(arm))
+        found = robot.detect
+        robot.detect = lambda role, prompts, t: [d for d in found(role, prompts, t) if d.label == cfg.food.prompt]
+        with self.assertRaisesRegex(MoveError, "no bowl"):
+            perceive(robot, arm, Path(tempfile.mkdtemp(dir=WORK)))
+
+    def test_the_bowl_is_the_circle_through_its_rim(self):
+        """Depth points of a bowl on a table (its rim 60 mm up, 80 mm round, the near half only, as from the side):
+        the centre and radius of the whole rim; with no rim seen, refused."""
+        from rammp_feeding.scene_camera import bowl_at
+        rng = np.random.default_rng(3)
+        a = rng.uniform(-math.pi / 2, math.pi / 2, 400)              # the near half of the rim
+        rim = np.c_[0.4 + 0.08 * np.cos(a), 0.1 + 0.08 * np.sin(a), np.full(400, 0.06)]
+        table = np.c_[rng.uniform(0.2, 0.6, 2000), rng.uniform(-0.1, 0.3, 2000), np.zeros(2000)]
+        p = np.vstack([rim, table])
+        uv = np.c_[np.r_[np.full(400, 50), np.full(2000, 65)], np.full(2400, 50)]   # the rim in its mask, the table round it
+        mask = np.zeros((100, 300), bool)
+        mask[40:60, 40:60] = True
+        got = bowl_at(mask, [40, 40, 60, 60], uv, p)
+        np.testing.assert_allclose(got["bowl_xy"], [0.4, 0.1], atol=1e-6)
+        self.assertAlmostEqual(got["rim_radius_m"], 0.08, places=3)
+        self.assertAlmostEqual(got["table_z"], 0.0, places=6)
+        got = bowl_at(mask, [40, 40, 60, 60], uv, np.vstack([rim * [1, 1, 0], table]))      # nothing above the table
+        self.assertIn("rejected", got)
 
     def test_under_tip_from_the_rendered_depth(self):
         from rammp_feeding.perception import under_tip
@@ -364,45 +397,156 @@ class World(unittest.TestCase):
         self.assertEqual(scene.tip_floor(-0.5, 0.0), -np.inf)
 
 
+class Record(unittest.TestCase):
+    def test_an_event_keeps_its_data_and_its_own_time(self):
+        from rammp_feeding import record
+        s = record.session("unit")
+        record.event("located", t=1.0, bowl_xy=[0.4, 0.1])
+        e = json.loads((s / "events.jsonl").read_text().splitlines()[-1])
+        self.assertEqual((e["kind"], e["bowl_xy"]), ("located", [0.4, 0.1]))
+        self.assertGreater(e["t"], 1.0)
+
+
 class Profiles(unittest.TestCase):
     def test_every_camera_profile_has_its_roles_keys(self):
         import yaml
         for f in sorted((ROOT / "config/camera").glob("*.yaml")):
             c = yaml.safe_load(f.read_text())
-            role = {"glass_to_optical_m", "mount"} if "mount" in c else {"link_frame", "error_m", "extrinsic"}
+            role = {"glass_to_optical_m", "mount"} if "mount" in c else {"link_frame", "error_m"}
             self.assertLessEqual(role | {"streams"}, set(c), f.name)
             self.assertLessEqual({"colour_topic", "depth_topic"}, set(c["streams"]), f.name)
 
     def test_the_arm_is_not_built_until_the_robots_measurements_are_in(self):
         from unittest import mock
         robot = FakeRobot(Scene(), scene.captured("home"))
-        with mock.patch.dict(cfg["utensil"], {"glass_to_tip_m": None}), \
-                self.assertRaisesRegex(RuntimeError, r"not measured on this robot yet: utensil\.glass_to_tip_m"):
-            Arm(robot)
+        with mock.patch.dict(cfg["utensil"], {"glass_to_tip_m": None}):
+            with self.assertRaisesRegex(RuntimeError, r"not measured on this robot yet: utensil\.glass_to_tip_m"):
+                Arm(robot)
+            arm = Arm(robot, measured=False)          # state, home --direct, calibrate-wrist: no tip model
+            self.assertIsNone(arm.tip_tool)
+            from rammp_feeding.cli import report
+            report(arm, "now")
+
+    def test_the_measured_mount_is_taken_for_its_camera_only(self):
+        from rammp_feeding import config as C
+        d = Path(tempfile.mkdtemp(dir=WORK))
+        (d / "local.yaml").write_text("profiles: {camera: realsense_d435i}\n")
+        m = dict(camera_in_tool_m=[0.04, 0.07, -0.11], rotation_quat_xyzw=[0.0, 0.0, 1.0, 0.0])
+        env = dict(os.environ)
+        try:
+            os.environ.pop("RAMMP_NO_LOCAL")
+            os.environ["RAMMP_STATE_DIR"] = str(d)
+            self.assertIn("camera.mount.camera_in_tool_m", C.unmeasured(C.load()))
+            (d / "wrist_mount.json").write_text(json.dumps(dict(m, camera="realsense_d435i")))
+            self.assertEqual(C.load().camera.mount.camera_in_tool_m, m["camera_in_tool_m"])
+            (d / "wrist_mount.json").write_text(json.dumps(dict(m, camera="realsense_d405")))
+            self.assertIsNone(C.load().camera.mount.camera_in_tool_m)
+        finally:
+            os.environ.clear()
+            os.environ.update(env)
+
+
+class WristCalibration(unittest.TestCase):
+    def test_the_hand_eye_solve_finds_the_mount_from_the_calibrations_poses(self):
+        """The board seen from rammp calibrate-wrist's own poses round its start over feeding_start, through a known
+        mount, each board pose 0.5 mm and 0.1 deg off: the solve finds the mount again, and the board's place agrees."""
+        from rammp_feeding import wrist_calibration as wc
+        arm = Arm(FakeRobot(Scene(), scene.captured("home")))
+        T, R = arm.tool(scene.captured("home"))
+        X = np.eye(4)
+        X[:3, :3], X[:3, 3] = g.rodrigues([0.03, -0.02, math.pi]), [0.04, 0.07, -0.11]
+        B = np.eye(4)
+        B[:3, :3], B[:3, 3] = g.rodrigues([math.pi, 0.0, 0.3]), T + np.array([0.03, 0.02, -0.2])
+        caps, rng = [], np.random.default_rng(1)          # its own noise, whatever ran before
+        for Tk, Rk in wc.poses(T + np.array([0.0, 0.0, 0.1]), R):
+            G = np.eye(4)
+            G[:3, :3], G[:3, 3] = Rk, Tk
+            Cb = np.linalg.inv(G @ X) @ B
+            Cb[:3, :3] = g.rodrigues(rng.normal(0.0, math.radians(0.1), 3)) @ Cb[:3, :3]
+            Cb[:3, 3] += rng.normal(0.0, 0.0005, 3)
+            caps.append((Rk, Tk, Cb, None))                 # as the route records them: with the frame
+        Xs, spread_m, _ = wc.solve(caps)
+        self.assertLess(np.linalg.norm(Xs[:3, 3] - X[:3, 3]), float(cfg.perception.wrist_calibration.max_spread_m))
+        self.assertLess(math.degrees(np.linalg.norm(g.rot_log(Xs[:3, :3] @ X[:3, :3].T))), 0.5)
+        self.assertLess(spread_m, float(cfg.perception.wrist_calibration.max_spread_m))
+
+    def test_the_utensil_is_the_still_part_of_the_frames(self):
+        """A fork along the tool's axis (to 0.11 m out of the tool point), the same in every frame, over a background that
+        changes from frame to frame: its tips and its region are found where it was drawn."""
+        from PIL import Image, ImageDraw
+        from rammp_feeding import wrist_calibration as wc
+        from rammp_feeding.camera import CameraModel, Intrinsics
+        k = Intrinsics(607.3, 607.4, 323.8, 244.7, 640, 480)
+        cam = CameraModel(k, k, np.eye(4))
+        X = np.eye(4)
+        X[:3, :3], X[:3, 3] = g.rodrigues([0.03, -0.02, math.pi]), [0.023, 0.050, -0.103]
+        Xi = np.linalg.inv(X)
+        def px(z):
+            return cam.pixel(Xi[:3, :3] @ np.array([0.0, 0.0, z]) + Xi[:3, 3])
+        rng = np.random.default_rng(2)
+        frames = []
+        for _ in range(7):
+            im = Image.fromarray(rng.integers(0, 255, (480, 640, 3), dtype=np.uint8).repeat(1, 0))
+            ImageDraw.Draw(im).line([px(-0.03), px(0.11)], fill=(230, 230, 230), width=14)
+            frames.append(np.asarray(im))
+        tip, box = wc.fork_in_image(frames, X, cam)
+        self.assertLess(np.hypot(*np.subtract(tip, px(0.11))), 8.0)
+        u, v = px(0.05)
+        self.assertTrue(box[0] <= u <= box[2] and box[1] <= v <= box[3])
+
+    def test_the_printed_board_is_found_at_its_size(self):
+        """The board's own image, as a camera 0.4 m straight above it would see it: every corner found, 0.4 m away, and
+        the depth check reads the print's scale; and the sheet to print is a PDF."""
+        from rammp_feeding import wrist_calibration as wc
+        from rammp_feeding.camera import CameraModel, Intrinsics
+        nx, ny = (int(n) for n in cfg.perception.wrist_calibration.squares)
+        px_per_m, margin = 4000.0, 40
+        sq = float(cfg.perception.wrist_calibration.square_m)
+        w, h = int(round(nx * sq * px_per_m)), int(round(ny * sq * px_per_m))
+        img = wc.board().generateImage((w + 2 * margin, h + 2 * margin), marginSize=margin, borderBits=1)
+        f = px_per_m * 0.4
+        cam = CameraModel(*[Intrinsics(f, f, margin, margin, w + 2 * margin, h + 2 * margin)] * 2, np.eye(4))
+        rgb = np.dstack([img] * 3)
+        C, n = wc.board_pose(cam, rgb)
+        self.assertEqual(n, (nx - 1) * (ny - 1))
+        self.assertAlmostEqual(C[2, 3], 0.4, delta=0.001)
+        flat = np.ones(img.shape, np.uint16)                 # the depth of the board's plane, 0.4 m away
+        self.assertAlmostEqual(wc.depth_scale(cam, 400 * flat, rgb, C), 1.0, delta=0.005)
+        self.assertAlmostEqual(wc.depth_scale(cam, 364 * flat, rgb, C), 0.91, delta=0.005)   # printed at 91 %
+        p = WORK / "charuco_board.pdf"
+        wc.board_pdf(p)
+        self.assertTrue(p.read_bytes().startswith(b"%PDF"))
 
 
 class SceneCalibration(unittest.TestCase):
-    def test_recovers_a_moved_camera(self):
-        """Depth points on the arm's spheres (and the table), seen from a known pose; the fit from a guess 4 cm and
-        6 deg off finds it again."""
+    def test_the_scene_camera_through_the_board(self):
+        """The board on the table, seen by the scene camera from a known pose and by the wrist camera from
+        calibrate-wrist's poses (a known mount, each view 0.5 mm and 0.1 deg off): the scene camera's pose again."""
         from rammp_feeding import scene_camera as sc_
-        robot = FakeRobot(Scene(), scene.captured("home"))
-        arm = Arm(robot)
-        R_true, t_true = g.rodrigues([0.1, -0.2, 2.0]), np.array([0.2, 0.7, 0.4])
-        caps = []
-        for q in (scene.captured("overlook"), scene.captured("home")):
-            S = sc_.spheres(arm, q)
-            pts = []
-            for c in S:
-                d = RNG.normal(size=(60, 3)); d /= np.linalg.norm(d, axis=1)[:, None]
-                p = c[:3] + c[3] * d
-                pts.append(p[(p - t_true) @ (c[:3] - t_true) < (c[:3] - t_true) @ (c[:3] - t_true)])   # the near side
-            P = np.vstack(pts)
-            caps.append(((P - t_true) @ R_true, S))                  # into the camera's frame
-        R0 = R_true @ g.rodrigues([0.0, 0.0, np.radians(6)])
-        R, t, rms, n = sc_._fit(caps, R0, t_true + np.array([0.03, -0.02, 0.02]), None)
-        self.assertLess(np.linalg.norm(t - t_true), 0.005)
-        self.assertLess(np.degrees(np.linalg.norm(g.rot_log(R @ R_true.T))), 0.5)
+        from rammp_feeding import wrist_calibration as wc
+        arm = Arm(FakeRobot(Scene(), scene.captured("home")))
+        T, R = arm.tool(scene.captured("home"))
+        X = np.eye(4)
+        X[:3, :3], X[:3, 3] = g.rodrigues([0.03, -0.02, math.pi]), [0.023, 0.050, -0.103]
+        B = np.eye(4)
+        B[:3, :3], B[:3, 3] = g.rodrigues([0.0, 0.0, 0.4]), T + np.array([0.03, -0.12, -0.2])
+        E = np.eye(4)                                       # base <- the scene camera's link frame
+        E[:3, :3], E[:3, 3] = g.rodrigues([0.1, 0.2, 2.5]), [0.6, -0.5, 0.12]
+        L = np.eye(4)                                       # its link <- its colour optical frame (its driver's)
+        L[:3, :3], L[:3, 3] = g.rodrigues([-math.pi / 2, 0.0, 0.0]) @ g.rodrigues([0.0, -math.pi / 2, 0.0]), [0.0, 0.015, 0.0]
+        caps, rng = [], np.random.default_rng(1)          # its own noise, whatever ran before
+        for Tk, Rk in wc.poses(T + np.array([0.0, 0.0, 0.1]), R):
+            G = np.eye(4)
+            G[:3, :3], G[:3, 3] = Rk, Tk
+            Cw = np.linalg.inv(G @ X) @ B
+            Cw[:3, :3] = g.rodrigues(rng.normal(0.0, math.radians(0.1), 3)) @ Cw[:3, :3]
+            Cw[:3, 3] += rng.normal(0.0, 0.0005, 3)
+            caps.append((Rk, Tk, Cw, None))
+        Bm, spread_m, _ = wc.board_in_base(caps, X)
+        self.assertLess(spread_m, float(cfg.perception.wrist_calibration.max_spread_m))
+        Es = sc_.camera_in_base(Bm, np.linalg.inv(E @ L) @ B, L)
+        self.assertLess(np.linalg.norm(Es[:3, 3] - E[:3, 3]), float(cfg.perception.wrist_calibration.max_spread_m))
+        self.assertLess(math.degrees(np.linalg.norm(g.rot_log(Es[:3, :3] @ E[:3, :3].T))), 0.5)
 
 
 if __name__ == "__main__":

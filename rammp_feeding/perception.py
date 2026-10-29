@@ -4,9 +4,9 @@ driver's camera_info and /tf_static) and the camera's pose from the arm.
 
 perceive: one colour frame and a depth median from frames after the arm stopped; SAM3, one call, for the bowl and the
 food (boxes and masks); the food filtered (slivers, the utensil's own pixels, outside or too big for the bowl,
-overlaps); each piece's top (its mask's highest surface) and the floor round it; the most central piece (the most rim
-clearance), aimed at the middle of its top; the tool's goal the level slide that puts the utensil tip right above that
-point. Exit 3: the bowl is empty; 5: food is left but no piece is pickable.
+overlaps); the piece nearest the bowl's centre (the most rim clearance), aimed at the centroid of its points; the
+tool's goal the level slide that puts the utensil tip right above it. Refused without the bowl in view. Exit 3: the
+bowl is empty; 5: food is left but no piece is pickable.
 """
 
 from __future__ import annotations
@@ -34,16 +34,6 @@ class NoTarget(Exception):
         self.rc = rc
 
 
-def mask_of(d: Detection, shape) -> np.ndarray:
-    """The detection's mask, or its box where the detector sent none."""
-    if d.mask is not None:
-        return d.mask
-    m = np.zeros(shape, bool)
-    x1, y1, x2, y2 = (int(round(v)) for v in d.box)
-    m[max(0, y1):y2 + 1, max(0, x1):x2 + 1] = True
-    return m
-
-
 def world_points(cam, arm, D: np.ndarray, q=None):
     """Every valid depth pixel in the base frame: (points N x 3, their colour pixels N x 2 (int, may fall outside), their
     depth from the camera N)."""
@@ -60,7 +50,7 @@ def _in(mask: np.ndarray, uv: np.ndarray) -> np.ndarray:
     return out
 
 
-def food(rgb: np.ndarray, dets, bowl: np.ndarray | None) -> list[Detection]:
+def food(rgb: np.ndarray, dets, bowl: np.ndarray) -> list[Detection]:
     """The food detections worth aiming at, best first."""
     ute = np.zeros(rgb.shape[:2], bool)
     x1, y1, x2, y2 = cfg.utensil.image_region_px
@@ -70,12 +60,11 @@ def food(rgb: np.ndarray, dets, bowl: np.ndarray | None) -> list[Detection]:
         w, h = d.box[2] - d.box[0], d.box[3] - d.box[1]
         if min(w, h) < float(P.min_box_side_px) or max(w, h) / max(1.0, min(w, h)) > float(P.max_box_aspect):
             continue
-        m = mask_of(d, rgb.shape[:2])
+        m = d.mask
         n = max(1, int(m.sum()))
         if (m & ute).sum() / n >= float(P.inside_utensil_max):
             continue
-        if bowl is not None and ((m & bowl).sum() / n <= float(P.food_inside_bowl_min)
-                                 or n >= float(P.food_max_frac_of_bowl) * bowl.sum()):
+        if (m & bowl).sum() / n <= float(P.food_inside_bowl_min) or n >= float(P.food_max_frac_of_bowl) * bowl.sum():
             continue
         if any((m & o).sum() / max(1, (m | o).sum()) > float(P.overlap_iou) for o in masks):
             continue
@@ -85,30 +74,21 @@ def food(rgb: np.ndarray, dets, bowl: np.ndarray | None) -> list[Detection]:
 
 
 def piece_geometry(W: np.ndarray, uv: np.ndarray, mask: np.ndarray) -> dict | None:
-    """A piece from its mask: its top (the highest surface inside it), where to aim (the middle of that top), and the
-    floor round it (the lowest surface in a ring outside it)."""
+    """A piece from its mask: where to aim (the centroid of its points) and its top (their highest), or None with too
+    little depth on it."""
     inside = _in(mask, uv)
     if inside.sum() < 20:
         return None
-    z = W[inside, 2]
-    top = float(np.percentile(z, 95))
-    band = W[inside][z >= top - float(P.top_band_mm) / 1000.0]
-    centre = band[:, :2].mean(0)
-    r = np.hypot(*(W[inside, :2] - centre).T).max()
-    d = np.hypot(*(W[:, :2] - centre).T)
-    ring = W[(d > r + 0.005) & (d < r + 0.005 + 2 * float(P.food_half_width_m)) & ~inside]
-    floor = float(np.percentile(ring[:, 2], 15)) if len(ring) > 20 else None
-    return dict(top_z=top, floor_z=floor, xy=[float(v) for v in centre])
+    pts = W[inside]
+    return dict(xy=[float(v) for v in pts[:, :2].mean(0)], top_z=float(np.percentile(pts[:, 2], 95)))
 
 
-def food_left(W: np.ndarray, uv: np.ndarray, bowl: np.ndarray | None) -> float | None:
+def food_left(W: np.ndarray, uv: np.ndarray, bowl: np.ndarray) -> float:
     """The fraction of the bowl's area standing more than food_left_above_floor_mm above its own floor (its lowest
-    surface), or None without a bowl."""
-    if bowl is None:
-        return None
+    surface)."""
     z = W[_in(bowl, uv), 2]
     if len(z) < 50:
-        return None
+        raise ValueError("too little depth inside the bowl to tell whether food is left")
     return float((z > np.percentile(z, 10) + float(P.food_left_above_floor_mm) / 1000.0).mean())
 
 
@@ -127,19 +107,22 @@ def perceive(robot, arm, out: Path) -> dict:
     Image.fromarray(rgb).save(out / "colour.jpg", quality=95)
     np.save(out / "depth.npy", D)
     t0 = time.time()
-    dets = robot.detect("camera", list(P.bowl_prompts) + [str(cfg.food.prompt)], float(P.score_threshold))
-    bowls = [d for d in dets if d.label in P.bowl_prompts]
-    bowl = mask_of(max(bowls, key=lambda d: d.score), rgb.shape[:2]) if bowls else None
-    pieces = food(rgb, [d for d in dets if d.label == str(cfg.food.prompt)], bowl)
-    log.info("  SAM3 %.2f s: the bowl %s, %d piece(s) of %d detections", time.time() - t0, "found" if bowl is not None else
-             "NOT found", len(pieces), len(dets))
+    dets = robot.detect("camera", list(P.bowl_prompts) + [str(cfg.food.prompt)], float(P.bowl_score_threshold))
+    bowls = [d for d in dets if d.label in P.bowl_prompts]       # the bowl at its own threshold, the food at its
+    if not bowls:
+        _draw(rgb, None, [], out / "detection.jpg")
+        raise MoveError("SAM3 finds no bowl in the wrist camera's view (%s)" % (out / "detection.jpg"))
+    from scipy.ndimage import binary_fill_holes                  # its mask stops at the food on it: the food is inside
+    bowl = binary_fill_holes(max(bowls, key=lambda d: d.score).mask)
+    pieces = food(rgb, [d for d in dets if d.label == str(cfg.food.prompt) and d.score >= float(P.score_threshold)], bowl)
+    log.info("  SAM3 %.2f s: the bowl, %d piece(s) of %d detections", time.time() - t0, len(pieces), len(dets))
     W, uv, _ = world_points(arm.cam, arm, D, q)
-    geo = [(d, piece_geometry(W, uv, mask_of(d, rgb.shape[:2]))) for d in pieces]
+    geo = [(d, piece_geometry(W, uv, d.mask)) for d in pieces]
     geo = [(d, g) for d, g in geo if g is not None]
     _draw(rgb, bowl, pieces, out / "detection.jpg")
     if not geo:
         left = food_left(W, uv, bowl)
-        if left is not None and left > float(P.food_left_min_frac):
+        if left > float(P.food_left_min_frac):
             (out / "food_left").write_text("food left, no pickable piece detected\n")
             raise NoTarget("food is left in the bowl (%.0f%% stands above its floor) but no piece is pickable" % (100 * left), 5)
         (out / "no_food").write_text("no food detected\n")
@@ -157,7 +140,7 @@ def perceive(robot, arm, out: Path) -> dict:
     return tgt
 
 
-def _draw(rgb, bowl, pieces, path: Path) -> None:
+def _draw(rgb, bowl: np.ndarray | None, pieces, path: Path) -> None:
     im = rgb.copy()
     if bowl is not None:
         im[bowl] = (0.6 * im[bowl] + 0.4 * np.array([234, 179, 8])).astype(np.uint8)

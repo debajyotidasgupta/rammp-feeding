@@ -1,12 +1,11 @@
 """The robot, as the RAMMP stack serves it -- the only module that speaks ROS 2. One node, spun on its own thread:
 
   arm       kinova-gen3-ros2: /robot_description (its model), /joint_states (joints, torques), /control_status (the
-            e-stop, arbitration), /execute_joint_trajectory (position or impedance), /estop
+            e-stop, arbitration), /execute_joint_trajectory (position or impedance)
   planner   RAMMP-CuRobo, shared: /rammp_curobo/plan_to_joints, set_world, its `world` parameter (it plans; we
             execute)
   cameras   rammp-suite-software's drivers: colour and depth images, their camera_info, their /tf_static
-  detection rammp-perception: SAM3's /perception/sam3/detect (boxes and masks) on any camera, and the always-on scene
-            segmenter's /perception/object_detections
+  detection rammp-perception: SAM3's /perception/sam3/detect (boxes and masks) on either camera
   tf        ours: the scene camera's measured pose, base_link -> its link frame (rammp calibrate-scene), static
 
 Joint vectors cross this boundary in degrees (folded, joint_1..7); the arm's raw (unwrapped) radians stay inside.
@@ -40,7 +39,7 @@ class Detection:
     label: str
     score: float
     box: list[float]                  # x1 y1 x2 y2, source-image pixels
-    mask: np.ndarray | None = None    # bool, the source image's size
+    mask: np.ndarray                  # bool, the source image's size
 
 
 def image_array(msg) -> np.ndarray:
@@ -55,15 +54,15 @@ def image_array(msg) -> np.ndarray:
 
 
 def detections(msg) -> list[Detection]:
-    """rammp_perception_interfaces/ObjectDetections -> the visible objects, each with its mask."""
-    labels = image_array(msg.label_image) if msg.label_image.height else None
+    """rammp_perception_interfaces/ObjectDetections -> the visible objects that carry a mask (SAM3 sends one for each)."""
+    if not msg.label_image.height:
+        return []
+    labels = image_array(msg.label_image)
     out = []
     for o in msg.objects:
-        if o.state != 0:
-            continue
-        mask = (labels == o.mask_id) if labels is not None and o.mask_id else None
-        out.append(Detection(o.perception_class, float(o.score), [float(v) for v in o.box],
-                             mask if mask is not None and mask.any() else None))
+        mask = labels == o.mask_id
+        if o.state == 0 and o.mask_id and mask.any():
+            out.append(Detection(o.perception_class, float(o.score), [float(v) for v in o.box], mask))
     return out
 
 
@@ -124,10 +123,6 @@ class Camera:
                         return median_depth(got)
                     raise RobotError("only %d depth frames on %s in %.0f s" % (len(got), self.depth_topic, wait_s))
 
-    def latest_depth(self) -> tuple[float, np.ndarray] | None:
-        with self.cv:
-            return self.depth[-1] if self.depth else None
-
 
 class Trajectory:
     """An executing ExecuteJointTrajectory goal."""
@@ -158,11 +153,10 @@ class Robot:
         from rclpy.executors import MultiThreadedExecutor
         from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
         from rammp_arm_interfaces.action import ExecuteJointTrajectory
-        from rammp_common_interfaces.msg import ControlStatus, EStop
+        from rammp_common_interfaces.msg import ControlStatus
         from rammp_curobo_interfaces.action import PlanToJoints
         from rammp_curobo_interfaces.srv import SetWorld
         from rcl_interfaces.srv import GetParameters
-        from rammp_perception_interfaces.msg import ObjectDetections
         from rammp_perception_interfaces.srv import Detect
         from sensor_msgs.msg import CameraInfo, Image, JointState
         from std_msgs.msg import String
@@ -177,7 +171,6 @@ class Robot:
         self._lock = threading.Lock()
         self._joint: tuple[float, np.ndarray, np.ndarray] | None = None     # (time, raw q rad, effort N.m)
         self.estopped, self.arbitration, self.description = False, False, None
-        self.segmented: tuple[float, object] | None = None                  # the scene segmenter's latest message
         self.token = list(bytes.fromhex(os.environ.get("RAMMP_ARM_TOKEN", "00" * 16)))   # from the orchestrator
 
         def status(m):
@@ -186,9 +179,6 @@ class Robot:
         n.create_subscription(ControlStatus, "/control_status", status, latched, callback_group=cb)
         n.create_subscription(String, "/robot_description", lambda m: setattr(self, "description", m.data), latched,
                               callback_group=cb)
-        n.create_subscription(ObjectDetections, str(cfg.ros.segmenter_topic),
-                              lambda m: setattr(self, "segmented", (time.time(), m)), 10, callback_group=cb)
-        self._estop_pub, self._EStop = n.create_publisher(EStop, "/estop", 10), EStop
         self.tf = Buffer()
         self._tf_listener = TransformListener(self.tf, n, spin_thread=False)
         self._static_tf = StaticTransformBroadcaster(n)
@@ -289,9 +279,6 @@ class Robot:
     def joints(self) -> list[float]:
         return [float(v) for v in fold(np.degrees(self.joint_sample()[1]))]
 
-    def estop(self, reason: str) -> None:
-        self._estop_pub.publish(self._EStop(engaged=True, source=self.node.get_name(), reason=reason))
-
     # ------------------------------------------------------------------ the arm
     def execute(self, positions_rad: np.ndarray, times_s: list[float], impedance: dict | None = None,
                 path_tolerance_rad: float | None = None, goal_tolerance_rad: float | None = None) -> Trajectory:
@@ -374,13 +361,6 @@ class Robot:
         if not r.success:
             raise RobotError("SAM3: %s" % r.message)
         return detections(r.detections)
-
-    def segmented_objects(self, max_age_s: float) -> list[Detection] | None:
-        """The scene segmenter's latest objects (the scene camera), or None if it is not publishing."""
-        s = self.segmented
-        if s is None or time.time() - s[0] > max_age_s:
-            return None
-        return detections(s[1])
 
     # ------------------------------------------------------------------
     def _wait(self, fut, timeout_s: float, why: str):

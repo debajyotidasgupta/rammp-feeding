@@ -90,13 +90,14 @@ def joint_cap(dps: float) -> float:
 
 
 class Arm:
-    def __init__(self, robot, kin: Chain | None = None):
-        if unmeasured():
+    def __init__(self, robot, kin: Chain | None = None, measured: bool = True):
+        """measured=False: without the utensil's tip model (rammp calibrate-wrist, which measures the camera's mount)."""
+        if measured and unmeasured():
             raise RuntimeError("not measured on this robot yet: %s (docs/index.mdx, setting up a site)" % ", ".join(unmeasured()))
         from rammp_feeding.scene import tip_in_tool       # (the tip model: the wrist camera's intrinsics and mount)
         self.robot, self.kin = robot, kin or chain(robot)
         self.cam = robot.camera_model("camera")
-        self.tip_tool = tip_in_tool(self.cam)
+        self.tip_tool = tip_in_tool(self.cam) if measured else None
         self.limits = {int(j) - 1: float(v) for j, v in M.joint_limits_deg.items()}
 
     # ------------------------------------------------------------------ state

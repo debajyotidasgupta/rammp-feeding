@@ -1,20 +1,27 @@
 """rammp -- the feeding module's one command (ros2 run rammp_feeding rammp <command>; under sheppy: rammp feed).
 
-    rammp check                    the arm, the planner, SAM3 and the cameras answer; where the arm is. Never moves.
-    rammp state                    where the arm is: joints, tool, utensil tip and tilt
+    rammp check                    the arm, the planner, SAM3 and the cameras answer; where the arm is; what the site
+                                   has not yet measured or captured. Never moves.
+    rammp state                    where the arm is: joints, tool, utensil tip and tilt. Never moves.
     rammp home [--direct [--dps D]]   to feeding_start (a cuRobo path, from anywhere; --direct: one joint move, no
                                    planner -- only for a workspace someone has checked is clear)
-    rammp detect [--plan]          to food_detect_start, over the bowl (a cuRobo path; --plan: plan only)
-    rammp perceive                 at food_detect_start: the target piece (a new bite)
+    rammp detect [--plan]          to food_detect_start, over the bowl: the scene camera's reading, then the wrist
+                                   camera's (cuRobo paths; --plan: the first, planned only)
+    rammp perceive                 at food_detect_start: the target piece (a new bite). Never moves.
     rammp acquire [--stop-after over|hover30|hover10|plunge] [--start-at over|scoop]
     rammp rise                     after a hover: straight back up to the overlook height
     rammp deliver [--stop-after swing|present|bite] [--start-at swing|present|bite|retract] [--no-wait-open]
     rammp retract                  from the user back to food_detect_start
     rammp feed [--bites N]         the loop: bite after bite until the bowl is empty or the user declines
-    rammp locate-scene             the bowl and the table from the scene camera (state_dir/scene_state.json)
-    rammp calibrate-scene [--reset]   the scene camera's pose from the arm (one capture here; nothing moves)
-    rammp capture home|overlook|deliver   the arm's joints now as feeding_start / food_detect_start's arm shape / the
-                                   delivery look (state_dir)
+    rammp locate-scene             the bowl and the table from the scene camera (state_dir/scene_state.json). Never moves.
+    rammp calibrate-wrist [--plan | --board]   the wrist camera's mount and the utensil's pixels, from a printed
+                                   ChArUco board laid under the utensil (from feeding_start, a few poses over it and
+                                   back; --plan: the route, nothing moves; --board: the sheet to print,
+                                   runs_dir/charuco_board.pdf)
+    rammp calibrate-scene          the scene camera's pose through the same board, where both cameras see it (from
+                                   feeding_start, the wrist camera's route over it and back; after calibrate-wrist)
+    rammp capture home|overlook|scoop_end|deliver   the arm's joints now as feeding_start / food_detect_start's arm
+                                   shape / where the scoop ends / the delivery look (state_dir). Never moves.
 
 Exit codes: 0 done; 1 stopped or refused (the arm stationary where it stopped); 3 the bowl is empty; 5 food left but
 none pickable; 7 the user declined (retracted); 8 the presentation refused (retracted).
@@ -31,7 +38,7 @@ import time
 import numpy as np
 
 from rammp_feeding import record, scene
-from rammp_feeding.config import cfg, state_dir
+from rammp_feeding.config import CAPTURES, cfg, state_dir
 
 log = logging.getLogger("rammp")
 
@@ -46,16 +53,22 @@ def report(arm, what: str) -> None:
     q = arm.q()
     T, R = arm.tool(q)
     log.info("  %-18s joints %s", what, " ".join("%7.2f" % v for v in q))
-    log.info("  %-18s tool (%.4f %.4f %.4f), tip (%.4f %.4f %.4f), utensil %.1f deg off vertical", "", *T, *arm.tip(q),
-             tilt_deg(R))
+    tip = "tip (%.4f %.4f %.4f)" % tuple(arm.tip(q)) if arm.tip_tool is not None else "no tip model (not measured)"
+    log.info("  %-18s tool (%.4f %.4f %.4f), %s, utensil %.1f deg off vertical", "", *T, tip, tilt_deg(R))
     record.event("at", name=what, joints=q, tool=T)
 
 
 def detect(robot, arm, plan: bool = False) -> None:
+    """To food_detect_start over the bowl: from the scene camera's reading (coarse), then over the bowl as the wrist
+    camera sees it from there (fine)."""
+    from rammp_feeding.scene_camera import refine
     ws = scene.workspace()
-    goal = scene.overlook_joints(arm)
     log.info("  the bowl at (%.3f, %.3f), table z %.3f (the scene camera, %s)", *ws["bowl_xy"], ws["table_z"], ws["when"])
-    arm.travel(goal, "to food_detect_start", go=not plan)
+    arm.travel(scene.overlook_joints(arm), "to food_detect_start", go=not plan)
+    if plan:
+        return
+    refine(robot, arm)
+    arm.travel(scene.overlook_joints(arm), "over the bowl")
 
 
 def home(robot, arm, direct: bool = False, dps: float | None = None) -> None:
@@ -119,7 +132,9 @@ def feed(robot, arm, face, bites: int) -> int:
 
 
 def check(robot, arm) -> int:
-    """What the module needs from the stack, each as it is served. Never moves."""
+    """What the module needs from the stack, each as it is served, and from the site (its measurements, poses and the
+    scene camera's pose). Never moves."""
+    from rammp_feeding.config import unmeasured
     bad = 0
 
     def row(ok, name, text, warn=False):
@@ -144,6 +159,14 @@ def check(robot, arm) -> int:
             % (robot.planner_parameter("world") or "%s (its config's)" % cfg.planner.restore_world))
     except Exception as e:  # noqa: BLE001
         row(False, "planner scene", str(e))
+    missing = unmeasured()
+    row(not missing, "measured", "the utensil and the wrist camera's mount" if not missing else
+        "not yet: %s (a ruler, rammp calibrate-wrist)" % ", ".join(missing))
+    poses = [n for n in CAPTURES if not (state_dir() / (n + ".json")).exists()]
+    row(not poses, "poses", "captured: %s" % ", ".join(CAPTURES) if not poses else "not captured: %s (rammp capture)"
+        % ", ".join(poses))
+    row((state_dir() / "scene_extrinsic.json").exists(), "scene pose", "measured (state_dir/scene_extrinsic.json)"
+        if (state_dir() / "scene_extrinsic.json").exists() else "not measured (rammp calibrate-scene)")
     for role, cam in robot.cameras.items():
         try:
             cam.frame(wait_s=5.0)                  # (the first frames after discovery can take a few seconds)
@@ -153,25 +176,23 @@ def check(robot, arm) -> int:
                 % (m.colour.width, m.colour.height))
         except Exception as e:  # noqa: BLE001
             row(False, role, str(e))
-    seg = robot.segmented_objects(5.0)
-    row(seg is not None, "scene segmenter", "publishing (%d objects)" % len(seg) if seg is not None else
-        "%s silent: the bowl falls back to SAM3" % cfg.ros.segmenter_topic, warn=True)
     return 1 if bad else 0
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="rammp", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", choices=["check", "state", "home", "detect", "perceive", "acquire", "rise", "deliver",
-                                        "retract", "feed", "locate-scene", "calibrate-scene", "capture"])
-    ap.add_argument("name", nargs="?", help="capture: home | overlook | deliver")
+                                        "retract", "feed", "locate-scene", "calibrate-scene", "calibrate-wrist",
+                                        "capture"])
+    ap.add_argument("name", nargs="?", help="capture: " + " | ".join(CAPTURES))
     ap.add_argument("--plan", action="store_true")
     ap.add_argument("--stop-after", default="")
     ap.add_argument("--start-at", default="")
     ap.add_argument("--no-wait-open", action="store_true")
     ap.add_argument("--bites", type=int, default=99)
-    ap.add_argument("--reset", action="store_true")
     ap.add_argument("--direct", action="store_true")
     ap.add_argument("--dps", type=float, default=None)
+    ap.add_argument("--board", action="store_true")
     a, _ = ap.parse_known_args(argv)               # (ros2 run / launch append their own --ros-args)
     import signal
 
@@ -179,12 +200,22 @@ def main(argv=None) -> int:
         raise KeyboardInterrupt
     signal.signal(signal.SIGTERM, _stop)           # docker stop / sheppy: as Ctrl-C, the move in flight cancelled
     record.setup_logging()
+    if a.command == "calibrate-wrist" and a.board:     # the sheet to print: no robot needed
+        from rammp_feeding.config import runs_dir
+        from rammp_feeding.wrist_calibration import board_pdf
+        board_pdf(runs_dir() / "charuco_board.pdf")
+        log.info("  %s: print it at 100%% (actual size), measure a square", runs_dir() / "charuco_board.pdf")
+        return 0
     record.session(a.command)
     from rammp_feeding.arm import Arm, MoveError
     robot = _robot()
     rc = 0
     try:
-        arm = Arm(robot)                           # (the arm's model, the wrist camera's camera_info and tf)
+        # (the arm's model, the wrist camera's camera_info; the tip model wherever a command uses it: not where the arm
+        # is, the direct move home, or the measurement of the camera's mount)
+        from rammp_feeding.config import unmeasured
+        tip_free = a.command in ("check", "state", "capture", "calibrate-wrist") or (a.command == "home" and a.direct)
+        arm = Arm(robot, measured=not (tip_free and unmeasured()))
         from rammp_feeding.scene_camera import publish
         publish(robot)                             # our measured scene camera pose, on /tf_static
         c = a.command
@@ -219,10 +250,13 @@ def main(argv=None) -> int:
             locate(robot, record.session("scene"))
         elif c == "calibrate-scene":
             from rammp_feeding.scene_camera import calibrate
-            rc = 0 if calibrate(robot, arm, a.reset) else 1
+            rc = 0 if calibrate(robot, arm) else 1
+        elif c == "calibrate-wrist":
+            from rammp_feeding.wrist_calibration import calibrate as calibrate_wrist
+            rc = 0 if calibrate_wrist(robot, arm, a.plan) or a.plan else 1
         elif c == "capture":
-            if a.name not in ("home", "overlook", "deliver"):
-                raise SystemExit("rammp capture home|overlook|deliver")
+            if a.name not in CAPTURES:
+                raise SystemExit("rammp capture " + "|".join(CAPTURES))
             qs = []
             for _ in range(30):
                 qs.append(arm.q())

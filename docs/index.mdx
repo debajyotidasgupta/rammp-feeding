@@ -4,86 +4,103 @@ title: Robot-assisted feeding
 
 # Robot-assisted feeding
 
-`rammp_feeding` feeds a seated user from a bowl with a utensil held in the Kinova Gen3's gripper: it finds the bowl
-with the scene camera, picks a piece of food with the wrist camera's aim, carries it to the user, waits for an open
-mouth, presents it, waits for the bite and comes back -- bite after bite until the bowl is empty or the user declines.
+`rammp_feeding` feeds a seated user from a bowl, with a utensil held in the Kinova Gen3's gripper. One bite works
+like this:
 
-It is a module like any other: one image, one node in the deployment manifest, everything it needs from the stack's
-own nodes. It moves the arm only through [the arm node](/kinova-gen3-ros2): its free-space paths come from the
-[cuRobo planner](https://github.com/rammp-org/RAMMP-CuRobo), and its straight-line and contact moves (the slide over
-the food, the plunge, the scoop, the approach to the mouth) are joint trajectories it computes on the arm's own model.
-It never commands the gripper.
+1. The scene camera finds the bowl.
+2. The wrist camera picks a piece of food and aims the utensil at it.
+3. The arm plunges and scoops, then carries the piece to the user.
+4. It waits for an open mouth, presents the piece, waits for the bite, and returns.
 
-## Run it
+This repeats until the bowl is empty or the user declines.
 
-Under sheppy, with the `december_2026` manifest: select `feeding -> rammp_feeding_docker` with `arm`,
-`arm_state_publisher`, `planner`, `wrist_camera`, `scene_camera`, `scene_segmenter` and `sam3`, and press `space`. The
-node runs `rammp feed` and exits when the session ends. Stopping it cancels the move in flight: the arm halts where
-it is.
+It is a RAMMP module: one image, one node in the deployment manifest, and everything else from the stack's own nodes.
 
-One step at a time, from the module's image on the robot (a person on the e-stop for every motion):
+- **Every move goes through the arm node** (`/execute_joint_trajectory`).
+- **Free-space moves** (to the bowl, the swing to the user, the return, home) are paths from the shared
+  [RAMMP-CuRobo planner](https://github.com/rammp-org/RAMMP-CuRobo). Each path is checked against the utensil's tip
+  floor and its clearance from the bowl and the user before it runs.
+- **Straight-line and contact moves** (the slide over the food, the plunge, the scoop, the approach to the mouth, the
+  back-off) are joint paths the module computes on the arm's own model.
+- **The module never commands the gripper.**
+
+Bringing it up on a new robot or site: [porting](porting.md). The ROS interfaces: [interface reference](interface.md).
+
+## Running it
+
+**Under sheppy**, select `feeding -> rammp_feeding_docker` together with `arm`, `arm_state_publisher`, `planner`,
+`wrist_camera`, `scene_camera` and `sam3`. The node runs `rammp feed` and exits when the session ends. Stopping the
+node cancels the move in flight, and the arm halts where it is.
+
+**One command at a time**, run from the module's image on the robot:
 
 ```bash
-docker run --rm -it --network host --ipc host -v /home/abra/.config/rammp_feeding:/config \
-  -v /home/abra/rammp_runs:/runs ghcr.io/rammp-org/rammp-feeding:0.1.0 ros2 run rammp_feeding rammp <command>
+docker run --rm -it --network host --ipc host --user "$(id -u):$(id -g)" -e ROS_DOMAIN_ID=0 -e HOME=/tmp \
+  -v <state_dir>:/config -v <runs_dir>:/runs \
+  ghcr.io/rammp-org/rammp-feeding:0.2.0 ros2 run rammp_feeding rammp <command>
 ```
 
-| Command | What it does |
+Keep someone at the e-stop for every command that moves the arm. Don't run this next to sheppy's own feeding node.
+
+## Commands
+
+| Command | What it does | Moves |
+| --- | --- | --- |
+| `check` | Every node the module needs, as served (the arm, the e-stop, the robot model, trajectories, the planner, SAM3, both cameras), and what the site has not yet measured or captured. | no |
+| `state` | Where the arm is: joints, tool pose, utensil tip, the utensil's tilt. | no |
+| `home [--direct [--dps D]]` | To feeding_start along a planned path, from anywhere. `--direct` makes one joint-space move instead, without the planner; use it only when the workspace is known to be clear. | yes |
+| `locate-scene` | The bowl, the table height and the bowl's top from the scene camera, written to `scene_state.json`. | no |
+| `detect [--plan]` | To food_detect_start over the bowl as the scene camera places it, then a re-centre over the bowl as the wrist camera sees it. `--plan` plans the first move only. | yes |
+| `perceive` | At food_detect_start: the target piece and the tool's goal. Each run starts a new bite. | no |
+| `acquire [--stop-after over\|hover30\|hover10\|plunge] [--start-at over\|scoop]` | Over the target, plunge, scoop. `hover30` and `hover10` stop 30 or 10 mm above the piece, to check the aim. `--start-at scoop` uses the piece height recorded by this bite's plunge. | yes |
+| `rise` | After a hover: straight back up to food_detect_start's height. | yes |
+| `deliver [--stop-after swing\|present\|bite] [--start-at swing\|present\|bite\|retract] [--no-wait-open]` | The swing to the delivery look, the presentation, the bite and the retract. `--no-wait-open` presents without waiting for the mouth to open. | yes |
+| `retract` | From the user back to food_detect_start. | yes |
+| `feed [--bites N]` | The whole loop: `locate-scene`, `detect`, then bites until the bowl is empty, the user declines, or N bites are done; then home. | yes |
+| `calibrate-wrist [--plan \| --board]` | The wrist camera's mount and the utensil's pixels in its image, from a ChArUco board laid under the utensil. `--plan` prints the route without moving; `--board` writes the sheet to print. | yes |
+| `calibrate-scene` | The scene camera's pose, through the same board seen by both cameras. | yes |
+| `capture home\|overlook\|scoop_end\|deliver` | Records the arm's current joints as that pose. | no |
+
+Every command that moves starts from where the arm is, or refuses with the reason; a refused or stopped command
+leaves the arm stationary. Any command can be run again. `perceive` and `acquire` refuse unless the arm is at
+food_detect_start (`rammp detect` first). `home` and `detect` plan from anywhere.
+
+## Exit codes
+
+| Code | Meaning |
 | --- | --- |
-| `check` | Every node the module needs, as it is served. Never moves. |
-| `state` | Where the arm is: joints, tool, utensil tip and tilt. |
-| `home` | To feeding_start, a planned path from anywhere. |
-| `locate-scene` | The bowl and the table from the scene camera. |
-| `detect [--plan]` | To food_detect_start, over the bowl. |
-| `perceive` | At food_detect_start: the target piece (starts a bite). |
-| `acquire [--stop-after over\|hover30\|hover10\|plunge] [--start-at scoop]` | Over the piece, plunge, scoop. |
-| `rise` | After a hover: straight back up. |
-| `deliver [--stop-after swing\|present\|bite] [--start-at ...] [--no-wait-open]` | To the user and back. |
-| `retract` | From the user back to food_detect_start. |
-| `feed [--bites N]` | The whole loop. |
-| `calibrate-scene [--reset]` | The scene camera's pose, measured from the arm. Never moves. |
-| `capture home\|overlook\|deliver` | The arm's joints now, as feeding_start / food_detect_start's arm shape / the delivery look. |
+| 0 | Done. |
+| 1 | Stopped or refused; the arm is stationary where it stopped. The log line `STOPPED:` gives the reason. |
+| 3 | The bowl is empty. |
+| 5 | Food is left in the bowl, but no piece is pickable. |
+| 7 | The user did not open their mouth (declined); the arm retracted. |
+| 8 | The presentation was refused (no usable mouth from either look, or the mouth too far from the seat); the arm retracted. |
 
-Exit codes: 0 done; 1 stopped or refused (the arm stationary where it stopped); 3 the bowl is empty; 5 food is left
-but none is pickable; 7 the user declined; 8 the presentation was refused (the arm retracted).
+## A feeding session
 
-## Setting up a site
+The operator fixes the setup at the start of a session. Nothing measured in an earlier session carries over.
 
-The module keeps what it measures on the robot in `/home/abra/.config/rammp_feeding` (mounted at `/config`):
-`local.yaml` (the machine's own settings, over `config/rammp.yaml`), the captured poses, the scene camera's measured
-pose and latest reading, and the collision world it hands the planner. Delete a file to reset what it holds.
+1. **Seat the user** where `motion.free_space.user_mouth_m` says, in the site's `local.yaml`. The planner's world
+   places the user's head and torso there, and a mouth measured more than `delivery.seated_tol_m` (0.10 m) away is
+   refused.
+2. **Lay the bowl** near `workspace.bowl_centre_m`, with the food spaced apart in it.
+3. `rammp check`: every row OK. A WARN on the robot model means the bundled copy of the driver's URDF is in use.
+4. `rammp home`: the arm goes to feeding_start.
+5. `rammp feed`. Or one stage at a time:
+   - `rammp locate-scene`: the scene camera's reading. It holds for the session; `rammp feed` runs it itself.
+   - `rammp detect`: to food_detect_start, centred over the bowl by the wrist camera.
+   - `rammp perceive`: the target piece. The run record keeps `detection.jpg`.
+   - `rammp acquire`: over the piece, plunge, scoop.
+   - `rammp deliver`: swing, present, bite, retract. Delivery is open loop: the mouth is measured once, as it opens,
+     from the delivery look, or from the second look `delivery.second_look_m` further on.
+   - Then `rammp perceive` again for the next bite, or `rammp home`.
 
-What is fixed to the arm ships in the tree and stays when the rig moves; what the room changes is set per site.
+## The run record
 
-**Fixed to the arm** (in the tree; re-set only if the arm, the user and the bowl are arranged differently):
+Every command writes a session directory under the runs directory, `<YYYYmmdd_HHMMSS>_<command>/`. It holds:
 
-- feeding_start and food_detect_start's arm shape: `calibration/home.json`, `overlook.json` (`capture home|overlook`).
-- The delivery look: `calibration/deliver.json` (`capture deliver`), and the second look `delivery.second_look_m`
-  (-Y: the user's right).
-- Where the user sits: `motion.free_space.user_mouth_m`. The planner's world has their head and torso there, facing
-  the arm along +x.
-- Where the scoop ends: the bowl profile's `scoop_end` (it moves with the table's height), set with the bowl about at
-  its `captured_at.bowl_centre_m`.
-- The wrist camera's mount on the arm (the camera profile's `mount`), and the arm's own mount: level (the deployed
-  planner's model). A new wrist camera or bracket: its profile in `config/camera/`, the mount measured once with a
-  ruler. Until every measured value is in (`config.MEASURED`), no command builds the arm.
+- `log.txt`, `events.jsonl` and `config.yaml`, the merged configuration of the run;
+- one `bite_NN/` per bite, with each stage's images, depth, plans and arm telemetry.
 
-**Per site** (its `local.yaml`; `config/machines/<name>.yaml` is the versioned copy):
-
-0. Its cameras: `profiles.camera` and `profiles.scene_camera` (`config/camera/`: `realsense_d405` and
-   `orbbec_gemini336l` at abra, `realsense_d435i` and `realsense_d435i_scene` in the lab).
-1. The table's footprint in the arm's base frame, `workspace.table_extent_m` (x, y): the planner's table and our tip
-   floor.
-2. The scene camera: a rough guess of its pose (`scene_camera.extrinsic`), then `calibrate-scene` at
-   food_detect_start. It writes the measured pose (`scene_extrinsic.json`) and publishes it on `/tf_static` as
-   `base_link -> scene_camera_link`. Again whenever the camera is moved.
-3. The bowl: its profile's `floor_above_table_m` (a ruler), and the bowl laid about where the scoop end was set.
-4. The deployment: the state and run folders mounted in the manifest (`rammp-alternative.yaml`), the planner's
-   `/config` read-only.
-
-**After any utensil change, re-seat or power-cycle:**
-
-5. The ruler from the wrist camera's glass to the tines (`utensil.glass_to_tip_m`), then `tip_px` set by 10 mm hover
-   checks (`acquire --stop-after hover10`, adjust, `rise`, again).
-
-**Then:** `check`, and `feed --bites 1`.
+`<runs_dir>/latest` points at the current bite, so a stage run on its own continues it. For example, `rammp acquire`
+finds the target that the last `rammp perceive` wrote.

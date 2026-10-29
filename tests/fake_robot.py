@@ -76,9 +76,6 @@ class FakeCamera:
     def depth_median(self, frames, since, wait_s=3.0, min_frames=5):
         return self.robot.render_depth()
 
-    def latest_depth(self):
-        return time.time(), self.robot.render_depth()
-
 
 class FakeRobot:
     def __init__(self, sc: Scene, q0):
@@ -102,9 +99,6 @@ class FakeRobot:
 
     def camera_model(self, role: str, wait_s: float = 5.0) -> CameraModel:
         return CAM
-
-    def segmented_objects(self, max_age_s):
-        return None
 
     def publish_static(self, parent, child, T):
         pass
@@ -131,9 +125,6 @@ class FakeRobot:
         self.moves.append("impedance" if impedance else "position")
         self.traj = FakeTrajectory(self, positions_rad, times_s)
         return self.traj
-
-    def estop(self, reason):
-        self.estopped = True
 
     # --- the planner: a straight joint line
     def plan_joints(self, start_deg, goal_deg, timeout_s):
@@ -167,15 +158,19 @@ class FakeRobot:
         return (np.hypot(p[..., 0] - centre[0], p[..., 1] - centre[1]) < r) & (t > 0)
 
     def render_depth(self) -> np.ndarray:
-        """mm along the optical axis: the piece's top where its disc is, else the table (a clear bowl reads it)."""
+        """mm along the optical axis: the bowl's rim (6 mm wide, 60 mm up), the piece's top where its disc is, else the
+        table (the bowl's walls and floor read as it)."""
         o, d = self._rays()
         sc = self.sc
-        floor = sc.table_z + sc.floor_lift
+        floor, rim = sc.table_z + sc.floor_lift, sc.table_z + 0.06
         with np.errstate(divide="ignore", invalid="ignore"):
             t_tab = (floor - o[2]) / d[..., 2]
             t_top = (floor + sc.piece_height - o[2]) / d[..., 2]
+            t_rim = (rim - o[2]) / d[..., 2]
         z = np.where(t_tab > 0, t_tab, np.nan)
         z = np.where(self._disc(sc.piece_xy, sc.piece_radius, floor + sc.piece_height), t_top, z)
+        ring = self._disc(sc.bowl_xy, sc.bowl_radius, rim) & ~self._disc(sc.bowl_xy, sc.bowl_radius - 0.006, rim)
+        z = np.where(ring, t_rim, z)
         return np.nan_to_num(1000 * z, nan=0.0).astype(np.uint16)
 
     def project(self, p) -> np.ndarray:
@@ -192,9 +187,10 @@ class FakeRobot:
         """SAM3's boxes and masks: the bowl's rim and the piece's top, projected."""
         sc = self.sc
         out = []
-        if any(p in cfg.perception.bowl_prompts for p in prompts):
+        if any(p in cfg.perception.bowl_prompts for p in prompts):          # its mask stops at the piece on it, as SAM3's
+            piece = self._disc(sc.piece_xy, sc.piece_radius, sc.table_z + sc.piece_height)
             out.append(Detection(cfg.perception.bowl_prompts[0], 0.9, self._box(sc.bowl_xy, sc.bowl_radius, sc.table_z + 0.06),
-                                 self._disc(sc.bowl_xy, sc.bowl_radius, sc.table_z + 0.03)))
+                                 self._disc(sc.bowl_xy, sc.bowl_radius, sc.table_z + 0.06) & ~piece))
         if cfg.food.prompt in prompts:
             top = sc.table_z + sc.piece_height
             out.append(Detection(cfg.food.prompt, 0.8, self._box(sc.piece_xy, sc.piece_radius, top),

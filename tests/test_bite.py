@@ -1,5 +1,6 @@
 """The whole bite offline, through the module's own code, against tests/fake_robot.py: from feeding_start to
-food_detect_start, perceive, acquire (OVER, plunge, scoop), deliver (swing, present, bite, retract), home.
+food_detect_start, perceive, acquire (OVER, plunge, then the scoop on its own from the plunge's record), deliver
+(swing, present, bite, retract), home.
 
     python3 tests/test_bite.py [--user-offset dx,dy,dz] [--piece dx,dy] [--expect 8] [--planner curobo]
         curobo: RAMMP-CuRobo's real planner (a CUDA box) as the deployment shares it: its default config, our world
@@ -13,18 +14,10 @@ images (SAM3 and the face are stand-ins; the depth is rendered from the arm's po
 from __future__ import annotations
 
 import json
-import os
 import sys
-import tempfile
 import time
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "tests"))
-WORK = Path(tempfile.mkdtemp(prefix="rammp_test_"))
-os.environ.update(RAMMP_NO_LOCAL="1", RAMMP_STATE_DIR=str(WORK / "state"),
-                  RAMMP_SET="deployment.runs_dir=%s,planner.world_file=%s,planner.world_file_in_planner=" % (WORK / "runs", WORK / "state/world.yaml"))
-
+import fixture  # noqa: F401  (the test site: before rammp_feeding is imported)
 import numpy as np  # noqa: E402
 
 from fake_robot import FakeFace, FakeRobot, Scene  # noqa: E402

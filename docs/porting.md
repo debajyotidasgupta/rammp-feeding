@@ -105,7 +105,7 @@ Intrinsics are never configured: they come from the driver's `camera_info` and `
 - [ ] **The module's image**, pinned to its release:
 
       ```bash
-      docker pull debajyotidasgupta/rammp-feeding:0.2.2
+      docker pull debajyotidasgupta/rammp-feeding:0.2.3
       ```
 
 - [ ] **SAM3's weights.** They are gated on Hugging Face and not in SAM3's image. Accept the licence for
@@ -127,7 +127,7 @@ Intrinsics are never configured: they come from the driver's `camera_info` and `
       tty=-i; [ -t 0 ] && tty=-it
       exec docker run --rm $tty --network host --ipc host --user 1000:1000 -e ROS_DOMAIN_ID=0 -e HOME=/tmp \
         -v /srv/rammp_feeding/config:/config -v /srv/rammp_feeding/runs:/runs \
-        debajyotidasgupta/rammp-feeding:0.2.2 ros2 run rammp_feeding rammp "$@"
+        debajyotidasgupta/rammp-feeding:0.2.3 ros2 run rammp_feeding rammp "$@"
       ```
 
       Never run it while sheppy's `feeding` node is up: two clients would command the arm.

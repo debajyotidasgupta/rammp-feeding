@@ -8,7 +8,7 @@ The module is a ROS 2 package (`rammp_feeding`) with an image (`Dockerfile`, `FR
 deployment manifest (`rammp-alternative.yaml`). It moves the arm only through the arm node. Free-space paths come from
 the shared RAMMP-CuRobo planner; straight-line and contact moves are computed on the arm's own model.
 
-Current release: 0.2.2, image `debajyotidasgupta/rammp-feeding:0.2.2` on Docker Hub (arm64, Jetson).
+Current release: 0.2.3, image `debajyotidasgupta/rammp-feeding:0.2.3` on Docker Hub (arm64, Jetson).
 
 **Deploying on a new Jetson:** follow [docs/porting.md](docs/porting.md), the deployment checklist, from start to end.
 

@@ -15,7 +15,7 @@
     - id: rammp_feeding_docker
       kind: docker
       container:
-        image: debajyotidasgupta/rammp-feeding:0.2.2     # Docker Hub, arm64
+        image: debajyotidasgupta/rammp-feeding:0.2.3     # Docker Hub, arm64
         network_mode: host
         ipc: host
         user: "1000:1000"

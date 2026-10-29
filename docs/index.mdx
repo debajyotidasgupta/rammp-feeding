@@ -37,7 +37,7 @@ node cancels the move in flight, and the arm halts where it is.
 ```bash
 docker run --rm -it --network host --ipc host --user 1000:1000 -e ROS_DOMAIN_ID=0 -e HOME=/tmp \
   -v /srv/rammp_feeding/config:/config -v /srv/rammp_feeding/runs:/runs \
-  debajyotidasgupta/rammp-feeding:0.2.2 ros2 run rammp_feeding rammp <command>
+  debajyotidasgupta/rammp-feeding:0.2.3 ros2 run rammp_feeding rammp <command>
 ```
 
 Keep someone at the e-stop for every command that moves the arm. Don't run this next to sheppy's own feeding node.

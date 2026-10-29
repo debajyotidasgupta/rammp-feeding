@@ -91,7 +91,17 @@ Don't run it while sheppy's own `feeding` node is up: two clients would command 
 ## 2. Deployment
 
 The module runs as one node in the sheppy manifest, transcribed from this repo's `rammp-alternative.yaml` (keep the
-two the same).
+two the same). In rammp-deployments it is the `feeding` node of `december_2026/sheppy-manifest.yaml`, with the
+`dojo` profile for abra:
+
+```bash
+git clone https://github.com/rammp-org/rammp-deployments.git && cd rammp-deployments
+uv run scripts/set_robot.py december_2026/config/robots/dojo        # a level mount
+sheppy up dojo --manifest december_2026/sheppy-manifest.yaml
+```
+
+That manifest names abra's host paths (`/home/abra/...`), for this module's mounts and for other nodes (SAM3's
+weights, among others). On another host, use a copy with that host's paths, or create the same paths there.
 
 - [ ] **The image** is pinned to a release tag: `debajyotidasgupta/rammp-feeding:0.2.1` (Docker Hub).
 - [ ] **The node's mounts**: the state directory at `/config` and the run record at `/runs`, both host folders owned

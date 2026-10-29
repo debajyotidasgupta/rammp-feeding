@@ -9,8 +9,8 @@ locate     the bowl: SAM3 with perception.scene.bowl_prompts (boxes and masks); 
            table round it (a plane fit to the dominant flat surface), its centre and radius (a circle through its rim)
            and its top -> state_dir/scene_state.json, the reachable bowl nearest workspace.bowl_centre_m (where the
            operator lays it)
-refine     the same fit on the wrist camera's view from food_detect_start (rammp detect): its bowl centre and radius
-           replace this one's
+refine     the same fit on the wrist camera's view from food_detect_start (rammp detect): the bowl it finds nearest
+           this one's, within twice the scene camera's error_m, replaces its centre and radius
 calibrate  through the ChArUco board on the table (perception.wrist_calibration's, as rammp calibrate-wrist uses it):
            this camera sees it from where it is; the wrist camera, through its measured mount, sees it from the route
            over it and so places it in the base frame; this camera's pose follows. Neither the arm nor a guess needs to
@@ -141,8 +141,9 @@ def locate(robot, out: Path) -> dict:
 
 def refine(robot, arm) -> dict:
     """The bowl as the wrist camera sees it from food_detect_start (SAM3 with perception.bowl_prompts, its depth through
-    the measured mount, locate's own fit): scene_state.json's bowl centre and radius take its reading. The heights stay
-    the scene camera's: from above, the rim is too thin to read its top."""
+    the measured mount, locate's own fit): of its bowls, the one nearest the scene camera's, within twice that camera's
+    error_m, gives scene_state.json its centre and radius. The heights stay the scene camera's: from above, the rim is
+    too thin to read its top."""
     from rammp_feeding.scene import camera_pose
     cam, model = robot.cameras["camera"], robot.camera_model("camera")
     since = time.time()
@@ -152,13 +153,15 @@ def refine(robot, arm) -> dict:
     pc = model.depth_points(D)
     uv = np.round(np.stack(model.pixel(pc.T), 1)).astype(int)
     dets = robot.detect("camera", list(cfg.perception.bowl_prompts), float(cfg.perception.bowl_score_threshold))
-    fits = [bowl_at(d.mask, d.box, uv, pc @ Rc.T + o) for d in sorted(dets, key=lambda d: -d.score)]
-    fit = next((f for f in fits if "bowl_xy" in f), None)
-    if fit is None:
-        raise RuntimeError("the wrist camera finds no bowl from food_detect_start (%d candidates: %s)"
-                           % (len(fits), ", ".join(f["rejected"] for f in fits) or "none"))
     f = state_dir() / "scene_state.json"
     st = json.loads(f.read_text())
+    fits = [bowl_at(d.mask, d.box, uv, pc @ Rc.T + o) for d in dets]
+    near = [m for m in fits if "bowl_xy" in m and np.hypot(*np.subtract(m["bowl_xy"], st["bowl_xy"])) <= 2 * float(SC.error_m)]
+    if not near:
+        raise RuntimeError("the wrist camera finds no bowl within %.0f mm of the scene camera's from food_detect_start "
+                           "(%d candidates: %s)" % (2000 * float(SC.error_m), len(fits), ", ".join(
+                               m.get("rejected") or "at (%.3f, %.3f)" % tuple(m["bowl_xy"]) for m in fits) or "none"))
+    fit = min(near, key=lambda m: np.hypot(*np.subtract(m["bowl_xy"], st["bowl_xy"])))
     log.info("  the wrist camera: the bowl at (%.3f, %.3f), %.0f mm from the scene camera's, rim radius %.3f m",
              *fit["bowl_xy"], 1000 * float(np.hypot(*np.subtract(fit["bowl_xy"], st["bowl_xy"]))), fit["rim_radius_m"])
     st.update({k: fit[k] for k in ("bowl_xy", "rim_radius_m")}, refined_by="the wrist camera")

@@ -23,8 +23,10 @@
     rammp capture home|overlook|scoop_end|deliver   the arm's joints now as feeding_start / food_detect_start's arm
                                    shape / where the scoop ends / the delivery look (state_dir). Never moves.
 
-Exit codes: 0 done; 1 stopped or refused (the arm stationary where it stopped); 3 the bowl is empty; 5 food left but
-none pickable; 7 the user declined (retracted); 8 the presentation refused (retracted).
+Exit codes: 0 done (feed: also when the bowl is empty or the user declines); 1 stopped or refused (the arm stationary
+where it stopped); 3 the bowl is empty (perceive); 4 no bite (deliver, feed: retracted with the piece); 5 food left
+but none pickable (perceive, feed); 7 the user declined (deliver: retracted); 8 the presentation refused (deliver,
+feed: retracted).
 """
 
 from __future__ import annotations
@@ -39,8 +41,13 @@ import numpy as np
 
 from rammp_feeding import record, scene
 from rammp_feeding.config import CAPTURES, cfg, state_dir
+from rammp_feeding.geometry import fold
 
 log = logging.getLogger("rammp")
+# --stop-after / --start-at per command (empty: the whole command / from its first stage)
+STAGES = dict(acquire=(("over", "hover30", "hover10", "plunge"), ("over", "scoop")),
+              deliver=(("swing", "present", "bite"), ("swing", "present", "bite", "retract")))
+TIP_FREE = ("check", "state", "capture", "calibrate-wrist")     # (and home --direct): no tip model, no wrist camera
 
 
 def _robot():
@@ -53,8 +60,8 @@ def report(arm, what: str) -> None:
     q = arm.q()
     T, R = arm.tool(q)
     log.info("  %-18s joints %s", what, " ".join("%7.2f" % v for v in q))
-    tip = "tip (%.4f %.4f %.4f)" % tuple(arm.tip(q)) if arm.tip_tool is not None else "no tip model (not measured)"
-    log.info("  %-18s tool (%.4f %.4f %.4f), %s, utensil %.1f deg off vertical", "", *T, tip, tilt_deg(R))
+    tip = ", tip (%.4f %.4f %.4f)" % tuple(arm.tip(q)) if arm.tip_tool is not None else ""
+    log.info("  %-18s tool (%.4f %.4f %.4f)%s, utensil %.1f deg off vertical", "", *T, tip, tilt_deg(R))
     record.event("at", name=what, joints=q, tool=T)
 
 
@@ -120,8 +127,9 @@ def feed(robot, arm, face, bites: int) -> int:
             return rc
         acquire(robot, arm, _target(), record.stage("acquire"))
         rc = deliver(robot, arm, face, record.stage("deliver"))
-        if rc in (7, 8):
-            log.info("the user declined" if rc == 7 else "the presentation was refused -- stopping")
+        if rc in (4, 7, 8):
+            log.info({4: "no bite: the piece may still be on the utensil -- stopping", 7: "the user declined",
+                      8: "the presentation was refused -- stopping"}[rc])
             home(robot, arm)
             return 0 if rc == 7 else rc
         n += 1
@@ -135,6 +143,7 @@ def check(robot, arm) -> int:
     """What the module needs from the stack, each as it is served, and from the site (its measurements, poses and the
     scene camera's pose). Never moves."""
     from rammp_feeding.config import unmeasured
+    from rammp_feeding.scene import tip_in_tool
     bad = 0
 
     def row(ok, name, text, warn=False):
@@ -155,13 +164,18 @@ def check(robot, arm) -> int:
     for name, client in (("planner world", robot._world), ("sam3", robot._detect)):
         row(client.wait_for_service(timeout_sec=2.0), name, "service up")
     try:
-        row(True, "planner scene", "%s (ours only while we plan, then this again)"
+        row(True, "planner scene", "%s (ours from a command's first planned move to its end, then this again)"
             % (robot.planner_parameter("world") or "%s (its config's)" % cfg.planner.restore_world))
     except Exception as e:  # noqa: BLE001
         row(False, "planner scene", str(e))
     missing = unmeasured()
-    row(not missing, "measured", "the utensil and the wrist camera's mount" if not missing else
-        "not yet: %s (a ruler, rammp calibrate-wrist)" % ", ".join(missing))
+    try:
+        if missing:
+            raise RuntimeError("not yet: %s (a ruler, rammp calibrate-wrist)" % ", ".join(missing))
+        row(True, "measured", "the utensil tip at %s m in the tool frame"
+            % np.round(tip_in_tool(robot.camera_model("camera")), 4).tolist())
+    except Exception as e:  # noqa: BLE001
+        row(False, "measured", str(e))
     poses = [n for n in CAPTURES if not (state_dir() / (n + ".json")).exists()]
     row(not poses, "poses", "captured: %s" % ", ".join(CAPTURES) if not poses else "not captured: %s (rammp capture)"
         % ", ".join(poses))
@@ -186,14 +200,21 @@ def main(argv=None) -> int:
                                         "capture"])
     ap.add_argument("name", nargs="?", help="capture: " + " | ".join(CAPTURES))
     ap.add_argument("--plan", action="store_true")
-    ap.add_argument("--stop-after", default="")
-    ap.add_argument("--start-at", default="")
+    ap.add_argument("--stop-after", default="", help="acquire: over | hover30 | hover10 | plunge; deliver: swing | "
+                    "present | bite")
+    ap.add_argument("--start-at", default="", help="acquire: over | scoop; deliver: swing | present | bite | retract")
     ap.add_argument("--no-wait-open", action="store_true")
     ap.add_argument("--bites", type=int, default=99)
     ap.add_argument("--direct", action="store_true")
     ap.add_argument("--dps", type=float, default=None)
     ap.add_argument("--board", action="store_true")
     a, _ = ap.parse_known_args(argv)               # (ros2 run / launch append their own --ros-args)
+    stops, starts = STAGES.get(a.command, ((), ()))
+    if a.stop_after and a.stop_after not in stops or a.start_at and a.start_at not in starts:
+        ap.error("rammp %s: --stop-after %s, --start-at %s" % (a.command, " | ".join(stops) or "(none)",
+                                                               " | ".join(starts) or "(none)"))
+    if a.command == "capture" and a.name not in CAPTURES:
+        ap.error("rammp capture " + " | ".join(CAPTURES))
     import signal
 
     def _stop(*_):
@@ -211,11 +232,9 @@ def main(argv=None) -> int:
     robot = _robot()
     rc = 0
     try:
-        # (the arm's model, the wrist camera's camera_info; the tip model wherever a command uses it: not where the arm
-        # is, the direct move home, or the measurement of the camera's mount)
-        from rammp_feeding.config import unmeasured
-        tip_free = a.command in ("check", "state", "capture", "calibrate-wrist") or (a.command == "home" and a.direct)
-        arm = Arm(robot, measured=not (tip_free and unmeasured()))
+        # (the arm's model; the tip model -- the measurements and the wrist camera's camera_info -- wherever a command
+        # uses it: not where the arm is, the direct move home, a capture, or the measurement of the camera's mount)
+        arm = Arm(robot, measured=not (a.command in TIP_FREE or a.command == "home" and a.direct))
         from rammp_feeding.scene_camera import publish
         publish(robot)                             # our measured scene camera pose, on /tf_static
         c = a.command
@@ -240,7 +259,6 @@ def main(argv=None) -> int:
             from rammp_feeding.face import Face
             face = Face() if c != "retract" else None
             if c == "feed":
-                record.session("feed")
                 rc = feed(robot, arm, face, a.bites)
             else:
                 rc = deliver(robot, arm, face, record.stage("deliver"), a.stop_after,
@@ -255,18 +273,16 @@ def main(argv=None) -> int:
             from rammp_feeding.wrist_calibration import calibrate as calibrate_wrist
             rc = 0 if calibrate_wrist(robot, arm, a.plan) or a.plan else 1
         elif c == "capture":
-            if a.name not in CAPTURES:
-                raise SystemExit("rammp capture " + "|".join(CAPTURES))
             qs = []
             for _ in range(30):
                 qs.append(arm.q())
                 time.sleep(0.02)
-            q = [round(float(v), 3) for v in np.median(qs, axis=0)]
+            q = [round(float(v), 3) for v in fold(np.asarray(qs[0]) + np.median(fold(np.asarray(qs) - qs[0]), axis=0))]
             (state_dir() / (a.name + ".json")).write_text(json.dumps(dict(joints_deg=q, captured=time.strftime("%F %T")), indent=1))
             log.info("  %s <- %s", state_dir() / (a.name + ".json"), q)
         if c in ("home", "detect", "rise", "retract", "acquire", "deliver"):
             report(arm, "now")
-    except (MoveError, RuntimeError, FileNotFoundError, ValueError) as e:
+    except (MoveError, RuntimeError, OSError, ValueError) as e:      # (FileNotFoundError is an OSError)
         log.error("\n  STOPPED: %s", e)
         record.event("stopped", command=a.command, reason=str(e))
         rc = 1

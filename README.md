@@ -8,7 +8,7 @@ The module is a ROS 2 package (`rammp_feeding`) with an image (`Dockerfile`, `FR
 deployment manifest (`rammp-alternative.yaml`). It moves the arm only through the arm node. Free-space paths come from
 the shared RAMMP-CuRobo planner; straight-line and contact moves are computed on the arm's own model.
 
-Current release: 0.2.0, image `ghcr.io/rammp-org/rammp-feeding:0.2.0`.
+Current release: 0.2.1, image `debajyotidasgupta/rammp-feeding:0.2.1` on Docker Hub (arm64, Jetson).
 
 ## Documentation
 
@@ -58,5 +58,6 @@ tests/test_ros.sh                                  # the ROS wiring against kino
 `tests/offline.sh` needs no ROS: numpy, scipy, Pillow, PyYAML and OpenCV. `tests/test_ros.sh` runs the real arm driver
 in simulation, stand-ins for the planner, SAM3 and the cameras, and `rammp check` against them.
 
-Release: `docker build -t ghcr.io/rammp-org/rammp-feeding:<version> .` from the tagged commit; the manifest pins that
+Release: `docker build -t debajyotidasgupta/rammp-feeding:<version> .` on a Jetson from the tagged commit, then
+`docker push`; the manifest pins that
 tag.

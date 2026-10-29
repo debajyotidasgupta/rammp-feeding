@@ -37,7 +37,7 @@ node cancels the move in flight, and the arm halts where it is.
 ```bash
 docker run --rm -it --network host --ipc host --user "$(id -u):$(id -g)" -e ROS_DOMAIN_ID=0 -e HOME=/tmp \
   -v <state_dir>:/config -v <runs_dir>:/runs \
-  ghcr.io/rammp-org/rammp-feeding:0.2.0 ros2 run rammp_feeding rammp <command>
+  debajyotidasgupta/rammp-feeding:0.2.1 ros2 run rammp_feeding rammp <command>
 ```
 
 Keep someone at the e-stop for every command that moves the arm. Don't run this next to sheppy's own feeding node.
@@ -47,34 +47,37 @@ Keep someone at the e-stop for every command that moves the arm. Don't run this 
 | Command | What it does | Moves |
 | --- | --- | --- |
 | `check` | Every node the module needs, as served (the arm, the e-stop, the robot model, trajectories, the planner, SAM3, both cameras), and what the site has not yet measured or captured. | no |
-| `state` | Where the arm is: joints, tool pose, utensil tip, the utensil's tilt. | no |
+| `state` | Where the arm is: joints, tool pose, the utensil's tilt. Needs neither the measurements nor the wrist camera. | no |
 | `home [--direct [--dps D]]` | To feeding_start along a planned path, from anywhere. `--direct` makes one joint-space move instead, without the planner; use it only when the workspace is known to be clear. | yes |
 | `locate-scene` | The bowl, the table height and the bowl's top from the scene camera, written to `scene_state.json`. | no |
 | `detect [--plan]` | To food_detect_start over the bowl as the scene camera places it, then a re-centre over the bowl as the wrist camera sees it. `--plan` plans the first move only. | yes |
 | `perceive` | At food_detect_start: the target piece and the tool's goal. Each run starts a new bite. | no |
-| `acquire [--stop-after over\|hover30\|hover10\|plunge] [--start-at over\|scoop]` | Over the target, plunge, scoop. `hover30` and `hover10` stop 30 or 10 mm above the piece, to check the aim. `--start-at scoop` uses the piece height recorded by this bite's plunge. | yes |
+| `acquire [--stop-after over\|hover30\|hover10\|plunge] [--start-at over\|scoop]` | Over the target, plunge, scoop. `hover30` and `hover10` stop 30 or 10 mm above the piece (never below the bowl's floor), to check the aim. `--start-at scoop` scoops from where this bite's plunge ended, with the piece height it recorded, and refuses anywhere else. | yes |
 | `rise` | After a hover: straight back up to food_detect_start's height. | yes |
 | `deliver [--stop-after swing\|present\|bite] [--start-at swing\|present\|bite\|retract] [--no-wait-open]` | The swing to the delivery look, the presentation, the bite and the retract. `--no-wait-open` presents without waiting for the mouth to open. | yes |
 | `retract` | From the user back to food_detect_start. | yes |
-| `feed [--bites N]` | The whole loop: `locate-scene`, `detect`, then bites until the bowl is empty, the user declines, or N bites are done; then home. | yes |
+| `feed [--bites N]` | The whole loop: `locate-scene`, `detect`, then bites until the bowl is empty, the user declines, a bite is missed, or N bites are done; then home. | yes |
 | `calibrate-wrist [--plan \| --board]` | The wrist camera's mount and the utensil's pixels in its image, from a ChArUco board laid under the utensil. `--plan` prints the route without moving; `--board` writes the sheet to print. | yes |
 | `calibrate-scene` | The scene camera's pose, through the same board seen by both cameras. | yes |
 | `capture home\|overlook\|scoop_end\|deliver` | Records the arm's current joints as that pose. | no |
 
 Every command that moves starts from where the arm is, or refuses with the reason; a refused or stopped command
 leaves the arm stationary. Any command can be run again. `perceive` and `acquire` refuse unless the arm is at
-food_detect_start (`rammp detect` first). `home` and `detect` plan from anywhere.
+food_detect_start (`rammp detect` first). `home` and `detect` plan from anywhere, given the site's measurements and
+the session's scene reading (`rammp locate-scene`). Each command accepts only its own `--stop-after` and
+`--start-at` stages.
 
 ## Exit codes
 
 | Code | Meaning |
 | --- | --- |
-| 0 | Done. |
+| 0 | Done. `feed` also ends with 0 when the bowl is empty or the user declines. |
 | 1 | Stopped or refused; the arm is stationary where it stopped. The log line `STOPPED:` gives the reason. |
-| 3 | The bowl is empty. |
-| 5 | Food is left in the bowl, but no piece is pickable. |
-| 7 | The user did not open their mouth (declined); the arm retracted. |
-| 8 | The presentation was refused (no usable mouth from either look, or the mouth too far from the seat); the arm retracted. |
+| 3 | `perceive`: the bowl is empty. |
+| 4 | `deliver`, `feed`: no bite within `delivery.bite_timeout_s`; the arm retracted, the piece possibly still on the utensil. |
+| 5 | `perceive`, `feed`: food is left in the bowl, but no piece is pickable. |
+| 7 | `deliver`: the user did not open their mouth (declined); the arm retracted. |
+| 8 | `deliver`, `feed`: the presentation was refused (no usable mouth from either look, or the mouth too far from the seat); the arm retracted. |
 
 ## A feeding session
 
@@ -82,11 +85,13 @@ The operator fixes the setup at the start of a session. Nothing measured in an e
 
 1. **Seat the user** where `motion.free_space.user_mouth_m` says, in the site's `local.yaml`. The planner's world
    places the user's head and torso there, and a mouth measured more than `delivery.seated_tol_m` (0.10 m) away is
-   refused.
+   refused. If the seat moved, capture the delivery look for it (`rammp capture deliver`) and set the second look
+   (`delivery.second_look_m`).
 2. **Lay the bowl** near `workspace.bowl_centre_m`, with the food spaced apart in it.
 3. `rammp check`: every row OK. A WARN on the robot model means the bundled copy of the driver's URDF is in use.
-4. `rammp home`: the arm goes to feeding_start.
-5. `rammp feed`. Or one stage at a time:
+4. `rammp locate-scene`: this session's scene reading, which every planned move uses.
+5. `rammp home`: the arm goes to feeding_start.
+6. `rammp feed`. Or one stage at a time:
    - `rammp locate-scene`: the scene camera's reading. It holds for the session; `rammp feed` runs it itself.
    - `rammp detect`: to food_detect_start, centred over the bowl by the wrist camera.
    - `rammp perceive`: the target piece. The run record keeps `detection.jpg`.

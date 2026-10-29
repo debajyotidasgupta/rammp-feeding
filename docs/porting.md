@@ -8,8 +8,14 @@ How to bring `rammp_feeding` up on a new robot or at a new site. Work through th
 depends on the ones before it. Everything a site measures is kept in its **state directory** (mounted at `/config`),
 never in the source tree, so one image serves every site.
 
+**Requirements.** An arm64 NVIDIA Jetson (the image builds on `rammp-base`, JetPack), Docker, and a Kinova Gen3 on a
+**level** mount, run by the release generation of the arm, `arm_state_publisher` and `planner` nodes
+(kinova-gen3-ros2 1.1.0, rammp-curobo 1.1.0). A tilted mount (the December manifest's `gen_1_5` and `flatbot`)
+needs the nightly generation, which this release does not support.
+
 | Step | Result |
 | --- | --- |
+| 0. The image and the state directory | The module's image pulled; `/config` and `/runs` on the host |
 | 1. Hardware and network | The arm and the Jetson on one subnet; DDS kept off the arm's link |
 | 2. Deployment | The module's node in the sheppy manifest, with its mounts |
 | 3. The machine file | `<state_dir>/local.yaml`: the site's profiles and hand measurements |
@@ -18,7 +24,29 @@ never in the source tree, so one image serves every site.
 | 6. Calibrations | `wrist_mount.json`, then `scene_extrinsic.json` |
 | 7. Verification | One bite, stage by stage |
 
+What ends up in the state directory, file by file: [interface reference, Files](interface.md#files).
+
 Every command that moves the arm needs a person at the e-stop (see [Safety](#safety)).
+
+## 0. The image and the state directory
+
+```bash
+docker pull debajyotidasgupta/rammp-feeding:0.2.1
+mkdir -p ~/.config/rammp_feeding ~/rammp_runs           # the state directory (/config) and the run record (/runs)
+```
+
+To run single commands outside sheppy, install a wrapper as `~/.local/bin/rammp`:
+
+```bash
+#!/usr/bin/env bash
+# rammp <command>: the feeding module's command in its image, against this machine's state and run record.
+tty=-i; [ -t 0 ] && tty=-it
+exec docker run --rm $tty --network host --ipc host --user "$(id -u):$(id -g)" -e ROS_DOMAIN_ID=0 -e HOME=/tmp \
+  -v "$HOME/.config/rammp_feeding:/config" -v "$HOME/rammp_runs:/runs" \
+  debajyotidasgupta/rammp-feeding:0.2.1 ros2 run rammp_feeding rammp "$@"
+```
+
+Don't run it while sheppy's own `feeding` node is up: two clients would command the arm.
 
 ## 1. Hardware and network
 
@@ -32,28 +60,31 @@ Every command that moves the arm needs a person at the e-stop (see [Safety](#saf
 
 - [ ] **The arm's link runs at 1 Gb/s.** Check the switch port's link light or `ethtool`. At 100 Mb/s, any stray
       traffic on that port starves the driver's 1 kHz control loop.
-- [ ] **DDS receive buffers** are large enough for camera images. With the default 208 KB, SAM3 drops the ~900 KB
-      colour frames. In `/etc/sysctl.d/60-ros-dds-buffers.conf`:
-
-      ```
-      net.core.rmem_max = 33554432
-      net.core.rmem_default = 16777216
-      ```
-
-      Then apply them with `sudo sysctl --system`.
-
-- [ ] **Cyclone DDS multicast is kept off the arm's network interface.** Without this, DDS sends the camera images to
-      239.255.0.1 out of the arm's interface, about 13.6 MB/s while a command subscribes to the cameras. The switch
-      floods them to the arm's port, and the arm driver exits ("timeout detected: BaseCyclicClient::Refresh").
-      Drop that traffic on egress, and make the filter persistent, for example from a NetworkManager dispatcher
-      script:
+- [ ] **The deployment's host tuning** is applied: rammp-deployments'
+      `december_2026/config/hosts/jetson-agx-orin/tuning.sh`, with `ARM_IF` set to the arm's NIC (and `CAM_IF` to the
+      cameras' NIC):
 
       ```bash
-      sudo tc qdisc add dev <arm_nic> clsact
-      sudo tc filter add dev <arm_nic> egress protocol ip flower dst_ip 239.255.0.0/16 action drop
+      sudo ARM_IF=<arm_nic> CAM_IF=<camera_nic> december_2026/config/hosts/jetson-agx-orin/tuning.sh install
+      december_2026/config/hosts/jetson-agx-orin/tuning.sh check
       ```
 
-      This keeps DDS on the host. Nodes running on other hosts would need DDS on another interface.
+      Two of its settings matter to this module on any Jetson:
+      - **`net.core.rmem_max` 32 MiB.** Below it, DDS silently drops camera images, and SAM3 loses the ~900 KB
+        colour frames.
+      - **IPv4 multicast dropped on the arm NIC's egress.** Cyclone DDS otherwise multicasts camera images out of the
+        arm's interface (13.6 MB/s while a command subscribes to the cameras), and the arm driver exits
+        ("timeout detected: BaseCyclicClient::Refresh").
+
+      The script is written for a Jetson whose arm and cameras are on separate NICs. Where one NIC carries the arm
+      and the LAN together, apply just those two settings: the sysctl, and the filter, persisted for example by a
+      NetworkManager dispatcher script:
+
+      ```bash
+      echo 'net.core.rmem_max=33554432' | sudo tee /etc/sysctl.d/60-rammp-dds.conf && sudo sysctl --system
+      sudo tc qdisc add dev <arm_nic> clsact
+      sudo tc filter add dev <arm_nic> egress prio 10 protocol ip flower dst_ip 224.0.0.0/4 action drop
+      ```
 - [ ] **Nothing else commands the arm while the arm node runs.** That includes the Kinova Web App, the wrist buttons
       and a gamepad. The arm driver exits as soon as the arm leaves low-level servoing (`WRONG_SERVOING_MODE`).
 
@@ -62,7 +93,7 @@ Every command that moves the arm needs a person at the e-stop (see [Safety](#saf
 The module runs as one node in the sheppy manifest, transcribed from this repo's `rammp-alternative.yaml` (keep the
 two the same).
 
-- [ ] **The image** is pinned to a release tag: `ghcr.io/rammp-org/rammp-feeding:0.2.0`.
+- [ ] **The image** is pinned to a release tag: `debajyotidasgupta/rammp-feeding:0.2.1` (Docker Hub).
 - [ ] **The node's mounts**: the state directory at `/config` and the run record at `/runs`, both host folders owned
       by the node's `user:` uid:
 
@@ -74,13 +105,18 @@ two the same).
 
 - [ ] **The planner node** mounts the same state directory at `/config`, read-only. `set_world` reads the module's
       collision world from a file there (`/config/planner_world.yaml`).
-- [ ] **Selected alongside**: `arm`, `arm_state_publisher`, `planner`, `wrist_camera`, `scene_camera` and `sam3`.
-      The module uses no other perception node.
+- [ ] **Selected alongside**: `arm`, `arm_state_publisher` and `planner` (all three the release generation, no
+      `_nightly`), `wrist_camera`, `scene_camera` and `sam3`. The module uses no other perception node. The December
+      manifest's `feeding` profile selects exactly these:
+
+      ```bash
+      sheppy up feeding --manifest december_2026/sheppy-manifest.yaml
+      ```
 - [ ] **The cameras' frames don't collide.** With two cameras of the same model, run the scene camera's driver with
       `camera_name scene_camera`. Its frames are then `scene_camera_*` and its topics `/scene_camera/...`, as
       `config/camera/*_scene.yaml` expects.
 
-For single commands outside sheppy, a wrapper runs the image with the same mounts (see the [index](index.mdx)).
+For single commands outside sheppy, use the wrapper from section 0, with `feeding` unselected.
 
 ## 3. The machine file
 
@@ -98,16 +134,18 @@ The site's settings sit over `config/rammp.yaml` and the selected profiles. Keep
         food: cubes
       ```
 
-      A new camera model needs a profile: its topics, `glass_to_optical_m` (its depth origin behind the front glass,
-      from the datasheet), and for a scene camera its `link_frame` and `error_m`. Intrinsics are never configured:
-      they come from the driver's `camera_info` and `/tf_static`.
+      A new camera model needs a profile in `config/camera/`. For a wrist camera: its `streams` (colour and depth
+      topics), `glass_to_optical_m` (its depth origin behind the front glass, from the datasheet) and a `mount:`
+      block (`camera_in_tool_m: null`, `rotation_quat_xyzw: null`, which calibrate-wrist measures, and
+      `image_rotated_at_delivery`). For a scene camera: its `streams`, its `link_frame` and `error_m`. Intrinsics are
+      never configured: they come from the driver's `camera_info` and `/tf_static`.
 - [ ] **The hand measurements** of section 4.
 - [ ] **Site-specific limits**, if any. For example, the lab sets every `guards.torque_step_nm` to 10 N·m (see
       [notes/motion.md](notes/motion.md)).
 
-`rammp check` reads this file. Until every value listed in `config.MEASURED` is set or measured, the commands that
-need the utensil's tip refuse, naming the missing keys. `state`, `capture`, `calibrate-wrist` and `home --direct`
-still run without them.
+`rammp check` reads this file and names every value still missing. Until every value in `config.MEASURED` is set or
+measured, every command but `check`, `state`, `capture`, `calibrate-wrist` and `home --direct` refuses, naming the
+missing keys. Those five need neither the measurements nor the wrist camera.
 
 ## 4. Hand measurements
 
@@ -115,7 +153,7 @@ still run without them.
 | --- | --- | --- |
 | Wrist camera glass to the utensil's tines | A ruler from the camera's front glass straight out, along the camera's axis, to the level of the tines. Not along the utensil: a slanted reading came out 15 mm long. | `utensil.glass_to_tip_m` |
 | The bowl's inner floor above the table | A ruler, inside the bowl. The plunge never aims under it, because a clear bowl's depth reads the table through its floor. | `bowl.floor_above_table_m` (bowl profile) |
-| The ChArUco board as printed | Measure across all the squares and divide; printers scale. For a board not generated by `calibrate-wrist --board`, also its layout. | `perception.wrist_calibration.square_m`; `squares` (columns, rows), `marker_ratio`, `dictionary`, `legacy_pattern` |
+| The ChArUco board as printed | Print it first (section 6). Measure across all the squares and divide; printers scale. For a board not generated by `calibrate-wrist --board`, also its layout. | `perception.wrist_calibration.square_m`; `squares` (columns, rows), `marker_ratio`, `dictionary`, `legacy_pattern` |
 | The table's footprint | Its edges in the arm's base frame (x forward, y left), in metres. The planner's table and the utensil's tip floor use it. | `workspace.table_extent_m` |
 | Where the bowl is laid | Its centre in the base frame. Of the bowls the scene camera finds, the one nearest this point is taken. | `workspace.bowl_centre_m` |
 | Where the user sits | Their mouth in the base frame. The planner's world puts the user's head and torso there; a mouth measured more than `delivery.seated_tol_m` away is refused. Fixed for a session. | `motion.free_space.user_mouth_m` |
@@ -141,8 +179,9 @@ this order: later poses are reached from earlier ones.
 
 Both calibrations use one printed ChArUco board. `rammp calibrate-wrist --board` writes the sheet to print
 (`<runs_dir>/charuco_board.pdf`, US Letter, 7 × 9 squares of 25 mm). Print it at 100 % and measure it
-(section 4). A third-party board works if its layout is configured. Both commands start at feeding_start
-(`rammp home` first) and end there.
+(section 4). A third-party board works if its layout is configured. Both commands start at feeding_start and end
+there. On a new site the planned `rammp home` cannot run yet (it needs the measurements and a scene reading): bring
+the arm to feeding_start with `rammp home --direct`, once someone has checked that the way is clear.
 
 ### calibrate-wrist: the wrist camera's mount and the utensil's pixels
 
@@ -195,17 +234,23 @@ Run these in order. Each stage writes its images to the run record.
 1. `rammp check`: every row OK, including `measured`, `poses` and `scene pose` (each names what is still missing).
    The robot model may WARN: kinova-gen3-ros2 1.1.0's `arm_state_publisher` cannot start ("package not found"), so
    the bundled copy of the driver's URDF is used. It is the same model.
-2. `rammp state`: the joints, the tool, the tip and a utensil tilt of about 0°.
-3. `rammp home`.
-4. `rammp locate-scene`: open `scene_detection.jpg`. The bowl's box should be green, at its place.
+2. `rammp state`: the joints, the tool, and a utensil tilt of about 0° at feeding_start. (`check`'s `measured` row
+   gives the tip in the tool frame.)
+3. `rammp locate-scene`: open `scene_detection.jpg`. The bowl's box should be green, at its place.
+4. `rammp home`.
 5. `rammp detect --plan`, then `rammp detect`: the log gives the wrist camera's correction to the scene camera's
    bowl centre.
 6. `rammp perceive`: open `detection.jpg`. Check the bowl overlay, the food boxes, and the utensil's region in grey.
 7. `rammp acquire --stop-after hover10`: the tines should stop about 10 mm above the centre of the target piece. Look
    from two sides. If they are off, check `glass_to_tip_m` and re-run `calibrate-wrist`.
-8. `rammp rise`.
-9. `rammp acquire`, then `rammp deliver` one stage at a time (`--stop-after swing`, `present`, `bite`), then
-   `rammp feed --bites 1`.
+8. `rammp rise`, then `rammp detect` and `rammp perceive` again: `acquire` starts at food_detect_start.
+9. `rammp acquire`: over the piece, the plunge and the scoop, ending at scoop_end.
+10. The delivery, one stage at a time:
+    - `rammp deliver --stop-after swing`;
+    - `rammp deliver --start-at present --stop-after present`;
+    - `rammp deliver --start-at bite --stop-after bite`;
+    - `rammp retract`.
+11. `rammp home`, then `rammp feed --bites 1`.
 
 ## When to re-measure
 
@@ -217,7 +262,7 @@ Run these in order. Each stage writes its images to the run record.
 | Scene camera moved | `calibrate-scene` |
 | New table, or the arm moved against it | `table_extent_m`, and the captures that depend on it |
 | New bowl | `floor_above_table_m`; `bowl_centre_m` and `scoop_end` if it sits elsewhere |
-| New session | The user's seat (`user_mouth_m`), and `locate-scene` (`rammp feed` does it itself) |
+| New session | The user's seat (`user_mouth_m`); for a new seat the delivery look (`rammp capture deliver`) and the second look (`delivery.second_look_m`); and `locate-scene` (`rammp feed` does it itself) |
 
 ## Safety
 

@@ -8,8 +8,9 @@
   detection rammp-perception: SAM3's /perception/sam3/detect (boxes and masks) on either camera
   tf        ours: the scene camera's measured pose, base_link -> its link frame (rammp calibrate-scene), static
 
-Joint vectors cross this boundary in degrees (folded, joint_1..7); the arm's raw (unwrapped) radians stay inside.
-tests/fake_robot.py implements the same interface without ROS.
+Joint vectors are degrees (folded, joint_1..7) through joints(); joint_sample() and execute() carry the arm's raw
+(unwrapped) radians, so a trajectory continues from the arm's own reading. tests/fake_robot.py implements the same
+interface without ROS.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ import math
 import os
 import threading
 import time
+import warnings
 from collections import deque
 from dataclasses import dataclass
 
@@ -70,7 +72,8 @@ def median_depth(frames: list[np.ndarray]) -> np.ndarray:
     """Per-pixel median of depth frames (mm), ignoring no-returns (0)."""
     s = np.stack(frames)
     m = np.where(s > 0, s, np.nan).astype(np.float32)
-    with np.errstate(all="ignore"):
+    with warnings.catch_warnings():                 # (a pixel with no return in any frame: 0, as the sensor's own)
+        warnings.simplefilter("ignore", RuntimeWarning)
         d = np.nanmedian(m, axis=0)
     return np.nan_to_num(d, nan=0.0).astype(np.uint16)
 
@@ -149,7 +152,7 @@ class Robot:
     def __init__(self, name: str = "rammp_feeding"):
         import rclpy
         from rclpy.action import ActionClient
-        from rclpy.callback_groups import ReentrantCallbackGroup
+        from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
         from rclpy.executors import MultiThreadedExecutor
         from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
         from rammp_arm_interfaces.action import ExecuteJointTrajectory
@@ -175,7 +178,8 @@ class Robot:
 
         def status(m):
             self.estopped, self.arbitration = bool(m.estopped), bool(m.arbitration_enabled)
-        n.create_subscription(JointState, "/joint_states", self._on_joints, qos_profile_sensor_data, callback_group=cb)
+        n.create_subscription(JointState, "/joint_states", self._on_joints, qos_profile_sensor_data,
+                              callback_group=MutuallyExclusiveCallbackGroup())          # (in order: one at a time)
         n.create_subscription(ControlStatus, "/control_status", status, latched, callback_group=cb)
         n.create_subscription(String, "/robot_description", lambda m: setattr(self, "description", m.data), latched,
                               callback_group=cb)
@@ -308,7 +312,19 @@ class Robot:
                              "orchestrator's /acquire_control)")
         if not self._exec.wait_for_server(timeout_sec=3.0):
             raise RobotError("the arm's %s is not up -- is the arm node running?" % cfg.ros.execute_action)
-        handle = self._wait(self._exec.send_goal_async(g), 5.0, "the arm did not answer the trajectory goal")
+        sent = self._exec.send_goal_async(g)
+        try:
+            handle = self._wait(sent, 5.0, "the arm did not answer the trajectory goal")
+        except BaseException:                        # given up on (a timeout, Ctrl-C): never let it run unwatched
+            t_end = time.time() + 2.0
+            while not sent.done() and time.time() < t_end:
+                time.sleep(0.01)
+            if sent.done():
+                if sent.result().accepted:
+                    Trajectory(sent.result()).cancel()
+            else:
+                sent.add_done_callback(lambda f: f.result().accepted and f.result().cancel_goal_async())
+            raise
         if not handle.accepted:
             raise RobotError("the arm rejected the trajectory goal (its log says why)")
         return Trajectory(handle)

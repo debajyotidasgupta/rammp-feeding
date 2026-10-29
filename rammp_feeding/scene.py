@@ -62,7 +62,7 @@ def workspace() -> dict:
     st = json.loads(f.read_text())
     return dict(bowl_xy=[float(v) for v in st["bowl_xy"]], table_z=float(st["table_z"]), bowl_top_z=float(st["bowl_top_z"]),
                 bowl_radius=float(st["rim_radius_m"]),
-                error_m=float(cfg.scene_camera.error_m), when=time.strftime("%H:%M:%S", time.localtime(st["t"])))
+                error_m=float(cfg.scene_camera.error_m), when=time.strftime("%Y-%m-%d %H:%M", time.localtime(st["t"])))
 
 
 def user_mouth() -> np.ndarray:
@@ -131,7 +131,8 @@ def scoop_end(arm) -> dict:
 def world() -> dict:
     """RAMMP-CuRobo's world (base_link): the table raised to our tip floor, a hollow bowl (a floor and 12 wall boxes:
     a solid box would put the utensil over its opening inside it), the user's head and torso round the mouth, the
-    pedestal. The table and the bowl grow by the workspace's error_m."""
+    pedestal. The bowl grows by the workspace's error_m, and the table's top rises by it; the table's near edge (toward
+    the arm) moves back by it."""
     ws = workspace()
     e = float(ws["error_m"])
     tz, top = ws["table_z"] + e, ws["bowl_top_z"] + e

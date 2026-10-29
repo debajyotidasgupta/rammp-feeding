@@ -15,7 +15,7 @@
     - id: rammp_feeding_docker
       kind: docker
       container:
-        image: ghcr.io/rammp-org/rammp-feeding:0.2.0
+        image: debajyotidasgupta/rammp-feeding:0.2.1     # Docker Hub, arm64
         network_mode: host
         ipc: host
         user: "1000:1000"
@@ -34,11 +34,16 @@
         - /robot_description
         - /joint_states
         - /control_status
+        - /tf
         - /tf_static
         - /wrist_camera/color/image_raw
+        - /wrist_camera/color/camera_info
         - /wrist_camera/depth/image_rect_raw
+        - /wrist_camera/depth/camera_info
         - /scene_camera/color/image_raw
+        - /scene_camera/color/camera_info
         - /scene_camera/depth/image_raw
+        - /scene_camera/depth/camera_info
       publishes:
         - /tf_static
     # Wiring only, like every mock here: the module is reached through its command, not a topic.

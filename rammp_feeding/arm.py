@@ -91,12 +91,13 @@ def joint_cap(dps: float) -> float:
 
 class Arm:
     def __init__(self, robot, kin: Chain | None = None, measured: bool = True):
-        """measured=False: without the utensil's tip model (rammp calibrate-wrist, which measures the camera's mount)."""
+        """measured=False: without the utensil's tip model, and so without the wrist camera (rammp state, capture,
+        home --direct, calibrate-wrist)."""
         if measured and unmeasured():
-            raise RuntimeError("not measured on this robot yet: %s (docs/index.mdx, setting up a site)" % ", ".join(unmeasured()))
+            raise RuntimeError("not measured on this robot yet: %s (docs/porting.md)" % ", ".join(unmeasured()))
         from rammp_feeding.scene import tip_in_tool       # (the tip model: the wrist camera's intrinsics and mount)
         self.robot, self.kin = robot, kin or chain(robot)
-        self.cam = robot.camera_model("camera")
+        self.cam = robot.camera_model("camera") if measured else None
         self.tip_tool = tip_in_tool(self.cam) if measured else None
         self.limits = {int(j) - 1: float(v) for j, v in M.joint_limits_deg.items()}
 
@@ -255,13 +256,18 @@ class Arm:
     # ------------------------------------------------------------------ free space: cuRobo
     def check_path(self, path, floor: Callable[[float, float], float], max_reach_m: float | None = None,
                    spheres=None, boxes=None, max_tilt: float | None = None) -> tuple[float, float]:
-        """(lowest, highest) utensil tip z along the path as it runs (sampled every check_step_deg); MoveError if the tip
-        dips under floor(x, y) or reaches past max_reach_m, the utensil tilts past max_tilt off straight down, or a
+        """(lowest, highest) utensil tip z along the path as it runs (sampled every check_step_deg); MoveError if a joint
+        comes within joint_limit_margin_deg of our limits, the tip dips under floor(x, y) or reaches past max_reach_m,
+        the utensil tilts past max_tilt off straight down, or a
         sphere ([x, y, z, r], tool frame) comes nearer a box (scene.utensil_boxes) than utensil_clearance_m -- or than
         it already is at the start or will be at the goal, where that is nearer (feeding_start parks the utensil beside
         the table): the planner knows the arm, not what it holds."""
         FS = M.free_space
         qs = densify(path, float(FS.check_step_deg))
+        near = min(qs, key=self.margin)
+        if self.margin(near) < float(M.joint_limit_margin_deg):
+            raise MoveError("the path takes a joint within %.1f deg of its limit (motion.joint_limits_deg): %s"
+                            % (self.margin(near), np.round(near, 1).tolist()))
         poses = [self.tool(q) for q in qs]
         tips = [T + R @ self.tip_tool for T, R in poses]
         if max_tilt is not None:
@@ -296,13 +302,13 @@ class Arm:
         from rammp_feeding.scene import push_world, tip_floor, utensil_boxes, utensil_spheres
         FS = M.free_space
         q = self.q()
+        kw.setdefault("max_tilt", max(float(M.max_tilt_deg), tilt_deg(self.tool(q)[1]) + 5, tilt_deg(self.tool(goal)[1]) + 5))
         if max_step(q, goal) <= float(M.near_pose_deg):
             if go:
-                self.goto(goal, "settle " + label)
+                self.goto(goal, "settle " + label, max_tilt=kw["max_tilt"])
             return [q, list(goal)]
         push_world(self.robot)                        # another client may have changed the planner's world since
         spheres, boxes = utensil_spheres(self, carrying), utensil_boxes()
-        kw.setdefault("max_tilt", max(float(M.max_tilt_deg), tilt_deg(self.tool(q)[1]) + 5, tilt_deg(self.tool(goal)[1]) + 5))
         for k in range(int(FS.replans) + 1):
             try:
                 pos, _ = self.robot.plan_joints(q, goal, float(FS.timeout_s))

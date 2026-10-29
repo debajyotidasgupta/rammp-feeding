@@ -1,5 +1,6 @@
-"""The run record: what every stage leaves behind so a run can be debugged afterwards. Recording never raises: a full
-disk must not stop the arm mid-move.
+"""The run record: what every stage leaves behind so a run can be debugged afterwards. The session's own writes here
+(events, arrays, the log) never raise: a full disk must not stop the arm mid-move. (A stage's images and depth, saved
+before it moves, do: the command then stops before moving.)
 
     <runs_dir>/<YYYYmmdd_HHMMSS>_<what>/      a session (rammp feed, or a command on its own)
       session.json, config.yaml, log.txt, events.jsonl

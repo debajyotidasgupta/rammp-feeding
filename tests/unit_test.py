@@ -156,6 +156,26 @@ class Restored(unittest.TestCase):
         home(robot, arm, direct=True)
         self.assertLess(g.max_step(arm.q(), scene.captured("home")), 0.1)
 
+    def test_the_hover_never_goes_under_the_bowls_floor(self):
+        """Nothing under the tines and a clear bowl: the depth reads the table, and the hover stops over the bowl's own
+        floor instead."""
+        from rammp_feeding.acquire import acquire
+        sc, robot, arm = self._at_overlook()
+        sc.floor_lift, sc.piece_xy = 0.0, (sc.bowl_xy[0] + 0.5, sc.bowl_xy[1])         # the piece out of the way
+        acquire(robot, arm, dict(tool_goal=list(arm.tool()[0])), Path(tempfile.mkdtemp()), stop_after="hover10")
+        self.assertAlmostEqual(arm.tip()[2], sc.table_z + float(cfg.bowl.floor_above_table_m) + 0.010, delta=0.002)
+
+    def test_a_scoop_on_its_own_starts_only_where_its_plunge_ended(self):
+        from rammp_feeding.acquire import acquire
+        sc, robot, arm = self._at_overlook()
+        out = Path(tempfile.mkdtemp(dir=WORK))
+        with self.assertRaisesRegex(FileNotFoundError, "no plunge"):
+            acquire(robot, arm, {}, out, start_at="scoop")
+        (out / "food.json").write_text(json.dumps(dict(height=0.03, floor_m=0.008, joints_deg=scene.captured("home"))))
+        with self.assertRaisesRegex(MoveError, "not where this bite's plunge ended"):
+            acquire(robot, arm, {}, out, start_at="scoop")
+        self.assertEqual(robot.moves, [])
+
 
 class Delivery(unittest.TestCase):
     def _at_look(self):
@@ -174,6 +194,32 @@ class Delivery(unittest.TestCase):
         self.assertLess(np.linalg.norm(finds[1] - (look1 + np.array(cfg.delivery.second_look_m))), 0.002)
         mouth = np.array(sc.mouth) + [0, 0, float(cfg.delivery.aim_dz_m)]
         self.assertAlmostEqual(np.linalg.norm(arm.tip() - mouth), float(cfg.delivery.stop_m), delta=0.01)
+
+    def test_no_bite_is_exit_4_after_retracting(self):
+        from unittest import mock
+        from rammp_feeding import deliver as dv
+        sc, robot, arm, face = self._at_look()
+        with mock.patch.dict(dv.DL, {"bite_timeout_s": 0.3}):
+            self.assertEqual(dv.deliver(robot, arm, face, Path(tempfile.mkdtemp()), start_at="bite"), 4)
+        self.assertLess(g.max_step(arm.q(), scene.overlook_joints(arm)), 1.0)        # retracted
+
+    def test_the_retract_backs_off_straight_only_from_in_front_of_the_look(self):
+        """From the scoop end (level, near the look but behind it) the return is planned, never a straight line."""
+        from rammp_feeding.deliver import retract
+        sc = Scene()
+        site(sc)
+        robot = FakeRobot(sc, scene.captured("scoop_end"))
+        arm = Arm(robot)
+        arm.straight = lambda *a, **k: self.fail("a straight back-off from the scoop end")
+        retract(robot, arm)
+        self.assertLess(g.max_step(arm.q(), scene.overlook_joints(arm)), 1.0)
+
+    def test_a_free_space_move_settles_onto_a_level_goal(self):
+        """Within a degree of the delivery look (the utensil level), travel settles onto it, not refuses it."""
+        sc, robot, arm, face = self._at_look()
+        robot.raw = np.radians(np.asarray(scene.captured("deliver")) + [0.5, 0, 0, 0, 0, 0, 0])
+        arm.travel(scene.captured("deliver"), "swing to the user")
+        self.assertLess(g.max_step(arm.q(), scene.captured("deliver")), 0.1)
 
     def test_no_face_from_either_look_is_refused(self):
         from rammp_feeding.deliver import present
@@ -342,6 +388,17 @@ class World(unittest.TestCase):
         with self.assertRaisesRegex(MoveError, "within .* of probe"):     # out and back over it: nearer than either end
             arm.check_path([goal, q, goal], lambda x, y: -np.inf, None, spheres, probe(clear - 0.005))
 
+    def test_a_planned_path_past_our_joint_limits_is_refused(self):
+        sc = Scene()
+        site(sc)
+        robot = FakeRobot(sc, scene.captured("home"))
+        arm = Arm(robot)
+        q = scene.captured("home")
+        past = list(q)
+        past[3] = -float(cfg.motion.joint_limits_deg[4]) - 1.0              # J4 a degree past ours
+        with self.assertRaisesRegex(MoveError, "within .* of its limit"):
+            arm.check_path([q, past, q], lambda x, y: -np.inf)
+
     def test_a_planned_path_that_tilts_too_far_is_refused_before_it_runs(self):
         sc = Scene()
         site(sc)
@@ -395,6 +452,38 @@ class World(unittest.TestCase):
         self.assertAlmostEqual(scene.tip_floor(*sc.bowl_xy), sc.table_z + 0.06 + float(cfg.motion.free_space.min_tip_above_bowl_m) + e)
         self.assertAlmostEqual(scene.tip_floor(0.5, 0.5), sc.table_z + float(cfg.motion.free_space.min_tip_above_table_m) + e)
         self.assertEqual(scene.tip_floor(-0.5, 0.0), -np.inf)
+
+
+class Refine(unittest.TestCase):
+    def test_the_wrist_camera_takes_the_bowl_nearest_the_scene_cameras(self):
+        """Two bowls in the wrist camera's view: the one within twice error_m of the scene camera's reading is taken, not
+        the better-scored one further away; with none that near, refused."""
+        from unittest import mock
+        from rammp_feeding import scene_camera as sc_
+        sc = Scene()
+        site(sc)
+        robot = FakeRobot(sc, scene.captured("home"))
+        arm = Arm(robot)
+        e = float(cfg.scene_camera.error_m)
+        near, far = [sc.bowl_xy[0] + 0.5 * e, sc.bowl_xy[1]], [sc.bowl_xy[0] + 3 * e, sc.bowl_xy[1]]
+        m = np.zeros((480, 848), bool)
+        robot.detect = lambda role, prompts, t: [Detection("bowl", 0.9, [0, 0, 1, 1], m), Detection("bowl", 0.5, [0, 0, 1, 1], m)]
+        fits = iter([dict(bowl_xy=far, rim_radius_m=0.08), dict(bowl_xy=near, rim_radius_m=0.07)])
+        with mock.patch.object(sc_, "bowl_at", lambda *a: next(fits)):
+            self.assertEqual(sc_.refine(robot, arm)["bowl_xy"], near)
+        site(sc)
+        with mock.patch.object(sc_, "bowl_at", lambda *a: dict(bowl_xy=far, rim_radius_m=0.08)):
+            with self.assertRaisesRegex(RuntimeError, "no bowl within"):
+                sc_.refine(robot, arm)
+
+
+class Cli(unittest.TestCase):
+    def test_each_command_takes_only_its_own_stages(self):
+        from rammp_feeding.cli import main
+        for argv in (["acquire", "--stop-after", "hover1"], ["deliver", "--start-at", "scoop"],
+                     ["home", "--stop-after", "over"], ["capture", "nowhere"]):
+            with self.assertRaises(SystemExit, msg=" ".join(argv)):
+                main(argv)
 
 
 class Record(unittest.TestCase):

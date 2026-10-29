@@ -121,8 +121,8 @@ acquisition:
     max_joint_step_deg: 12
   stepped:                      # the hover route, for aim checks (tip_px: rammp acquire --stop-after hover10, rise)
     hover_m: {hover30: 0.030, hover10: 0.010}
-    descend_max_m: 0.300        # the whole descent from food_detect_start (the tip ~0.23 m above the table there)
-    descend_mps: 0.040          # one straight move down from food_detect_start, starting and stopping smoothly
+    descend_max_m: 0.300        # the whole descent from the OVER pose (the tip ~0.23 m above the table there)
+    descend_mps: 0.040          # one straight move down from the OVER pose, starting and stopping smoothly
     rise_mps: 0.040
 
 perception:

@@ -10,9 +10,11 @@
            user is seated (user_mouth_m, the planner's user): the presentation refused (8).
   bite     the force at the tool from the joint torques, against a baseline at rest: above bite_n for bite_hold_s,
            then until it settles (the user has let go), at most bite_settle_s
-  retract  straight back to the delivery look (the approach reversed), never stopped on torque (moving away is the
-           safe direction); then one cuRobo path to food_detect_start that keeps the tip no further out from the base
-           than where it starts or ends
+  retract  from in front of the delivery look (at the user, or a look): straight back to it (the approach reversed),
+           never stopped on torque (moving away is the safe direction); then, from there or from anywhere else, one
+           cuRobo path to food_detect_start that keeps the tip no further out from the base than where it starts or
+           ends, the piece taken as still on the utensil
+  Exit 4: no bite in bite_timeout_s (retracted with the piece).
 """
 
 from __future__ import annotations
@@ -157,19 +159,22 @@ def bite(robot, arm: Arm, timeout_s: float) -> int:
 def retract(robot, arm: Arm) -> None:
     R_ = DL.retract
     T0, R0 = arm.tool()
-    if abs(axis(R0)[2]) <= float(DL.level_tol):          # at the user or a look: straight back to the delivery look
-        Te, Re = arm.tool(scene.captured("deliver"))
-        L = float(np.linalg.norm(Te - T0))
+    Te, Re = arm.tool(scene.captured("deliver"))
+    ahead = float((T0 - Te) @ axis(Re))                  # how far in front of the delivery look, along its utensil
+    if abs(axis(R0)[2]) <= float(DL.level_tol) and ahead > float(cfg.motion.arrived_m):   # at the user: back the way
+        L = float(np.linalg.norm(Te - T0))                                               # the approach came
         if L > float(R_.max_from_look_m):
             raise MoveError("%.0f mm from the delivery look -- not backing off from here" % (1000 * L))
         arm.straight(Te, Re, float(R_.back_off_mps), "back to the delivery look", torque_stop=False, max_tilt=95.0)
     goal = scene.overlook_joints(arm)
     reach = max(math.hypot(*arm.tip()[:2]), math.hypot(*arm.tip(goal)[:2])) + float(R_.reach_margin_m)
-    arm.travel(goal, "back to food_detect_start", dps=float(R_.home_dps), torque_limit=float(G.retract), max_reach_m=reach)
+    arm.travel(goal, "back to food_detect_start", dps=float(R_.home_dps), torque_limit=float(G.retract), max_reach_m=reach,
+               carrying=True)
 
 
 def deliver(robot, arm: Arm, face, out: Path, stop_after: str = "", start_at: str = "swing", wait_open: bool = True) -> int:
-    """swing -> present -> bite -> retract. 7: declined (retracted); 8: the presentation refused (retracted)."""
+    """swing -> present -> bite -> retract. 4: no bite (retracted); 7: declined (retracted); 8: the presentation refused
+    (retracted)."""
     stages = ["swing", "present", "bite", "retract"]
     run = stages[stages.index(start_at):]
     if "swing" in run:
@@ -191,8 +196,10 @@ def deliver(robot, arm: Arm, face, out: Path, stop_after: str = "", start_at: st
         if stop_after == "present":
             return 0
     if "bite" in run:
-        bite(robot, arm, float(DL.bite_timeout_s))
+        rc = bite(robot, arm, float(DL.bite_timeout_s))
         if stop_after == "bite":
-            return 0
+            return rc
+        retract(robot, arm)
+        return rc
     retract(robot, arm)
     return 0

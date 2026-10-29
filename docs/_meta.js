@@ -2,6 +2,6 @@
 // engineering notes and is excluded in the hub's sources.yml.
 export default {
   index: 'Introduction',
-  porting: 'Porting to a new site',
+  porting: 'Deployment checklist',
   interface: 'Interface reference'
 }

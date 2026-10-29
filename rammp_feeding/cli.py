@@ -171,7 +171,7 @@ def check(robot, arm) -> int:
     missing = unmeasured()
     try:
         if missing:
-            raise RuntimeError("not yet: %s (a ruler, rammp calibrate-wrist)" % ", ".join(missing))
+            raise RuntimeError("not yet: %s (local.yaml, rammp calibrate-wrist: docs/porting.md)" % ", ".join(missing))
         row(True, "measured", "the utensil tip at %s m in the tool frame"
             % np.round(tip_in_tool(robot.camera_model("camera")), 4).tolist())
     except Exception as e:  # noqa: BLE001

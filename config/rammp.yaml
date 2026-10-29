@@ -35,7 +35,7 @@ planner:                         # the shared planner: the arm's paths; the uten
   world_file: /config/planner_world.yaml   # our collision world (scene.world), pushed before each planned move ...
   world_file_in_planner: /config/planner_world.yaml   # ... where the planner's container reads it (the same mount)
   restore_world: world_real_bench.yaml     # the planner's own world, put back when a command ends, where it has no
-                                           # `world` parameter: its config's (gen3_real.yaml)
+                                           # `world` parameter: the release planner's startup world (gen3_real.yaml)
 
 arm:
   urdf: urdf/gen3_7dof_2f85.urdf    # the arm driver's model (kinova-gen3-driver models/, as built into kinova-gen3-ros2 1.1.0)
@@ -45,8 +45,9 @@ face:
   model: /opt/models/face_landmarker.task   # MediaPipe's face landmarker (in the image)
 
 workspace:                      # arm base frame, m (where the bowl and the table are: the scene camera's reading)
-  bowl_centre_m: [0.290, 0.158] # SITE: where the operator lays the bowl: the scene camera's candidate nearest it is the bowl
-  table_extent_m: {x: [0.08, 0.76], y: [-0.30, 0.80]}   # SITE: its footprint (the planner's table, where our tip floor applies)
+  bowl_centre_m: null           # SITE [x, y]: where the operator lays the bowl -- the scene camera's bowl nearest it is taken
+  table_extent_m: null          # SITE {x: [near, far], y: [right, left]}: the table's edges (the planner's table, where our
+                                # tip floor applies)
   overlook_camera_height_m: 0.45   # food_detect_start: the wrist camera this high above the table, over the bowl
 
 motion:
@@ -81,8 +82,9 @@ motion:
                                 # table raised to it: the utensil hangs below the gripper) ...
     min_tip_above_bowl_m: 0.015 # ... above the bowl's top over the bowl
     bowl_margin_m: 0.04         # "over the bowl": within its rim radius + this
-    user_mouth_m: [-0.277, 0.306, 0.428]   # SITE, per session: where the operator seats the user (their head and torso
-                                # in the planner's world; a measured mouth further than delivery.seated_tol_m is refused)
+    user_mouth_m: null          # SITE, per session [x, y, z]: where the operator seats the user's mouth (their head and
+                                # torso in the planner's world; a measured mouth further than delivery.seated_tol_m is
+                                # refused)
 
 guards:                         # the contact guard: a joint-torque step this big against recent history = stop
   torque_window: {span: 12, gap: 5}   # samples: the baseline window, and the gap before the sample compared to it

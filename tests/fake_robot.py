@@ -27,7 +27,7 @@ CAM = CameraModel(D405, D405, np.eye(4))
 
 @dataclass
 class Scene:
-    table_z: float = 0.0072                         # the abra site: its arm-fitted calibration's table (2026-10-02)
+    table_z: float = 0.0072                         # the test site's table, in the arm's base frame
     bowl_xy: tuple = (0.290, 0.158)
     bowl_radius: float = 0.07
     piece_xy: tuple = (0.296, 0.152)

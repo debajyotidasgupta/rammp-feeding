@@ -8,14 +8,16 @@ The module is a ROS 2 package (`rammp_feeding`) with an image (`Dockerfile`, `FR
 deployment manifest (`rammp-alternative.yaml`). It moves the arm only through the arm node. Free-space paths come from
 the shared RAMMP-CuRobo planner; straight-line and contact moves are computed on the arm's own model.
 
-Current release: 0.2.1, image `debajyotidasgupta/rammp-feeding:0.2.1` on Docker Hub (arm64, Jetson).
+Current release: 0.2.2, image `debajyotidasgupta/rammp-feeding:0.2.2` on Docker Hub (arm64, Jetson).
+
+**Deploying on a new Jetson:** follow [docs/porting.md](docs/porting.md), the deployment checklist, from start to end.
 
 ## Documentation
 
 | Page | Contents |
 | --- | --- |
 | [docs/index.mdx](docs/index.mdx) | Overview, commands, a feeding session, exit codes |
-| [docs/porting.md](docs/porting.md) | Bringing the module up on a new robot or site: network, deployment, hand measurements, captures, calibrations (with the board, or entering an existing calibration's values), verification |
+| [docs/porting.md](docs/porting.md) | The deployment checklist for a new Jetson: hardware, host and network, software, the deployment manifest, the site file and hand measurements, captures, calibrations (with the board, or an existing calibration's values), verification, feeding |
 | [docs/interface.md](docs/interface.md) | ROS interfaces used and offered |
 | [docs/notes/](docs/notes/README.md) | Engineering notes: measurements, decisions and their rationale |
 

@@ -24,7 +24,7 @@ It is a RAMMP module: one image, one node in the deployment manifest, and everyt
   back-off) are joint paths the module computes on the arm's own model.
 - **The module never commands the gripper.**
 
-Bringing it up on a new robot or site: [porting](porting.md). The ROS interfaces: [interface reference](interface.md).
+Deploying it on a new Jetson: the [deployment checklist](porting.md). The ROS interfaces: [interface reference](interface.md).
 
 ## Running it
 
@@ -35,9 +35,9 @@ node cancels the move in flight, and the arm halts where it is.
 **One command at a time**, run from the module's image on the robot:
 
 ```bash
-docker run --rm -it --network host --ipc host --user "$(id -u):$(id -g)" -e ROS_DOMAIN_ID=0 -e HOME=/tmp \
-  -v <state_dir>:/config -v <runs_dir>:/runs \
-  debajyotidasgupta/rammp-feeding:0.2.1 ros2 run rammp_feeding rammp <command>
+docker run --rm -it --network host --ipc host --user 1000:1000 -e ROS_DOMAIN_ID=0 -e HOME=/tmp \
+  -v /srv/rammp_feeding/config:/config -v /srv/rammp_feeding/runs:/runs \
+  debajyotidasgupta/rammp-feeding:0.2.2 ros2 run rammp_feeding rammp <command>
 ```
 
 Keep someone at the e-stop for every command that moves the arm. Don't run this next to sheppy's own feeding node.

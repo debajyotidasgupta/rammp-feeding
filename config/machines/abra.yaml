@@ -1,7 +1,0 @@
-# The site Jetson (abra@192.168.1.11; the arm at 192.168.1.10): copy to /home/abra/.config/rammp_feeding/local.yaml
-# (mounted at /config). Its hardware is config/rammp.yaml's default profiles: the wrist D405 and the scene Gemini 336L.
-# Measured there: the scene camera's pose (state_dir/scene_extrinsic.json). To be measured with this release
-# (docs/porting.md): the captures, then rammp calibrate-wrist (the D405's mount and the fork's pixels).
-
-utensil:
-  glass_to_tip_m: 0.233         # the D405's front glass straight out to the tines' level (a ruler, 2026-10-02)

@@ -1,7 +1,7 @@
 # This module's node for a rammp-deployments manifest (rammp-deployments/CONTRIBUTING.md: "a module's own
 # rammp-alternative*.yaml fragment is the source for what belongs in a node here"). Transcribed into
 # december_2026/sheppy-manifest.yaml, with one more change there: the planner node mounts the same state folder
-# (/home/abra/.config/rammp_feeding) at /config read-only (set_world takes the world as a file path).
+# (/srv/rammp_feeding/config) at /config read-only (set_world takes the world as a file path).
 - name: feeding
   description: Robot-assisted feeding -- bite after bite until the bowl is empty or the user declines
   select: single
@@ -15,7 +15,7 @@
     - id: rammp_feeding_docker
       kind: docker
       container:
-        image: debajyotidasgupta/rammp-feeding:0.2.1     # Docker Hub, arm64
+        image: debajyotidasgupta/rammp-feeding:0.2.2     # Docker Hub, arm64
         network_mode: host
         ipc: host
         user: "1000:1000"
@@ -23,8 +23,8 @@
         # measured mount, the scene camera's measured pose and latest reading, the world it hands the planner. The run
         # record beside it.
         volumes:
-          - /home/abra/.config/rammp_feeding:/config
-          - /home/abra/rammp_runs:/runs
+          - /srv/rammp_feeding/config:/config     # the host's folders, owned by uid 1000 (docs/porting.md)
+          - /srv/rammp_feeding/runs:/runs
         environment:
           ROS_DOMAIN_ID: "0"
           HOME: /tmp

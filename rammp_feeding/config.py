@@ -73,7 +73,9 @@ def _merge(a, b):
 def _set(d, dotted, value):
     parts = dotted.split(".")
     for p in parts[:-1]:
-        d = d.setdefault(p, {})
+        if not isinstance(d.get(p), dict):
+            d[p] = {}
+        d = d[p]
     d[parts[-1]] = value
 
 
@@ -106,10 +108,12 @@ def load() -> Cfg:
 
 cfg = load()
 
-# Measured on the robot (the wrist camera's mount, the utensil against that camera): null until they are, and nothing
-# builds the arm without them.
+# The site's own values -- measured on the robot (the wrist camera's mount, the utensil against that camera) or set
+# for the site (the table, where the bowl is laid, where the user sits): null until they are, and nothing that needs
+# them builds the arm without them (docs/porting.md).
 MEASURED = ("camera.mount.camera_in_tool_m", "camera.mount.rotation_quat_xyzw", "utensil.glass_to_tip_m",
-            "utensil.tip_px", "utensil.image_region_px")
+            "utensil.tip_px", "utensil.image_region_px", "workspace.table_extent_m", "workspace.bowl_centre_m",
+            "motion.free_space.user_mouth_m")
 
 
 def unmeasured(c: Cfg | None = None) -> list[str]:

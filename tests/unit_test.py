@@ -516,6 +516,17 @@ class Profiles(unittest.TestCase):
             from rammp_feeding.cli import report
             report(arm, "now")
 
+    def test_the_arm_is_not_built_without_the_sites_own_values(self):
+        from unittest import mock
+        robot = FakeRobot(Scene(), scene.captured("home"))
+        for section, key in (("workspace", "table_extent_m"), ("workspace", "bowl_centre_m")):
+            with mock.patch.dict(cfg[section], {key: None}):
+                with self.assertRaisesRegex(RuntimeError, r"not measured on this robot yet: %s\.%s" % (section, key)):
+                    Arm(robot)
+        with mock.patch.dict(cfg["motion"]["free_space"], {"user_mouth_m": None}):
+            with self.assertRaisesRegex(RuntimeError, r"motion\.free_space\.user_mouth_m"):
+                Arm(robot)
+
     def test_the_measured_mount_is_taken_for_its_camera_only(self):
         from rammp_feeding import config as C
         d = Path(tempfile.mkdtemp(dir=WORK))

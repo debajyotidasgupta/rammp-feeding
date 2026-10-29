@@ -1,0 +1,39 @@
+# A site's own settings: copy to <state_dir>/local.yaml (/srv/rammp_feeding/config/local.yaml on the host) and fill in
+# every value marked REQUIRED (docs/porting.md). Each overrides config/rammp.yaml or a profile. Until the REQUIRED
+# values are set and the wrist camera is calibrated, `rammp check` names what is missing and every command that needs
+# them refuses. Units are in the key names; positions are in the arm's base frame (x forward, y left, z up), metres.
+
+profiles:
+  camera: realsense_d405              # the wrist camera's profile (config/camera/): its model's topics and depth origin
+  scene_camera: orbbec_gemini336l     # the scene camera's profile (config/camera/)
+  utensil: fork                       # config/utensil/
+  bowl: front                         # config/bowl/
+  food: cubes                         # config/food/
+
+utensil:
+  glass_to_tip_m: null                # REQUIRED: a ruler, from the wrist camera's front glass straight out along its axis
+                                      # to the level of the utensil's tips
+
+bowl:
+  floor_above_table_m: 0.020          # REQUIRED for another bowl: a ruler, its inner floor above the table
+
+workspace:
+  table_extent_m: null                # REQUIRED: the table's edges, {x: [near, far], y: [right, left]}
+  bowl_centre_m: null                 # REQUIRED: where the operator lays the bowl's centre, [x, y]
+
+motion:
+  free_space:
+    user_mouth_m: null                # REQUIRED, per session: where the user's mouth is when seated, [x, y, z]
+
+perception:
+  wrist_calibration:                  # the printed ChArUco board (rammp calibrate-wrist --board prints this one)
+    square_m: 0.025                   # REQUIRED: a square's side as printed -- measure across all of them
+    # For a board printed elsewhere, also its layout:
+    # squares: [7, 9]                 # columns, rows
+    # marker_ratio: 0.72              # its marker's side / its square's
+    # dictionary: DICT_5X5_100
+    # legacy_pattern: false           # true for a calib.io board or one from OpenCV before 4.6
+
+# Optional: a stiffer contact guard where the arm's own motion trips the default (N.m per move).
+# guards:
+#   torque_step_nm: {default: 2.5, approach: 4.0, plunge_in_food: 8.0, scoop: 6.0, swing: 6.0, retract: 6.0, free_space: 6.0}

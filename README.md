@@ -19,7 +19,6 @@ Current release: 0.2.2, image `debajyotidasgupta/rammp-feeding:0.2.2` on Docker 
 | [docs/index.mdx](docs/index.mdx) | Overview, commands, a feeding session, exit codes |
 | [docs/porting.md](docs/porting.md) | The deployment checklist for a new Jetson: hardware, host and network, software, the deployment manifest, the site file and hand measurements, captures, calibrations (with the board, or an existing calibration's values), verification, feeding |
 | [docs/interface.md](docs/interface.md) | ROS interfaces used and offered |
-| [docs/notes/](docs/notes/README.md) | Engineering notes: measurements, decisions and their rationale |
 
 ## Layout
 

@@ -6,3 +6,7 @@ out/
 build/
 install/
 log/
+
+# Local only: the team's engineering notes and working instructions (never pushed)
+docs/notes/
+CLAUDE.md

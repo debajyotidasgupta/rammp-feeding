@@ -14,6 +14,11 @@ Current release: 0.2.3, image `debajyotidasgupta/rammp-feeding:0.2.3` on Docker 
 
 ## Before starting sheppy: what to fill in
 
+**On a fresh Jetson, first do sections 1–3 of the [deployment checklist](docs/porting.md):** hardware, host and
+network setup (fixed IP, the multicast filter, the DDS receive buffer, the isolated CPU core), and the software
+(sheppy, `docker pull debajyotidasgupta/rammp-feeding:0.2.3`, the `/srv/rammp_feeding` folders, the `rammp` command,
+SAM3's weights). Then:
+
 The module's node is the `feeding` node of rammp-deployments' `december_2026/sheppy-manifest.yaml`. Until
 [rammp-deployments#139](https://github.com/rammp-org/rammp-deployments/pull/139) is merged, it is on that repo's
 `feature/feeding-node` branch. All positions below are in the arm's base frame (x forward, y left, z up), in metres.

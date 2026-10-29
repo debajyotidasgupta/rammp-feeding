@@ -21,7 +21,7 @@ needs the nightly generation, which this release does not support.
 | 3. The machine file | `<state_dir>/local.yaml`: the site's profiles and hand measurements |
 | 4. Hand measurements | Ruler readings and layout values |
 | 5. Captures | `home.json`, `overlook.json`, `scoop_end.json`, `deliver.json` |
-| 6. Calibrations | `wrist_mount.json`, then `scene_extrinsic.json` |
+| 6. Calibrations | `wrist_mount.json`, then `scene_extrinsic.json`: measured with the board, or [entered from an existing calibration](#6b-entering-an-existing-calibration-no-board) |
 | 7. Verification | One bite, stage by stage |
 
 What ends up in the state directory, file by file: [interface reference, Files](interface.md#files).
@@ -187,7 +187,8 @@ this order: later poses are reached from earlier ones.
 
 ## 6. Calibrations
 
-Both calibrations use one printed ChArUco board. `rammp calibrate-wrist --board` writes the sheet to print
+Both calibrations use one printed ChArUco board. A setup calibrated already can enter its values instead
+([6b](#6b-entering-an-existing-calibration-no-board)). `rammp calibrate-wrist --board` writes the sheet to print
 (`<runs_dir>/charuco_board.pdf`, US Letter, 7 × 9 squares of 25 mm). Print it at 100 % and measure it
 (section 4). A third-party board works if its layout is configured. Both commands start at feeding_start and end
 there. On a new site the planned `rammp home` cannot run yet (it needs the measurements and a scene reading): bring
@@ -236,6 +237,103 @@ The scene camera's link frame in the base frame goes to `<state_dir>/scene_extri
 publishes it on `/tf_static` as `base_link -> <link_frame>`. Neither the arm nor a starting guess needs to be in the
 scene camera's view. Coarse is enough: the scene camera only places food_detect_start, and the wrist camera
 re-centres over the bowl from there.
+
+## 6b. Entering an existing calibration (no board)
+
+If the setup has already been calibrated, skip `calibrate-wrist` and `calibrate-scene` and write the two files they
+would have written. Nothing in the module needs changing. It reads only the keys below, whoever wrote the file. Nothing
+checks entered values, so verify them afterwards ([below](#verifying-entered-values)).
+
+### The wrist camera and the utensil: `<state_dir>/wrist_mount.json`
+
+```
+{
+ "camera": "<profiles.camera, e.g. realsense_d435i>",
+ "utensil": "<profiles.utensil, e.g. fork>",
+ "camera_in_tool_m": [X, Y, Z],
+ "rotation_quat_xyzw": [QX, QY, QZ, QW],
+ "tip_px": [U, V],
+ "image_region_px": [X1, Y1, X2, Y2]
+}
+```
+
+| Key | Meaning |
+| --- | --- |
+| `camera` | The wrist camera profile the mount belongs to: exactly `profiles.camera`. A file naming another profile is ignored, and `rammp check` reports the mount as not measured. |
+| `utensil` | The utensil profile the pixels belong to: exactly `profiles.utensil`. Otherwise `tip_px` and `image_region_px` are ignored. |
+| `camera_in_tool_m` | The origin of the wrist camera's **colour optical frame**, in the **tool frame**, in metres. |
+| `rotation_quat_xyzw` | The rotation tool ← colour optical frame, a unit quaternion in ROS order **(x, y, z, w)**. |
+| `tip_px` | The tines' tips in the colour image, (u, v) pixels: the image as the driver publishes it (not rotated), at its `camera_info` resolution. |
+| `image_region_px` | The utensil's box in the colour image, (x1, y1, x2, y2) pixels. Perception never takes a detection inside it as food. |
+
+The frames:
+
+- **The tool frame** is the URDF's `end_effector_link` (the flange) moved `arm.tool_from_flange_m` = (0, 0, 0.12) m
+  along its own z: the 2F-85's TCP. Its axes are the flange's.
+- **The colour optical frame** is the driver's `<camera>_color_optical_frame` (REP 103): its origin at the colour
+  camera's optical centre, z out of the lens, x to the image's right, y down.
+
+`utensil.glass_to_tip_m` (the ruler reading) stays in `local.yaml`. The tip model is the point `camera_to_tip_m` deep
+along the ray through `tip_px`. `rammp check` prints it in the tool frame.
+
+A calibration in other frames converts as follows, with T_a_b the pose of frame b in frame a (4 × 4):
+
+- **Relative to the flange (`end_effector_link`):** T_tool_opt = T_flange_tool⁻¹ · T_flange_opt. T_flange_tool is a
+  translation of 0.12 m along z, so the rotation stays the same and 0.12 m comes off z.
+- **For the camera's body frame (`<camera>_link`):** T_tool_opt = T_tool_link · T_link_opt, with T_link_opt from the
+  driver:
+
+  ```bash
+  ros2 run tf2_ros tf2_echo <camera>_link <camera>_color_optical_frame    # translation, and rotation (x, y, z, w)
+  ```
+
+### The scene camera: `<state_dir>/scene_extrinsic.json`
+
+```
+{
+ "parent_frame": "base_link",
+ "child_frame": "<the scene camera profile's link_frame, e.g. scene_camera_link>",
+ "xyz": [X, Y, Z],
+ "quat_xyzw": [QX, QY, QZ, QW]
+}
+```
+
+This is the pose of the scene camera's **link frame** (its driver's root frame, the profile's `link_frame`) in the
+arm's **`base_link`**: the position in metres, and a unit quaternion (x, y, z, w). Only `xyz` and `quat_xyzw` are
+read; the two frame names record what the pose is. Every command publishes it on `/tf_static` as
+`base_link -> <link_frame>`.
+
+- **A pose of the colour optical frame instead:** T_base_link = T_base_opt · T_link_opt⁻¹, with T_link_opt from
+  `ros2 run tf2_ros tf2_echo <link_frame> <camera>_color_optical_frame`.
+- **One publisher per frame.** The module publishes this transform itself. If the deployment's `static_tf` node also
+  places the scene camera (`config/robots/<robot>/transforms/`), tf would see two parents for its link frame. Keep
+  the camera there, or here, not both.
+
+### Common mistakes
+
+- A quaternion in (w, x, y, z) order, or not of unit length.
+- Millimetres instead of metres.
+- A profile name that doesn't match `profiles.camera` or `profiles.utensil` exactly.
+- An old `wrist_mount.json` left from another camera, or a calibration of the wrong frame: the body frame for the
+  optical one, or the flange for the tool.
+
+### Verifying entered values
+
+None of these steps needs the board.
+
+1. `rammp check`. The `measured` row gives the tip in the tool frame. It should be where the tines are: beyond the
+   fingers along the tool's +z, near its axis. The `scene pose` row should read "measured".
+2. `rammp locate-scene`. In `scene_detection.jpg` the bowl's box is green, and the logged centre is where the bowl
+   stands (a tape measure from the arm's base is enough).
+3. `rammp detect`. The log line `the wrist camera: the bowl at (...), N mm from the scene camera's` is how far the
+   two calibrations disagree about the bowl. `detect` refuses beyond twice the scene camera's `error_m` (100 mm by
+   default). Most of it is the scene camera's own depth error along its line of sight: the lab's board-calibrated
+   D435i, seeing the table at 4°, read 75–85 mm.
+4. `rammp perceive`, then `rammp acquire --stop-after hover10`. The tines stop about 10 mm above the centre of the
+   piece: the wrist mount and `tip_px` together. Then `rammp rise`.
+
+If step 3 or 4 is off, the entered values are wrong. Check them against the frames above, or measure them with the
+board (section 6).
 
 ## 7. Verification
 

@@ -535,6 +535,36 @@ class Profiles(unittest.TestCase):
             os.environ.update(env)
 
 
+    def test_an_existing_calibration_entered_by_hand_is_taken(self):
+        """The two files as docs/porting.md (6b) has a site write them, with only the keys it lists: the wrist camera's
+        mount and the utensil's pixels are measured, and the scene camera's pose is the one published."""
+        from unittest import mock
+        from rammp_feeding import config as C, scene_camera as sc_
+        d = Path(tempfile.mkdtemp(dir=WORK))
+        (d / "local.yaml").write_text("profiles: {camera: realsense_d435i, utensil: fork}\nutensil: {glass_to_tip_m: 0.205}\n")
+        mount = dict(camera="realsense_d435i", utensil="fork", camera_in_tool_m=[0.023, 0.05, -0.103],
+                     rotation_quat_xyzw=[0.0, 0.0, 1.0, 0.0], tip_px=[438.0, 443.0], image_region_px=[300, 380, 640, 480])
+        (d / "wrist_mount.json").write_text(json.dumps(mount))
+        pose = dict(parent_frame="base_link", child_frame="scene_camera_link", xyz=[0.6, -0.5, 0.12],
+                    quat_xyzw=[0.0, 0.0, 0.7071068, 0.7071068])
+        (d / "scene_extrinsic.json").write_text(json.dumps(pose))
+        env = dict(os.environ)
+        try:
+            os.environ.pop("RAMMP_NO_LOCAL")
+            os.environ["RAMMP_STATE_DIR"] = str(d)
+            c = C.load()
+            self.assertEqual(C.unmeasured(c), [])
+            self.assertEqual(c.camera.mount.camera_in_tool_m, mount["camera_in_tool_m"])
+            self.assertEqual((c.utensil.tip_px, c.utensil.image_region_px), (mount["tip_px"], mount["image_region_px"]))
+        finally:
+            os.environ.clear()
+            os.environ.update(env)
+        with mock.patch.object(sc_, "state_dir", lambda: d):
+            T, _ = sc_.extrinsic()
+        np.testing.assert_allclose(T[:3, 3], pose["xyz"])
+        np.testing.assert_allclose(T[:3, :3], g.rot("z", 90.0), atol=1e-6)
+
+
 class WristCalibration(unittest.TestCase):
     def test_the_hand_eye_solve_finds_the_mount_from_the_calibrations_poses(self):
         """The board seen from rammp calibrate-wrist's own poses round its start over feeding_start, through a known

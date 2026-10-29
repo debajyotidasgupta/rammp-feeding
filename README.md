@@ -15,7 +15,7 @@ Current release: 0.2.1, image `debajyotidasgupta/rammp-feeding:0.2.1` on Docker 
 | Page | Contents |
 | --- | --- |
 | [docs/index.mdx](docs/index.mdx) | Overview, commands, a feeding session, exit codes |
-| [docs/porting.md](docs/porting.md) | Bringing the module up on a new robot or site: network, deployment, hand measurements, captures, calibrations, verification |
+| [docs/porting.md](docs/porting.md) | Bringing the module up on a new robot or site: network, deployment, hand measurements, captures, calibrations (with the board, or entering an existing calibration's values), verification |
 | [docs/interface.md](docs/interface.md) | ROS interfaces used and offered |
 | [docs/notes/](docs/notes/README.md) | Engineering notes: measurements, decisions and their rationale |
 

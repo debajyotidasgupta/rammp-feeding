@@ -47,8 +47,8 @@ token; without one, the module refuses to send goals.
 | --- | --- |
 | `/config/local.yaml` | The site's settings (`config/machines/<site>.yaml`) |
 | `/config/{home,overlook,scoop_end,deliver}.json` | The captured poses (`rammp capture`) |
-| `/config/wrist_mount.json` | The wrist camera's mount and the utensil's pixels (`rammp calibrate-wrist`) |
-| `/config/scene_extrinsic.json` | The scene camera's pose (`rammp calibrate-scene`) |
+| `/config/wrist_mount.json` | The wrist camera's mount and the utensil's pixels (`rammp calibrate-wrist`, or entered by hand: [porting, 6b](porting.md#6b-entering-an-existing-calibration-no-board)) |
+| `/config/scene_extrinsic.json` | The scene camera's pose (`rammp calibrate-scene`, or entered by hand: [porting, 6b](porting.md#6b-entering-an-existing-calibration-no-board)) |
 | `/config/scene_state.json` | The bowl and the table for this session (`rammp locate-scene`, refined by `rammp detect`) |
 | `/config/planner_world.yaml` | The world handed to the planner |
 | `/runs/` | The run record |

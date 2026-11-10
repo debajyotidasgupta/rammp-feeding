@@ -84,6 +84,43 @@ def time_scale(path: Sequence[Sequence[float]], vmax, amax: float) -> list[float
     return list(dt)
 
 
+def smooth_timing(path: Sequence[Sequence[float]], vmax: float, amax: float,
+                  sample_s: float) -> tuple[list[np.ndarray], list[float]]:
+    """A path that is one smooth curve (a planned path, a joint-space line) timed by one speed profile along it, the
+    furthest joint's travel the measure -- from rest at amax (deg/s^2) up to vmax (deg/s), cruising, back to rest --
+    and sampled every sample_s: (points, durations). Each joint follows a monotone cubic through the waypoints (no
+    overshoot), so its speed has no jump at a waypoint: the arm follows timed points directly, and time_scale's speed
+    held from one waypoint to the next jumps at each. Where the curve bends more than amax allows at that speed, the
+    whole profile is slowed."""
+    from scipy.interpolate import PchipInterpolator
+    P = [np.asarray(path[0], float)]
+    for q in path[1:]:                                     # unwrapped, repeated waypoints dropped
+        d = fold(np.asarray(q, float) - P[-1])
+        if np.abs(d).max() > 1e-6:
+            P.append(P[-1] + d)
+    P = np.array(P)
+    if len(P) < 2:
+        return [P[0], P[0]], [sample_s]
+    s = np.concatenate([[0.0], np.cumsum(np.abs(np.diff(P, axis=0)).max(1))])
+    curve, S = PchipInterpolator(s, P, axis=0), float(s[-1])
+    for _ in range(6):
+        vp = min(vmax, math.sqrt(S * amax))
+        ta, tc = vp / amax, max(0.0, S / vp - vp / amax)
+        T = 2 * ta + tc
+        n = max(2, int(math.ceil(T / sample_s)))
+        t = np.linspace(0.0, T, n + 1)
+        st = np.where(t < ta, 0.5 * amax * t ** 2,
+                      np.where(t < ta + tc, 0.5 * vp * ta + vp * (t - ta), S - 0.5 * amax * (T - t) ** 2))
+        Q, dt = curve(np.clip(st, 0.0, S)), T / n
+        V = np.vstack([np.zeros(P.shape[1]), np.diff(Q, axis=0) / dt, np.zeros(P.shape[1])])
+        k = max(float(np.abs(V).max()) / vmax, float(np.abs(np.diff(V, axis=0)).max()) / dt / amax)
+        if k <= 1.1:
+            break
+        vmax, amax = vmax / k, amax / k            # (speed / k and acceleration / k at most: both back under)
+    Q[0], Q[-1] = P[0], P[-1]
+    return list(Q), [dt] * n
+
+
 def joint_cap(dps: float) -> float:
     """A cruise speed held under the cap every joint runs under (motion.joint_speed_cap_dps)."""
     return min(float(dps), float(M.joint_speed_cap_dps))
@@ -154,7 +191,7 @@ class Arm:
             max_tilt: float = float(M.max_tilt_deg), check: Callable | None = None, impedance: str | None = None,
             path_tolerance_deg: float = float(M.path_tolerance_deg)) -> float:
         """Execute a joint path from where the arm is (path[0] must be within near_pose_deg of it), at a cruise of
-        `dps` deg/s on the furthest joint (or the given segment durations), watched as above. check(q, tau, t) ->
+        `dps` deg/s on the furthest joint (or at the given segment durations), watched as above. check(q, tau, t) ->
         a reason to stop, or None. impedance: the motion.impedance entry to run it compliant. Returns its seconds."""
         if len(path) < 2:
             return 0.0
@@ -168,6 +205,12 @@ class Arm:
         for p, q in zip(path, path[1:]):
             cur = cur + np.radians(fold(np.asarray(q, float) - np.asarray(p, float)))
             pos.append(cur.copy())
+        if impedance:                                  # the driver's compliant mode takes a continuous joint the long
+            wrapped = fold(np.degrees(np.array(pos)))  # way round once its target crosses +-180 (it spun joint 1)
+            for i in (i for i in range(7) if i not in self.kin.limits):
+                if np.any(np.abs(np.diff(wrapped[:, i])) > 180.0):
+                    raise MoveError("%s REFUSED: joint %d would cross +-180 deg in compliant mode, which the arm driver "
+                                    "runs the long way round -- not moving" % (label, i + 1))
         times = np.concatenate([[0.0], np.cumsum(durations)])
         total = float(times[-1])
         gains = dict(cfg.motion.impedance[impedance]) if impedance else None
@@ -233,7 +276,9 @@ class Arm:
             raise MoveError("%s REFUSED: the goal holds the utensil %.0f deg off vertical" % (label, tilt_deg(self.kin.fk(goal)[1])))
         n = max(2, int(math.ceil(travel / 2.0)))
         path = [list(np.asarray(q0) + fold(np.asarray(goal) - np.asarray(q0)) * k / n) for k in range(n + 1)]
-        self.run(path, label, dps=dps or float(M.settle_dps), max_tilt=max(max_tilt, tilt_deg(self.tool(q0)[1]) + 1), **kw)
+        path, durations = smooth_timing(path, joint_cap(dps or float(M.settle_dps)), float(M.joint_accel_dps2),
+                                        float(M.trajectory_sample_s))
+        self.run(path, label, durations=durations, max_tilt=max(max_tilt, tilt_deg(self.tool(q0)[1]) + 1), **kw)
 
     def straight(self, Tg, Rg, mps: float, label: str, step_m: float = 0.005, **kw) -> list[Joints]:
         """A straight tool line to (Tg, Rg) at mps, the orientation turned evenly on the way (a continuous IK path);
@@ -330,7 +375,9 @@ class Arm:
         log.info("    %-28s planned: %d waypoints, utensil tip z %.3f .. %.3f%s", label, len(path), lo, hi,
                  "" if go else "  (plan only)")
         if go:
-            self.run(path, label, dps=dps or float(FS.dps),
+            timed, durations = smooth_timing(path, joint_cap(dps or float(FS.dps)), float(M.joint_accel_dps2),
+                                             float(M.trajectory_sample_s))
+            self.run(timed, label, durations=durations,
                      torque_limit=kw.pop("torque_limit", float(cfg.guards.torque_step_nm.free_space)), **kw)
             self.goto(goal, "settle " + label, max_tilt=kw["max_tilt"])
         return path

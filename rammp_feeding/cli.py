@@ -5,8 +5,9 @@
     rammp state                    where the arm is: joints, tool, utensil tip and tilt. Never moves.
     rammp home [--direct [--dps D]]   to feeding_start (a cuRobo path, from anywhere; --direct: one joint move, no
                                    planner -- only for a workspace someone has checked is clear)
-    rammp detect [--plan]          to food_detect_start, over the bowl: the scene camera's reading, then the wrist
-                                   camera's (cuRobo paths; --plan: the first, planned only)
+    rammp detect [--plan]          to food_detect_start, the wrist camera centred on the bowl: first on the scene
+                                   camera's reading, then on the bowl the wrist camera measures from there (cuRobo
+                                   paths; --plan: the first, planned only)
     rammp perceive                 at food_detect_start: the target piece (a new bite). Never moves.
     rammp acquire [--stop-after over|hover30|hover10|plunge] [--start-at over|scoop]
     rammp rise                     after a hover: straight back up to the overlook height
@@ -20,8 +21,8 @@
                                    runs_dir/charuco_board.pdf)
     rammp calibrate-scene          the scene camera's pose through the same board, where both cameras see it (from
                                    feeding_start, the wrist camera's route over it and back; after calibrate-wrist)
-    rammp capture home|overlook|scoop_end|deliver   the arm's joints now as feeding_start / food_detect_start's arm
-                                   shape / where the scoop ends / the delivery look (state_dir). Never moves.
+    rammp capture home|overlook|deliver   the arm's joints now as feeding_start / food_detect_start's arm shape / the
+                                   delivery look (state_dir). Never moves.
 
 Exit codes: 0 done (feed: also when the bowl is empty or the user declines); 1 stopped or refused (the arm stationary
 where it stopped); 3 the bowl is empty (perceive); 4 no bite (deliver, feed: retracted with the piece); 5 food left
@@ -66,16 +67,16 @@ def report(arm, what: str) -> None:
 
 
 def detect(robot, arm, plan: bool = False) -> None:
-    """To food_detect_start over the bowl: from the scene camera's reading (coarse), then over the bowl as the wrist
-    camera sees it from there (fine)."""
+    """To food_detect_start, the wrist camera centred on the bowl: on the scene camera's reading (coarse), then on the
+    bowl as the wrist camera measures it from there (fine)."""
     from rammp_feeding.scene_camera import refine
     ws = scene.workspace()
     log.info("  the bowl at (%.3f, %.3f), table z %.3f (the scene camera, %s)", *ws["bowl_xy"], ws["table_z"], ws["when"])
-    arm.travel(scene.overlook_joints(arm), "to food_detect_start", go=not plan)
+    arm.travel(scene.overlook_joints(arm), "to look at the bowl", go=not plan)
     if plan:
         return
     refine(robot, arm)
-    arm.travel(scene.overlook_joints(arm), "over the bowl")
+    arm.travel(scene.overlook_joints(arm), "to food_detect_start")
 
 
 def home(robot, arm, direct: bool = False, dps: float | None = None) -> None:

@@ -1,6 +1,6 @@
 """The whole bite offline, through the module's own code, against tests/fake_robot.py: from feeding_start to
-food_detect_start, perceive, acquire (OVER, plunge, then the scoop on its own from the plunge's record), deliver
-(swing, present, bite, retract), home.
+food_detect_start, perceive, acquire (OVER, plunge, then the scoop and the lift on their own from the plunge's
+record), deliver (swing, present, bite, retract), home.
 
     python3 tests/test_bite.py [--user-offset dx,dy,dz] [--piece dx,dy] [--expect 8] [--planner curobo]
         curobo: RAMMP-CuRobo's real planner (a CUDA box) as the deployment shares it: its default config, our world
@@ -60,9 +60,12 @@ def main() -> int:
     acquire(robot, arm, tgt, record.stage("acquire"), start_at="plunge", stop_after="plunge")
     want = sc.table_z + float(scene.cfg.bowl.floor_above_table_m) + float(scene.cfg.utensil.punch_floor_margin_m)
     assert abs(arm.tip()[2] - want) < 0.002, "the plunge stopped at z %.4f, not %.4f" % (arm.tip()[2], want)
+    assert (record.stage("acquire") / "plunge_end.jpg").exists(), "no wrist image where the plunge stopped"
     acquire(robot, arm, tgt, record.stage("acquire"), start_at="scoop")
     T, R = arm.tool()
     assert abs(R[2, 2]) < 0.2 and R[:, 2][1] > 0.95, "the scoop did not end level, pointing at the user: axis %s" % R[:, 2]
+    top = scene.overlook_goal(arm)[0][2]
+    assert abs(T[2] - top) < 0.004, "the lift ended at tool z %.3f, not food_detect_start's %.3f" % (T[2], top)
     rc = deliver(robot, arm, FakeFace(robot), record.stage("deliver"), stop_after="present")
     expect = int(arg("--expect", [0])[0])
     if expect:                                       # refused (out of reach): retracted to food_detect_start
@@ -75,7 +78,7 @@ def main() -> int:
     stop = float(scene.cfg.delivery.stop_m)
     gap = float(np.linalg.norm(tip - (mouth + np.array([0, 0, float(scene.cfg.delivery.aim_dz_m)]))))
     assert abs(gap - stop) < 0.01, "the tip %.0f mm from the mouth, not %.0f" % (1000 * gap, 1000 * stop)
-    assert robot.moves[-1] == "impedance", "the approach did not run compliant"
+    assert robot.moves[-1] == "position", "the approach did not run in position control"
     rc = deliver(robot, arm, FakeFace(robot), record.stage("deliver"), start_at="retract")
     assert rc == 0
     home(robot, arm)

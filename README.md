@@ -8,7 +8,7 @@ The module is a ROS 2 package (`rammp_feeding`) with an image (`Dockerfile`, `FR
 deployment manifest (`rammp-alternative.yaml`). It moves the arm only through the arm node. Free-space paths come from
 the shared RAMMP-CuRobo planner; straight-line and contact moves are computed on the arm's own model.
 
-Current release: 0.2.3, image `debajyotidasgupta/rammp-feeding:0.2.3` on Docker Hub (arm64, Jetson).
+Current release: 0.2.4, image `debajyotidasgupta/rammp-feeding:0.2.4` on Docker Hub (arm64, Jetson).
 
 **Deploying on a new Jetson:** follow [docs/porting.md](docs/porting.md), the deployment checklist, from start to end.
 
@@ -16,7 +16,7 @@ Current release: 0.2.3, image `debajyotidasgupta/rammp-feeding:0.2.3` on Docker 
 
 **On a fresh Jetson, first do sections 1–3 of the [deployment checklist](docs/porting.md):** hardware, host and
 network setup (fixed IP, the multicast filter, the DDS receive buffer, the isolated CPU core), and the software
-(sheppy, `docker pull debajyotidasgupta/rammp-feeding:0.2.3`, the `/srv/rammp_feeding` folders, the `rammp` command,
+(sheppy, `docker pull debajyotidasgupta/rammp-feeding:0.2.4`, the `/srv/rammp_feeding` folders, the `rammp` command,
 SAM3's weights). Then:
 
 The module's node is the `feeding` node of rammp-deployments' `december_2026/sheppy-manifest.yaml`. Until
@@ -33,7 +33,6 @@ The module's node is the `feeding` node of rammp-deployments' `december_2026/she
    - `bowl.floor_above_table_m`: ruler, the bowl's inner floor above the table
    - `workspace.table_extent_m`: the table's edges from the arm base, `{x: [near, far], y: [right, left]}`
    - `workspace.bowl_centre_m`: where the bowl will be placed, `[x, y]`
-   - `motion.free_space.user_mouth_m`: the seated user's mouth, `[x, y, z]`
    - `perception.wrist_calibration.square_m`: the printed ChArUco square's size (only when calibrating with the
      board)
 2. **`december_2026/config/robots/<your_robot>/mount.yaml`** (rammp-deployments): `robot: <your_robot>` and
@@ -47,7 +46,7 @@ The module's node is the `feeding` node of rammp-deployments' `december_2026/she
 
 **After `sheppy up` (without `feeding`):**
 
-5. **Arm poses**, not typed by hand: pose the arm and run `rammp capture home`, `overlook`, `scoop_end`, `deliver`.
+5. **Arm poses**, not typed by hand: pose the arm and run `rammp capture home`, `overlook`, `deliver`.
 6. **Calibration**, either:
    - **run it:** `rammp calibrate-wrist`, then `rammp calibrate-scene`, with the printed ChArUco board; or
    - **enter values you already have:**

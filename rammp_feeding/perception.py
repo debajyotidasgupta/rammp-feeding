@@ -3,9 +3,10 @@ under the utensil tip. Everything is placed in the base frame: each depth pixel 
 driver's camera_info and /tf_static) and the camera's pose from the arm.
 
 perceive: one colour frame and a depth median from frames after the arm stopped; SAM3, one call, for the bowl and the
-food (boxes and masks); the food filtered (slivers, the utensil's own pixels, outside or too big for the bowl,
-overlaps); the piece nearest the bowl's centre (the most rim clearance), aimed at the centroid of its points; the
-tool's goal the level slide that puts the utensil tip right above it. Refused without the bowl in view. Exit 3: the
+food (boxes and masks); the bowl the mask round the bowl's centre as rammp detect measured it (the smallest such);
+the food filtered (slivers, the utensil's own pixels, outside or too big for the bowl, overlaps); the piece nearest
+the bowl's centre (the most rim clearance), aimed at the centroid of its points; the tool's goal the level slide that
+puts the utensil tip right above it. Refused when no bowl mask covers that centre. Exit 3: the
 bowl is empty; 5: food is left but no piece is pickable.
 """
 
@@ -83,10 +84,11 @@ def piece_geometry(W: np.ndarray, uv: np.ndarray, mask: np.ndarray) -> dict | No
     return dict(xy=[float(v) for v in pts[:, :2].mean(0)], top_z=float(np.percentile(pts[:, 2], 95)))
 
 
-def food_left(W: np.ndarray, uv: np.ndarray, bowl: np.ndarray) -> float:
-    """The fraction of the bowl's area standing more than food_left_above_floor_mm above its own floor (its lowest
-    surface)."""
-    z = W[_in(bowl, uv), 2]
+def food_left(W: np.ndarray, uv: np.ndarray, bowl: np.ndarray, ws: dict) -> float:
+    """The fraction of the bowl's inner floor -- within food_left_inner_frac of its rim radius, nothing above its rim
+    (the utensil hangs over the bowl) -- standing more than food_left_above_floor_mm above its lowest part."""
+    d = np.hypot(W[:, 0] - ws["bowl_xy"][0], W[:, 1] - ws["bowl_xy"][1])
+    z = W[_in(bowl, uv) & (d < float(P.food_left_inner_frac) * ws["bowl_radius"]) & (W[:, 2] < ws["bowl_top_z"]), 2]
     if len(z) < 50:
         raise ValueError("too little depth inside the bowl to tell whether food is left")
     return float((z > np.percentile(z, 10) + float(P.food_left_above_floor_mm) / 1000.0).mean())
@@ -108,12 +110,18 @@ def perceive(robot, arm, out: Path) -> dict:
     np.save(out / "depth.npy", D)
     t0 = time.time()
     dets = robot.detect("camera", list(P.bowl_prompts) + [str(cfg.food.prompt)], float(P.bowl_score_threshold))
-    bowls = [d for d in dets if d.label in P.bowl_prompts]       # the bowl at its own threshold, the food at its
-    if not bowls:
-        _draw(rgb, None, [], out / "detection.jpg")
-        raise MoveError("SAM3 finds no bowl in the wrist camera's view (%s)" % (out / "detection.jpg"))
     from scipy.ndimage import binary_fill_holes                  # its mask stops at the food on it: the food is inside
-    bowl = binary_fill_holes(max(bowls, key=lambda d: d.score).mask)
+    ws = scene.workspace()                                       # the bowl: the mask round the centre rammp detect
+    o, Rc = scene.camera_pose(arm, q)                            # measured (the smallest such: not the table round it)
+    c = Rc.T @ (np.array([*ws["bowl_xy"], ws["table_z"] + float(cfg.bowl.floor_above_table_m)]) - o)
+    u, v = (int(round(float(x))) for x in arm.cam.pixel(c))
+    hits = [m for m in (binary_fill_holes(d.mask) for d in dets if d.label in P.bowl_prompts)
+            if 0 <= v < m.shape[0] and 0 <= u < m.shape[1] and m[v, u]]
+    if not hits:
+        _draw(rgb, None, [], out / "detection.jpg")
+        raise MoveError("no SAM3 bowl mask covers the bowl's centre, (%.3f, %.3f) at pixel (%d, %d) (%s)"
+                        % (*ws["bowl_xy"], u, v, out / "detection.jpg"))
+    bowl = min(hits, key=lambda m: int(m.sum()))
     pieces = food(rgb, [d for d in dets if d.label == str(cfg.food.prompt) and d.score >= float(P.score_threshold)], bowl)
     log.info("  SAM3 %.2f s: the bowl, %d piece(s) of %d detections", time.time() - t0, len(pieces), len(dets))
     W, uv, _ = world_points(arm.cam, arm, D, q)
@@ -121,13 +129,12 @@ def perceive(robot, arm, out: Path) -> dict:
     geo = [(d, g) for d, g in geo if g is not None]
     _draw(rgb, bowl, pieces, out / "detection.jpg")
     if not geo:
-        left = food_left(W, uv, bowl)
+        left = food_left(W, uv, bowl, ws)
         if left > float(P.food_left_min_frac):
             (out / "food_left").write_text("food left, no pickable piece detected\n")
             raise NoTarget("food is left in the bowl (%.0f%% stands above its floor) but no piece is pickable" % (100 * left), 5)
         (out / "no_food").write_text("no food detected\n")
         raise NoTarget("no food in the bowl", 3)
-    ws = scene.workspace()
     d, g = min(geo, key=lambda dg: math.hypot(dg[1]["xy"][0] - ws["bowl_xy"][0], dg[1]["xy"][1] - ws["bowl_xy"][1]))
     T, _ = arm.tool(q)
     tip = arm.tip(q)

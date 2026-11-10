@@ -23,7 +23,7 @@ command (`rammp feed` under sheppy). It offers no topics or services of its own;
 
 | Name | Type | On | Use |
 | --- | --- | --- | --- |
-| `/execute_joint_trajectory` | `rammp_arm_interfaces/action/ExecuteJointTrajectory` | `arm` | Every move. Position control, except the approach to the mouth, which runs in impedance. Cancelled to stop. |
+| `/execute_joint_trajectory` | `rammp_arm_interfaces/action/ExecuteJointTrajectory` | `arm` | Every move, in position control (the approach can run in impedance with `delivery.approach_impedance` set; not while the driver's impedance mode mishandles a continuous joint crossing ±180°). Cancelled to stop. |
 | `/rammp_curobo/plan_to_joints` | `rammp_curobo_interfaces/action/PlanToJoints` | `planner` | Free-space paths from the shared planner, as configured for every client. Each path is checked as it will run before it runs: against the utensil tip's floor over the table and the bowl, and against the utensil's clearance from the bowl and the user. |
 | `/rammp_curobo/set_world` | `rammp_curobo_interfaces/srv/SetWorld` | `planner` | The module's world (table, hollow bowl, user, pedestal) by file, `/config/planner_world.yaml`, before each planned move. The planner's own world is put back when the command ends. |
 | `/rammp_curobo/get_parameters` | `rcl_interfaces/srv/GetParameters` | `planner` | Its `world` parameter, the world to put back (`planner.restore_world` where it has none). |
@@ -46,7 +46,7 @@ token; without one, the module refuses to send goals.
 | Path (in the container) | Contents |
 | --- | --- |
 | `/config/local.yaml` | The site's settings (`config/machines/<site>.yaml`) |
-| `/config/{home,overlook,scoop_end,deliver}.json` | The captured poses (`rammp capture`) |
+| `/config/{home,overlook,deliver}.json` | The captured poses (`rammp capture`) |
 | `/config/wrist_mount.json` | The wrist camera's mount and the utensil's pixels (`rammp calibrate-wrist`, or entered by hand: [deployment checklist, 8b](porting.md#8b-entering-an-existing-calibration-no-board)) |
 | `/config/scene_extrinsic.json` | The scene camera's pose (`rammp calibrate-scene`, or entered by hand: [deployment checklist, 8b](porting.md#8b-entering-an-existing-calibration-no-board)) |
 | `/config/scene_state.json` | The bowl and the table for this session (`rammp locate-scene`, refined by `rammp detect`) |

@@ -15,11 +15,19 @@ import numpy as np  # noqa: E402
 
 from fake_robot import FakeRobot, Scene  # noqa: E402
 from rammp_feeding import geometry as g, scene  # noqa: E402
-from rammp_feeding.arm import Arm, MoveError, TorqueGuard, chain, time_scale  # noqa: E402
+from rammp_feeding.arm import Arm, MoveError, TorqueGuard, chain, smooth_timing, time_scale  # noqa: E402
 from rammp_feeding.config import cfg, state_dir  # noqa: E402
 from rammp_feeding.ros import Detection  # noqa: E402
 
 RNG = np.random.default_rng(0)
+
+
+def over_the_bowl(robot, arm, sc: Scene) -> None:
+    """The arm as OVER leaves it: from food_detect_start, slid level until the tip is over the bowl's centre."""
+    q = scene.overlook_joints(arm)
+    T, R = arm.tool(q)
+    tip = arm.tip(q)
+    robot.raw = np.radians(arm.ik(T + np.array([sc.bowl_xy[0] - tip[0], sc.bowl_xy[1] - tip[1], 0.0]), R, q))
 
 
 def site(sc: Scene) -> None:
@@ -77,12 +85,35 @@ class Kinematics(unittest.TestCase):
 
 
 class Motion(unittest.TestCase):
-    def test_time_scale_caps(self):
-        path = [[0.0] * 7, [30.0] + [0] * 6, [60.0] + [0] * 6]
-        dt = time_scale(path, 20.0, 72.0)
+    @staticmethod
+    def _profile(Q, dt):
+        """Every sample's joint speeds, and every change of speed from one sample to the next (from rest, to rest)."""
+        V = np.vstack([np.zeros(7), np.diff(np.array(Q), axis=0) / np.array(dt)[:, None], np.zeros(7)])
+        return np.abs(V), np.abs(np.diff(V, axis=0))
+
+    def test_smooth_timing_caps_speed_and_acceleration(self):
+        """A planned path from rest to rest under vmax and amax, sampled every sample_s, its speed never jumping:
+        time_scale's timing changes speed in steps at its waypoints, the jolt the arm feels."""
+        path = [[0.0] * 7, [4.0] + [0] * 6, [30.0, 5.0] + [0] * 5, [60.0, 5.0] + [0] * 5]
+        Q, dt = smooth_timing(path, 20.0, 45.0, 0.02)
+        self.assertTrue(np.allclose(Q[0], path[0]) and np.allclose(Q[-1], path[-1]))
         self.assertGreaterEqual(sum(dt), 3.0)                    # 60 deg at <= 20 deg/s
-        v = [30.0 / d for d in dt]
-        self.assertTrue(all(x <= 20.0 + 1e-6 for x in v))
+        self.assertLessEqual(max(dt), 0.02 + 1e-9)
+        V, dV = self._profile(Q, dt)
+        self.assertLessEqual(V.max(), 1.1 * 20.0)
+        self.assertLessEqual(dV.max(), 1.1 * 45.0 * 0.02)        # at most amax over one sample, anywhere
+        old = time_scale(path, 20.0, 45.0)
+        Vo, dVo = self._profile(np.array(path), old)
+        self.assertGreater(dVo.max(), 5 * dV.max())              # (the stepped timing's jump at a waypoint)
+
+    def test_smooth_timing_across_the_fold_and_where_a_joint_turns_back(self):
+        """A continuous joint crossing +-180 runs the short way; a joint turning back stops there, no overshoot."""
+        Q, dt = smooth_timing([[170.0] + [0] * 6, [-170.0] + [0] * 6], 30.0, 45.0, 0.02)
+        self.assertAlmostEqual(float(Q[-1][0] - Q[0][0]), 20.0, places=6)
+        Q, dt = smooth_timing([[0.0] * 7, [20.0] + [0] * 6, [10.0] + [0] * 6], 60.0, 45.0, 0.02)
+        self.assertLessEqual(max(q[0] for q in Q), 20.0 + 1e-9)
+        V, dV = self._profile(Q, dt)
+        self.assertLessEqual(dV.max(), 1.1 * 45.0 * 0.02)
 
     def test_torque_guard(self):
         G = TorqueGuard(2.5)
@@ -103,7 +134,7 @@ class Motion(unittest.TestCase):
             tip = arm.tip()
             H = tip[2] - sc.table_z                               # the tip over the table (a clear bowl reads it)
             u = dict(top_z=sc.table_z + 0.055, gap_top=H - 0.055, floor_z=sc.table_z, gap_floor=H, height=0.055)   # 55 mm
-            robot.inject[0] = (0.5 if stops else 0.97, [step] + [0] * 6)   # half way: above the food; at the end: in it
+            robot.inject[0] = (0.15 if stops else 0.97, [step] + [0] * 6)  # early (by time): above the food; at the end: in it
             out = Path(tempfile.mkdtemp(dir=WORK))
             if stops:
                 with self.assertRaises(MoveError):
@@ -123,9 +154,15 @@ class Restored(unittest.TestCase):
         site(sc)
         robot = FakeRobot(sc, scene.captured("home"))
         arm = Arm(robot)
-        robot.raw = np.radians(scene.overlook_joints(arm))
-        sc.piece_xy = tuple(arm.tip()[:2])
+        robot.raw = np.radians(scene.overlook_joints(arm))          # food_detect_start
+        sc.piece_xy = tuple(sc.bowl_xy)                             # a piece in the middle of the bowl
         return sc, robot, arm
+
+    @staticmethod
+    def slide_over(arm, xy) -> dict:
+        """The target perceive would give: the level slide that puts the tip over xy."""
+        T, tip = arm.tool()[0], arm.tip()
+        return dict(tool_goal=[float(T[0] + xy[0] - tip[0]), float(T[1] + xy[1] - tip[1]), float(T[2])])
 
     def test_bite_waits_for_the_force_to_settle(self):
         """3 N at the tool for 0.4 s (a bite), then gone: detected, and the wait ends once it has settled."""
@@ -145,10 +182,20 @@ class Restored(unittest.TestCase):
         from rammp_feeding.acquire import acquire, rise
         sc, robot, arm = self._at_overlook()
         z0 = arm.tip()[2]
-        acquire(robot, arm, dict(tool_goal=list(arm.tool()[0])), Path(tempfile.mkdtemp()), stop_after="hover10")
+        acquire(robot, arm, self.slide_over(arm, sc.piece_xy), Path(tempfile.mkdtemp()), stop_after="hover10")
         self.assertAlmostEqual(arm.tip()[2] - (sc.table_z + sc.floor_lift + sc.piece_height), 0.010, delta=0.002)
         rise(arm)
         self.assertAlmostEqual(arm.tip()[2], z0, delta=0.002)
+
+    def test_food_detect_start_centres_the_bowl_in_the_wrist_image(self):
+        """The bowl's centre in the middle of the wrist image, the camera overlook_camera_height_m above the table."""
+        from fake_robot import D405
+        sc, robot, arm = self._at_overlook()
+        robot.raw = np.radians(scene.overlook_joints(arm))
+        u, v = robot.project([sc.bowl_xy[0], sc.bowl_xy[1], sc.table_z])
+        self.assertLess(np.hypot(u - D405.cx, v - D405.cy), 3.0)
+        self.assertAlmostEqual(robot.camera_pose()[0][2] - sc.table_z, float(cfg.workspace.overlook_camera_height_m),
+                               delta=0.002)
 
     def test_direct_home(self):
         from rammp_feeding.cli import home
@@ -162,7 +209,7 @@ class Restored(unittest.TestCase):
         from rammp_feeding.acquire import acquire
         sc, robot, arm = self._at_overlook()
         sc.floor_lift, sc.piece_xy = 0.0, (sc.bowl_xy[0] + 0.5, sc.bowl_xy[1])         # the piece out of the way
-        acquire(robot, arm, dict(tool_goal=list(arm.tool()[0])), Path(tempfile.mkdtemp()), stop_after="hover10")
+        acquire(robot, arm, self.slide_over(arm, sc.bowl_xy), Path(tempfile.mkdtemp()), stop_after="hover10")
         self.assertAlmostEqual(arm.tip()[2], sc.table_z + float(cfg.bowl.floor_above_table_m) + 0.010, delta=0.002)
 
     def test_a_scoop_on_its_own_starts_only_where_its_plunge_ended(self):
@@ -183,7 +230,36 @@ class Delivery(unittest.TestCase):
         sc = Scene()
         site(sc)
         robot = FakeRobot(sc, scene.captured("deliver"))
+        scene.measured_mouth(None)                                  # (no mouth measured yet in this command)
         return sc, robot, Arm(robot), FakeFace(robot)
+
+    def test_a_compliant_move_never_takes_a_continuous_joint_across_180(self):
+        """The driver's impedance mode runs a continuous joint the long way round past +-180: refused before moving;
+        the same path in position control runs, the short way."""
+        sc, robot, arm, face = self._at_look()
+        q0 = np.array(arm.q())
+        self.assertLess(q0[0], -170.0)                           # (the delivery look: joint 1 near -180)
+        path = [list(q0 + [-15.0 * k / 10, 0, 0, 0, 0, 0, 0]) for k in range(11)]
+        n = len(robot.moves)
+        with self.assertRaisesRegex(MoveError, "joint 1 would cross"):
+            arm.run(path, "approach", dps=10.0, max_tilt=95.0, impedance="approach")
+        self.assertEqual(len(robot.moves), n)                    # nothing sent
+        arm.run(path, "approach", dps=10.0, max_tilt=95.0)
+        self.assertLess(g.max_step(arm.q(), path[-1]), 0.1)
+        self.assertEqual(robot.moves[-1], "position")
+        self.assertFalse(cfg.delivery.approach_impedance)        # the approach runs in position control
+
+    def test_the_swing_starts_from_a_fork_tipped_past_its_limit(self):
+        """A swing from where a stopped move left the fork tipped up past swing_max_tilt_deg runs (no further than it
+        starts), back to the delivery look."""
+        from rammp_feeding.deliver import swing
+        sc, robot, arm, face = self._at_look()
+        look = np.array(scene.captured("deliver"))
+        q = [90.54, -100.81, -91.98, -141.43, -16.78, -29.70, 98.96]      # where a faulted approach left the arm
+        self.assertGreater(g.tilt_deg(arm.tool(q)[1]), float(cfg.delivery.swing_max_tilt_deg) + 2)
+        robot.raw = np.radians(q)
+        swing(arm)
+        self.assertLess(g.max_step(arm.q(), look), 0.1)
 
     def test_no_face_from_the_delivery_look_then_the_second(self):
         from rammp_feeding.deliver import present
@@ -204,12 +280,17 @@ class Delivery(unittest.TestCase):
         self.assertLess(g.max_step(arm.q(), scene.overlook_joints(arm)), 1.0)        # retracted
 
     def test_the_retract_backs_off_straight_only_from_in_front_of_the_look(self):
-        """From the scoop end (level, near the look but behind it) the return is planned, never a straight line."""
+        """From the scoop's end (level, over the bowl, behind the look) the return is planned, never a straight line."""
+        from rammp_feeding.acquire import Food, plan_scoop
         from rammp_feeding.deliver import retract
         sc = Scene()
         site(sc)
-        robot = FakeRobot(sc, scene.captured("scoop_end"))
+        robot = FakeRobot(sc, scene.captured("home"))
         arm = Arm(robot)
+        over_the_bowl(robot, arm, sc)
+        q = arm.q()
+        T, R = arm.tool(q)
+        robot.raw = np.radians(plan_scoop(arm, q, T, R, Food(0.02, 0.005))["path"][-1])
         arm.straight = lambda *a, **k: self.fail("a straight back-off from the scoop end")
         retract(robot, arm)
         self.assertLess(g.max_step(arm.q(), scene.overlook_joints(arm)), 1.0)
@@ -228,14 +309,23 @@ class Delivery(unittest.TestCase):
         with self.assertRaises(MoveError):
             present(robot, arm, face, Path(tempfile.mkdtemp()))
 
-    def test_the_user_in_the_planners_world_is_where_the_operator_seats_them(self):
-        from rammp_feeding.deliver import present
+    def test_the_user_in_the_planners_world_is_where_the_mouth_was_measured(self):
+        """No user in the planner's world until the mouth is measured from the delivery look; then the user round it,
+        wherever they sit (here 15 cm from where the look points), for the rest of the command and for this bite's
+        later stages run on their own."""
+        from rammp_feeding import deliver as dv
         sc, robot, arm, face = self._at_look()
-        sc.mouth = tuple(np.array(sc.mouth) + [0.05, -0.03, 0.02])     # measured elsewhere: the world stays as set up
-        present(robot, arm, face, Path(tempfile.mkdtemp()))
+        self.assertFalse([o for o in scene.world()["obstacles"] if o["name"].startswith("user_")])
+        sc.mouth = tuple(np.array(sc.mouth) + [0.05, -0.10, 0.10])
+        out = Path(tempfile.mkdtemp())
+        self.assertEqual(dv.present(robot, arm, face, out), 0)
+        m = np.array(json.loads((out / "mouth.json").read_text())["mouth"])
+        self.assertLess(np.linalg.norm(m - np.array(sc.mouth)), 0.01)
         head = next(o for o in scene.world()["obstacles"] if o["name"] == "user_head")
-        m = np.array(cfg.motion.free_space.user_mouth_m)
         self.assertLess(np.linalg.norm(np.array(head["position"]) - (m + [-0.09, 0.0, 0.05])), 1e-9)
+        scene.measured_mouth(None)                                  # a new command: --start-at retract of this bite
+        self.assertEqual(dv.deliver(robot, arm, face, out, start_at="retract"), 0)
+        self.assertLess(np.linalg.norm(scene.user_mouth() - m), 1e-9)
 
 
 class Perception(unittest.TestCase):
@@ -265,8 +355,28 @@ class Perception(unittest.TestCase):
         robot.raw = np.radians(scene.overlook_joints(arm))
         found = robot.detect
         robot.detect = lambda role, prompts, t: [d for d in found(role, prompts, t) if d.label == cfg.food.prompt]
-        with self.assertRaisesRegex(MoveError, "no bowl"):
+        with self.assertRaisesRegex(MoveError, "no SAM3 bowl mask"):
             perceive(robot, arm, Path(tempfile.mkdtemp(dir=WORK)))
+
+    def test_the_bowl_is_the_mask_round_the_measured_centre(self):
+        """SAM3's best-scored bowl with an empty mask, and a "plate" mask over the whole table round the bowl: perceive
+        takes the bowl's own mask (the smallest round the centre rammp detect measured) and finds the piece."""
+        from rammp_feeding.perception import perceive
+        sc = Scene()
+        site(sc)
+        robot = FakeRobot(sc, scene.captured("home"))
+        arm = Arm(robot)
+        robot.raw = np.radians(scene.overlook_joints(arm))
+        found = robot.detect
+
+        def detect(role, prompts, t):
+            dets = found(role, prompts, t)
+            m = next(d for d in dets if d.label in cfg.perception.bowl_prompts).mask
+            return dets + [Detection("bowl", 0.99, [0, 0, 1, 1], np.zeros_like(m)),
+                           Detection("plate", 0.95, [0, 0, m.shape[1], m.shape[0]], np.ones_like(m))]
+        robot.detect = detect
+        tgt = perceive(robot, arm, Path(tempfile.mkdtemp(dir=WORK)))
+        self.assertLess(np.linalg.norm(np.array(tgt["piece"]["xy"]) - np.array(sc.piece_xy)), 0.01)
 
     def test_the_bowl_is_the_circle_through_its_rim(self):
         """Depth points of a bowl on a table (its rim 60 mm up, 80 mm round, the near half only, as from the side):
@@ -287,13 +397,30 @@ class Perception(unittest.TestCase):
         got = bowl_at(mask, [40, 40, 60, 60], uv, np.vstack([rim * [1, 1, 0], table]))      # nothing above the table
         self.assertIn("rejected", got)
 
+    def test_an_empty_bowl_reads_empty_with_the_utensil_over_it(self):
+        """The inner floor alone counts: its walls rising toward the rim, and the utensil hanging over the bowl (above
+        its rim), are not food; a piece standing on the floor is."""
+        from rammp_feeding.perception import food_left
+        rng = np.random.default_rng(4)
+        ws = dict(bowl_xy=[0.5, 0.0], bowl_radius=0.08, bowl_top_z=0.07)
+        r = 0.08 * np.sqrt(rng.uniform(0, 1, 6000))
+        a = rng.uniform(0, 2 * np.pi, 6000)
+        floor = np.c_[0.5 + r * np.cos(a), r * np.sin(a), 0.07 * (r / 0.08) ** 3]          # a bowl: flat, then its walls
+        fork = np.c_[rng.uniform(0.48, 0.52, 800), rng.uniform(-0.01, 0.01, 800), np.full(800, 0.30)]
+        uv = np.zeros((6800, 2), int)
+        mask = np.ones((1, 1), bool)
+        self.assertLess(food_left(np.vstack([floor, fork]), uv, mask, ws), float(cfg.perception.food_left_min_frac))
+        piece = np.c_[rng.uniform(0.49, 0.51, 600), rng.uniform(-0.01, 0.01, 600), np.full(600, 0.025)]
+        self.assertGreater(food_left(np.vstack([floor, fork, piece]), np.zeros((7400, 2), int), mask, ws),
+                           float(cfg.perception.food_left_min_frac))
+
     def test_under_tip_from_the_rendered_depth(self):
         from rammp_feeding.perception import under_tip
         sc = Scene()
         site(sc)
         robot = FakeRobot(sc, scene.captured("home"))
         arm = Arm(robot)
-        robot.raw = np.radians(scene.overlook_joints(arm))
+        over_the_bowl(robot, arm, sc)
         tip = arm.tip()
         sc.piece_xy = tuple(tip[:2])                              # the piece right under the tip
         u = under_tip(robot.render_depth(), arm)
@@ -331,6 +458,54 @@ class World(unittest.TestCase):
         table = next(o for o in w["obstacles"] if o["name"] == "table")
         top = table["position"][2] + table["dims"][2] / 2
         self.assertAlmostEqual(top, sc.table_z + float(cfg.scene_camera.error_m) + float(cfg.motion.free_space.min_tip_above_table_m))
+
+    def test_the_scoop_ends_level_over_the_bowls_centre_above_its_rim(self):
+        """The scoop's end, computed from the bowl: the piece lift_m over the free-space floor above the bowl's centre
+        (so the swing may start there), the utensil level and pointing along the base's +y."""
+        from rammp_feeding.acquire import Food, plan_scoop
+        sc = Scene()
+        site(sc)
+        robot = FakeRobot(sc, scene.captured("home"))
+        arm = Arm(robot)
+        over_the_bowl(robot, arm, sc)
+        q = arm.q()
+        T, R = arm.tool(q)
+        plan = plan_scoop(arm, q, T, R, Food(0.02, 0.005))
+        Te, Re = arm.tool(plan["path"][-1])
+        piv = Te + Re @ plan["o_piv"]
+        np.testing.assert_allclose(piv, [*sc.bowl_xy, scene.tip_floor(*sc.bowl_xy) + float(cfg.acquisition.scoop.lift_m)],
+                                   atol=2e-3)
+        self.assertGreater(Re[:, 2][1], 0.99)
+
+    def test_the_planners_bowl_floor_is_where_the_plunge_stops_above(self):
+        """One height for the bowl's floor: the planner's floor box ends at bowl.floor_above_table_m over the table
+        (plus the scene's error), the height the plunge never goes under."""
+        sc = Scene()
+        site(sc)
+        box = next(o for o in scene.world()["obstacles"] if o["name"] == "bowl_floor")
+        self.assertAlmostEqual(box["position"][2] + box["dims"][2] / 2,
+                               sc.table_z + float(cfg.scene_camera.error_m) + float(cfg.bowl.floor_above_table_m))
+        self.assertAlmostEqual(float(cfg.bowl.floor_above_table_m), 0.005)
+
+    def test_the_bowl_is_padded_by_the_camera_that_read_it(self):
+        """The scene camera's reading pads the bowl and the table by its error_m; once the wrist camera has read them
+        (rammp detect), by wrist_bowl_error_m -- the bowl's top, still the scene camera's, keeps that camera's error."""
+        sc = Scene()
+        site(sc)
+        f = state_dir() / "scene_state.json"
+        walls = lambda: [o for o in scene.world()["obstacles"] if o["name"].startswith("bowl_wall")]    # noqa: E731
+        top = lambda: max(o["position"][2] + o["dims"][2] / 2 for o in walls())                     # noqa: E731
+        over = scene.tip_floor(*sc.bowl_xy)
+        self.assertAlmostEqual(walls()[0]["dims"][0], 0.006 + 2 * float(cfg.scene_camera.error_m), places=9)
+        top0 = top()
+        f.write_text(json.dumps(dict(json.loads(f.read_text()), refined_by="the wrist camera")))
+        self.assertAlmostEqual(walls()[0]["dims"][0], 0.006 + 2 * float(cfg.perception.wrist_bowl_error_m), places=9)
+        self.assertAlmostEqual(top(), top0, places=9)
+        self.assertAlmostEqual(scene.tip_floor(*sc.bowl_xy), over, places=9)          # the scoop's end unchanged
+        table = next(o for o in scene.world()["obstacles"] if o["name"] == "table")      # its near edge as before:
+        near = table["position"][0] - table["dims"][0] / 2                                # the planner's padded table
+        self.assertAlmostEqual(near, float(cfg.workspace.table_extent_m.x[0]) + float(cfg.scene_camera.error_m))
+        self.assertGreater(near - 0.02, 0.075 + 0.005)            # clear of its base sphere (r 0.075 + 0.005 buffer)
 
     def test_each_planned_move_pushes_our_world_and_the_command_restores_the_planners(self):
         sc = Scene()
@@ -456,8 +631,9 @@ class World(unittest.TestCase):
 
 class Refine(unittest.TestCase):
     def test_the_wrist_camera_takes_the_bowl_nearest_the_scene_cameras(self):
-        """Two bowls in the wrist camera's view: the one within twice error_m of the scene camera's reading is taken, not
-        the better-scored one further away; with none that near, refused."""
+        """Two bowls in the wrist camera's view: the one nearer the scene camera's reading is taken, not the better-scored
+        one further away; a single bowl however far off is taken; the scene camera's own reading is kept for the log;
+        no bowl at all: refused."""
         from unittest import mock
         from rammp_feeding import scene_camera as sc_
         sc = Scene()
@@ -468,12 +644,16 @@ class Refine(unittest.TestCase):
         near, far = [sc.bowl_xy[0] + 0.5 * e, sc.bowl_xy[1]], [sc.bowl_xy[0] + 3 * e, sc.bowl_xy[1]]
         m = np.zeros((480, 848), bool)
         robot.detect = lambda role, prompts, t: [Detection("bowl", 0.9, [0, 0, 1, 1], m), Detection("bowl", 0.5, [0, 0, 1, 1], m)]
-        fits = iter([dict(bowl_xy=far, rim_radius_m=0.08), dict(bowl_xy=near, rim_radius_m=0.07)])
+        fits = iter([dict(bowl_xy=far, rim_radius_m=0.08, table_z=0.0), dict(bowl_xy=near, rim_radius_m=0.07, table_z=0.003)])
         with mock.patch.object(sc_, "bowl_at", lambda *a: next(fits)):
-            self.assertEqual(sc_.refine(robot, arm)["bowl_xy"], near)
+            st = sc_.refine(robot, arm)
+        self.assertEqual((st["bowl_xy"], st["table_z"]), (near, 0.003))        # the wrist camera's table
+        self.assertEqual(st["scene_bowl_xy"], list(sc.bowl_xy))
         site(sc)
-        with mock.patch.object(sc_, "bowl_at", lambda *a: dict(bowl_xy=far, rim_radius_m=0.08)):
-            with self.assertRaisesRegex(RuntimeError, "no bowl within"):
+        with mock.patch.object(sc_, "bowl_at", lambda *a: dict(bowl_xy=far, rim_radius_m=0.08, table_z=0.0)):
+            self.assertEqual(sc_.refine(robot, arm)["bowl_xy"], far)            # 3 x error_m off: taken
+        with mock.patch.object(sc_, "bowl_at", lambda *a: dict(rejected="nothing bowl-sized on the table")):
+            with self.assertRaisesRegex(RuntimeError, "sees no bowl"):
                 sc_.refine(robot, arm)
 
 
@@ -523,9 +703,6 @@ class Profiles(unittest.TestCase):
             with mock.patch.dict(cfg[section], {key: None}):
                 with self.assertRaisesRegex(RuntimeError, r"not measured on this robot yet: %s\.%s" % (section, key)):
                     Arm(robot)
-        with mock.patch.dict(cfg["motion"]["free_space"], {"user_mouth_m": None}):
-            with self.assertRaisesRegex(RuntimeError, r"motion\.free_space\.user_mouth_m"):
-                Arm(robot)
 
     def test_the_measured_mount_is_taken_for_its_camera_only(self):
         from rammp_feeding import config as C
@@ -623,6 +800,46 @@ class WristCalibration(unittest.TestCase):
         self.assertLess(np.hypot(*np.subtract(tip, px(0.11))), 8.0)
         u, v = px(0.05)
         self.assertTrue(box[0] <= u <= box[2] and box[1] <= v <= box[3])
+
+    def test_the_fork_pass_hangs_the_tips_over_the_boards_centre(self):
+        from rammp_feeding import wrist_calibration as wc
+        WC = cfg.perception.wrist_calibration
+        X = np.eye(4)
+        X[:3, :3], X[:3, 3] = g.rodrigues([0.0, 0.0, math.pi]), [0.02, 0.05, -0.10]
+        B = np.eye(4)
+        B[:3, :3], B[:3, 3] = g.rodrigues([0.0, 0.0, 0.5]), [0.05, -0.35, -0.02]
+        R = g.rot("x", 180.0)                                     # the utensil straight down
+        pts = wc.fork_poses(B, X, R)
+        nx, ny = (int(n) for n in WC.squares)
+        centre = B[:3, :3] @ [nx * float(WC.square_m) / 2, ny * float(WC.square_m) / 2, 0.0] + B[:3, 3]
+        depth = -0.10 + float(cfg.utensil.camera_to_tip_m)          # how far along the tool axis the tips hang
+        np.testing.assert_allclose(pts[0] + R @ [0, 0, depth], centre + [0, 0, float(WC.fork_height_m)], atol=1e-9)
+        shifts = sorted(np.round(np.linalg.norm(p - pts[0]), 6) for p in pts[1:])
+        self.assertEqual(shifts, [float(WC.fork_shift_m)] * 4)
+
+    def test_no_board_beyond_the_tips_is_refused(self):
+        """The fork drawn the same in every frame, the background changing except just beyond its tips (white table
+        there, as when the board lies elsewhere): refused rather than a tip read off the still table."""
+        from PIL import Image, ImageDraw
+        from rammp_feeding import wrist_calibration as wc
+        from rammp_feeding.camera import CameraModel, Intrinsics
+        k = Intrinsics(607.3, 607.4, 323.8, 244.7, 640, 480)
+        cam = CameraModel(k, k, np.eye(4))
+        X = np.eye(4)
+        X[:3, :3], X[:3, 3] = g.rodrigues([0.03, -0.02, math.pi]), [0.023, 0.050, -0.103]
+        Xi = np.linalg.inv(X)
+
+        def px(z):
+            return cam.pixel(Xi[:3, :3] @ np.array([0.0, 0.0, z]) + Xi[:3, 3])
+        rng = np.random.default_rng(5)
+        frames = []
+        for _ in range(7):
+            im = Image.fromarray(rng.integers(0, 255, (480, 640, 3), dtype=np.uint8))
+            d = ImageDraw.Draw(im)
+            d.ellipse([px(0.13)[0] - 40, px(0.13)[1] - 40, px(0.13)[0] + 40, px(0.13)[1] + 40], fill=(240, 240, 240))
+            d.line([px(-0.03), px(0.11)], fill=(230, 230, 230), width=14)
+            frames.append(np.asarray(im))
+        self.assertIsNone(wc.fork_in_image(frames, X, cam))
 
     def test_the_printed_board_is_found_at_its_size(self):
         """The board's own image, as a camera 0.4 m straight above it would see it: every corner found, 0.4 m away, and

@@ -2,5 +2,7 @@
 # profile holds what depth cannot see.
 
 name: front
-floor_above_table_m: 0.020      # SITE: the bowl's inner floor above the table (a ruler): the plunge never aims under it --
-                                # a clear bowl's floor is invisible to depth (it reads the table beneath)
+floor_above_table_m: 0.005      # the bowl's inner floor above the table: 5 mm, a bowl standing flat on the table (measure
+                                # it only for a bowl on a raised base). Two places read it, and only these: the plunge
+                                # never goes under it (a clear bowl's floor is invisible to depth: it reads the table
+                                # beneath), and the planner's world builds the bowl's floor box up to it

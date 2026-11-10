@@ -15,15 +15,13 @@ utensil:
                                       # to the level of the utensil's tips
 
 bowl:
-  floor_above_table_m: 0.020          # REQUIRED for another bowl: a ruler, its inner floor above the table
+  floor_above_table_m: 0.005          # the bowl's inner floor above the table: 5 mm for a bowl standing flat on it; a ruler
+                                      # for a bowl on a raised base (the plunge's lowest point and the planner's bowl
+                                      # floor both use it)
 
 workspace:
   table_extent_m: null                # REQUIRED: the table's edges, {x: [near, far], y: [right, left]}
   bowl_centre_m: null                 # REQUIRED: where the operator lays the bowl's centre, [x, y]
-
-motion:
-  free_space:
-    user_mouth_m: null                # REQUIRED, per session: where the user's mouth is when seated, [x, y, z]
 
 perception:
   wrist_calibration:                  # the printed ChArUco board (rammp calibrate-wrist --board prints this one)

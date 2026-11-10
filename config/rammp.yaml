@@ -54,6 +54,8 @@ motion:
   joint_speed_cap_dps: 61.7     # every joint, every move: 0.98 x the slowest joint's soft limit the arm ran under (63)
   joint_accel_dps2: 45.0        # every joint's speed changes at most this fast (72, the controller's cap, / 1.6: what the
                                 # arm measured against the plan)
+  trajectory_sample_s: 0.02     # a move is sent as its smooth speed profile sampled this often: the arm follows the
+                                # timed points directly, and a speed held over longer pieces jumps from one to the next
   joint_limits_deg: {2: 128.9, 4: 147.8, 6: 120.3}   # J2 / J4 / J6, ours (inside the URDF's 138 / 152 / 128)
   joint_limit_margin_deg: 0.3   # an IK solution this close to a limit is no solution
   plan_min_margin_deg: 3.0      # food_detect_start keeps at least this from every limit
@@ -72,7 +74,7 @@ motion:
     approach: {kq: [80, 80, 80, 80, 30, 30, 30], zeta: 0.7, torque_limit: [39, 39, 39, 39, 9, 9, 9]}
   free_space:                   # detect, home, the swing, the retract's return: cuRobo paths
     dps: 61.0                   # cruise, the furthest joint
-    path_step_deg: 4            # cuRobo's dense path thinned to about this on the furthest joint
+    path_step_deg: 1            # cuRobo's dense path thinned to about this on the furthest joint (its curve kept)
     timeout_s: 30
     replans: 4                  # a path that fails our check: plan again (cuRobo's paths differ), at most this often
     check_step_deg: 0.5         # a planned path is checked as it will run: sampled this finely on the furthest joint
@@ -82,9 +84,6 @@ motion:
                                 # table raised to it: the utensil hangs below the gripper) ...
     min_tip_above_bowl_m: 0.015 # ... above the bowl's top over the bowl
     bowl_margin_m: 0.04         # "over the bowl": within its rim radius + this
-    user_mouth_m: null          # SITE, per session [x, y, z]: where the operator seats the user's mouth (their head and
-                                # torso in the planner's world; a measured mouth further than delivery.seated_tol_m is
-                                # refused)
 
 guards:                         # the contact guard: a joint-torque step this big against recent history = stop
   torque_window: {span: 12, gap: 5}   # samples: the baseline window, and the gap before the sample compared to it
@@ -101,7 +100,8 @@ guards:                         # the contact guard: a joint-torque step this bi
 
 acquisition:
   over_speed_mps: 0.15
-  over_max_m: 0.10              # OVER is a small correction inside the bowl, never a transit
+  over_max_m: 0.18              # OVER is a level slide over the bowl, never a transit (from food_detect_start, the
+                                # camera over the bowl's centre, the tip ~8 cm off it plus the piece's offset)
   over_level_tol_m: 0.002
   plunge:
     fast_mps: 0.050
@@ -119,7 +119,9 @@ acquisition:
     rot_exp: 0.8                # turn angle = 90 * s**rot_exp: <1 starts turning the moment the food lifts
     waypoints: 40
     backoff_from: 0.2           # fraction of the scoop before backing off toward the scoop end
-    max_backoff_m: 0.300        # the scoop backs off to the captured scoop_end: refused when that is further
+    lift_m: 0.04                # the scoop ends with the piece this far over the free-space tip floor above the bowl's
+                                # centre (its top + min_tip_above_bowl_m + error_m): the swing starts where it may
+    max_backoff_m: 0.300        # ... refused when that centre is further across than this from where the plunge ended
     max_joint_step_deg: 12
   stepped:                      # the hover route, for aim checks (tip_px: rammp acquire --stop-after hover10, rise)
     hover_m: {hover30: 0.030, hover10: 0.010}
@@ -129,7 +131,12 @@ acquisition:
 
 perception:
   score_threshold: 0.5          # SAM3
-  bowl_prompts: [bowl]          # SAM3's words for the bowl in the wrist camera (with the food's, one call)
+  wrist_bowl_error_m: 0.010     # how far the wrist camera's bowl and table (rammp detect, from food_detect_start) may be
+                                # off: once it has read them, the planner's world and our tip floor keep this as clearance
+                                # in place of the scene camera's error_m (the bowl's top stays the scene camera's)
+  bowl_prompts: [bowl, dish, plate]   # SAM3's words for the bowl in the wrist camera (with the food's, one call): the
+                                # best match is taken -- seen empty from above, a dark bowl scored 0.37 as "bowl", 0.71
+                                # as "dish" and 0.88 as "plate"
   bowl_score_threshold: 0.3     # SAM3 on the bowl in the wrist camera (detect, perceive): it scores a dark bowl 0.4-0.6
   depth_frames: 15              # per-pixel median over this many frames after the arm stopped
   depth_wait_s: 3.0
@@ -143,8 +150,10 @@ perception:
   tip_line_radius_m: 0.004      # "straight under the tip": depth points this near its vertical line
   utensil_depth_margin_m: 0.005 # under the tip, depth no farther than the tip + this is the utensil itself
   utensil_depth_border_px: 3
-  food_left_above_floor_mm: 15  # no food box: the bowl is empty only if under food_left_min_frac of its inner area
-  food_left_min_frac: 0.05      # stands this far above its floor -- else "food left, none pickable" (exit 5)
+  food_left_above_floor_mm: 20  # no food box: the bowl is empty only if under food_left_min_frac of its inner floor
+  food_left_min_frac: 0.05      # (within food_left_inner_frac of its rim radius, nothing above its rim: the utensil)
+  food_left_inner_frac: 0.6     # stands this far above its floor -- else "food left, none pickable" (exit 5). An empty
+                                # dark bowl: 3.6 % (its walls and inner ring, depth noise); a 20-30 mm piece counts
   scene:                        # the fixed scene camera (rammp locate-scene)
     bowl_prompts: [dish, bowl, bowl with a glass jar]   # SAM3's words for the bowl (from the side a bowl reads as a
                                 # dish or a plate with a jar; "bowl" alone boxed a lidded box)
@@ -172,25 +181,30 @@ perception:
     min_poses: 5                # of the 7
     max_spread_m: 0.005         # accepted when the board's place in the base frame agrees across the poses this well
     max_spread_deg: 1.0
-    fork_still_std: 8.0         # the utensil: pixels whose grey level varies less than this across the route's frames ...
+    fork_height_m: 0.10         # the fork pass: the utensil's tips this high over the board's centre ...
+    fork_shift_m: 0.03          # ... and shifted this much each way, the board sliding behind them
+    fork_still_std: 8.0         # the utensil: pixels whose grey level varies less than this across the fork pass ...
     fork_corridor_px: 60        # ... within this of the tool's axis as the camera sees it
     tip_band_px: 6              # its tips: its pixels within this of its far end along that axis
     fork_margin_px: 10          # image_region_px: its box, grown by this
 
 delivery:
   swing_dps: 61.0               # the swing to the delivery look (rammp capture deliver)
+  swing_max_tilt_deg: 105.0     # carrying the piece, the utensil's tines at most this far off straight down (90: level):
+                                # tipped up to 15 deg above level the pierced piece slides toward the gripper, not off
   second_look_m: [0.0, -0.050, 0.0]   # no face or no usable mouth from the delivery look: this much further (base frame;
                                 # -Y: to the user's right), straight, and look again
   look_mps: 0.044
   face_find_s: 2.0              # a look with no face found in this long: the second look (from the first) or refused
-  seated_tol_m: 0.10            # a mouth measured further than this from user_mouth_m: refused (the planner's user is there)
   stop_m: 0.080                 # the utensil tip this far short of the mouth
   aim_dz_m: -0.010              # below the mouth
   approach_mps: 0.077
-  approach_impedance: approach  # motion.impedance's entry the approach runs with (null: position control)
+  approach_impedance: null      # motion.impedance's entry the approach runs with (null: position control). Position:
+                                # the driver's compliant mode (kinova-gen3-driver v1.2.0) spins a continuous joint the
+                                # long way round when the target crosses +-180, and a mouth to the user's right takes
+                                # joint 1 across it from the delivery look
   approach_step_m: 0.005
   max_turn_deg: 30.0            # the utensil turned toward the mouth by at most this
-  mouth_depth_range_m: [0.25, 1.00]   # a mouth outside this is not a face at the utensil: the second look
   level_tol: 0.1                # |utensil axis z| under this = level
   open_mouth_ratio: 0.20        # inner-lip gap / mouth width; closed reads <= 0.02
   open_mouth_hold_s: 0.30

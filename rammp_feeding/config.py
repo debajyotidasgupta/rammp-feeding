@@ -109,11 +109,10 @@ def load() -> Cfg:
 cfg = load()
 
 # The site's own values -- measured on the robot (the wrist camera's mount, the utensil against that camera) or set
-# for the site (the table, where the bowl is laid, where the user sits): null until they are, and nothing that needs
-# them builds the arm without them (docs/porting.md).
+# for the site (the table, where the bowl is laid): null until they are, and nothing that needs them builds the arm
+# without them (docs/porting.md).
 MEASURED = ("camera.mount.camera_in_tool_m", "camera.mount.rotation_quat_xyzw", "utensil.glass_to_tip_m",
-            "utensil.tip_px", "utensil.image_region_px", "workspace.table_extent_m", "workspace.bowl_centre_m",
-            "motion.free_space.user_mouth_m")
+            "utensil.tip_px", "utensil.image_region_px", "workspace.table_extent_m", "workspace.bowl_centre_m")
 
 
 def unmeasured(c: Cfg | None = None) -> list[str]:
@@ -135,7 +134,7 @@ def runs_dir() -> Path:
     return p
 
 
-CAPTURES = ("home", "overlook", "scoop_end", "deliver")    # the site's arm poses: rammp capture <name>
+CAPTURES = ("home", "overlook", "deliver")    # the site's arm poses: rammp capture <name>
 
 
 def calibration(name: str) -> dict:

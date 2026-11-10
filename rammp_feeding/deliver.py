@@ -1,13 +1,15 @@
-"""Food delivery, from the scoop end.
+"""Food delivery, from where acquisition ends: the piece level, at food_detect_start's height over the bowl.
 
   swing    one cuRobo path carrying the piece to the delivery look: a fixed pose (rammp capture deliver), the utensil
            level toward the user, the camera on the user's face, the food out of its view of the mouth
   present  open loop: the mouth measured once, as it opens (the wrist camera, MediaPipe, its lips' depth), from the
            delivery look -- or, with no face or no usable mouth there, from the second look, delivery.second_look_m
            further -- then one straight move (the utensil turned toward the mouth by at most max_turn_deg) to
-           delivery.stop_m short of it, compliant (motion.impedance.approach). Exit 7: the user did not open their
-           mouth (declined); no usable mouth from either look, or a mouth further than seated_tol_m from where the
-           user is seated (user_mouth_m, the planner's user): the presentation refused (8).
+           delivery.stop_m short of it (position control, or compliant with delivery.approach_impedance set; a
+           compliant path that takes a continuous joint across +-180 is refused). The mouth is measured on every
+           delivery, wherever the user sits, and the planner's world has the user there from then on (the retract;
+           deliver/mouth.json keeps it for a later --start-at bite / retract of this bite). Exit 7: the user did not
+           open their mouth (declined); no usable mouth from either look: the presentation refused (8).
   bite     the force at the tool from the joint torques, against a baseline at rest: above bite_n for bite_hold_s,
            then until it settles (the user has let go), at most bite_settle_s
   retract  from in front of the delivery look (at the user, or a look): straight back to it (the approach reversed),
@@ -37,8 +39,11 @@ DL, G = cfg.delivery, cfg.guards.torque_step_nm
 
 
 def swing(arm: Arm) -> None:
+    """One planned path to the delivery look, carrying: the utensil no further off vertical than swing_max_tilt_deg,
+    or than it already is (plus 5 deg) where it starts beyond that."""
+    from rammp_feeding.geometry import tilt_deg
     arm.travel(scene.captured("deliver"), "swing to the user", dps=float(DL.swing_dps), torque_limit=float(G.swing),
-               max_tilt=95.0, carrying=True)
+               max_tilt=max(float(DL.swing_max_tilt_deg), tilt_deg(arm.tool()[1]) + 5.0), carrying=True)
 
 
 def measure_mouth(robot, arm: Arm, face, t_frame: float, rgb, out: Path, look: int) -> np.ndarray | None:
@@ -47,10 +52,8 @@ def measure_mouth(robot, arm: Arm, face, t_frame: float, rgb, out: Path, look: i
     from rammp_feeding.scene import cam_to_tool
     D = robot.cameras["camera"].depth_median(5, t_frame - 0.2, wait_s=1.5, min_frames=3)
     m = face.mouth(rgb, D, arm.cam)
-    lo, hi = (float(v) for v in DL.mouth_depth_range_m)
     why = ("no face" if m is None else "its range is only from the face's size (no depth on the lips)"
-           if m["source"] != "depth" else "its depth %.0f mm is outside %.0f-%.0f" % (1000 * m["cam_xyz"][2], 1000 * lo, 1000 * hi)
-           if not lo <= m["cam_xyz"][2] <= hi else None)
+           if m["source"] != "depth" else None)
     (out / ("face_%d.json" % look)).write_text(json.dumps(dict(mouth=m, why=why), indent=1))
     Image.fromarray(rgb).save(out / ("look_%d.jpg" % look), quality=90)
     np.save(out / ("depth_%d.npy" % look), D)
@@ -105,10 +108,8 @@ def present(robot, arm: Arm, face, out: Path, wait_open: bool = True) -> int:
             got = cam.frame()
         mouth = measure_mouth(robot, arm, face, got[0], got[1], out, look)
         if mouth is not None:
-            off = float(np.linalg.norm(mouth - scene.user_mouth()))
-            if off > float(DL.seated_tol_m):                # the planner's world has the user where seated
-                raise MoveError("the mouth is %.0f mm from where the user is seated (motion.free_space.user_mouth_m)"
-                                % (1000 * off))
+            scene.measured_mouth(mouth)                     # the user in the planner's world from here on
+            (out / "mouth.json").write_text(json.dumps(dict(mouth=[float(v) for v in mouth], t=time.time()), indent=1))
             approach(arm, mouth)
             return 0
     raise MoveError("no usable mouth from either look")
@@ -177,6 +178,8 @@ def deliver(robot, arm: Arm, face, out: Path, stop_after: str = "", start_at: st
     (retracted)."""
     stages = ["swing", "present", "bite", "retract"]
     run = stages[stages.index(start_at):]
+    if "present" not in run and (out / "mouth.json").exists():        # this bite's mouth, measured by its present
+        scene.measured_mouth(json.loads((out / "mouth.json").read_text())["mouth"])
     if "swing" in run:
         swing(arm)
         if stop_after == "swing":

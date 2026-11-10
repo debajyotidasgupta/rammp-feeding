@@ -2,11 +2,14 @@
 
   over     at the overlook height, a level slide until the tip's vertical line passes through the target piece
            (refused unless at food_detect_start, small and level: a correction inside the bowl, never a transit)
-  plunge   straight down beside the piece to the bowl floor (never under the bowl profile's own floor: a clear bowl
-           reads the table through it), in one move: fast, easing to slow above the piece; the contact guard strict
-           above the food, a firm piece's piercing allowed once the tines are in it
-  scoop    the piece rises while the utensil turns from vertical to level about it, backing off to the captured
-           scoop_end (where the swing starts); stopped if the food point leaves its path or drops
+  plunge   straight down through the piece to utensil.punch_floor_margin_m over the floor read beside it (never
+           under bowl.floor_above_table_m: a clear bowl reads the table through it), in one move: fast, easing to slow above the piece; the contact guard strict
+           above the food, a firm piece's piercing allowed once the tines are in it; the wrist camera's view where it
+           stops saved (acquire/plunge_end.jpg)
+  scoop    the piece rises while the utensil turns from vertical to level about it, to acquisition.scoop.lift_m over
+           the free-space floor above the bowl's centre; stopped if the food point leaves its path or drops
+  lift     then straight up, the utensil level, to food_detect_start's height: the whole arm clear of the planner's
+           world, where the swing starts
   pick     over -> a fresh depth reading from there -> plunge -> scoop, planned before the plunge starts (no pause);
            a plunge that ran keeps the piece's height and where it ended with the bite (acquire/food.json): a scoop
            run on its own (--start-at scoop) starts from there
@@ -24,11 +27,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+from PIL import Image
 
 from rammp_feeding import record, scene
 from rammp_feeding.arm import Arm, MoveError, TorqueGuard
 from rammp_feeding.config import cfg
-from rammp_feeding.geometry import max_step, rot
+from rammp_feeding.geometry import max_step, rot, tilt_deg
 from rammp_feeding.perception import under_tip
 
 log = logging.getLogger("rammp")
@@ -130,26 +134,32 @@ def plunge(arm: Arm, u: dict, out: Path, scoop_after: bool = True) -> Food:
         return ("joint %d torque step %s" % (hit[0] + 1, "in the food" if inside else "above the food")) if hit else None
     arm.run(path, "plunge", durations=durations, torque_stop=False, check=contact)
     (out / "food.json").write_text(json.dumps(dict(height=food.height, floor_m=food.floor_m, joints_deg=arm.q()), indent=1))
+    Image.fromarray(arm.robot.cameras["camera"].frame(after=time.time())[1]).save(out / "plunge_end.jpg", quality=90)
     if scoop is not None:
         run_scoop(arm, scoop)
+        rise(arm, "lift")                                 # clear of the planner's world: the swing starts from here
     return food
 
 
 # ------------------------------------------------------------------ the scoop
 def plan_scoop(arm: Arm, q0, T0, R0, food: Food) -> dict:
-    """From a given state (here, or where the plunge will end): the food point rises while the utensil turns 90 deg
-    about it (the turn = 90 * s**rot_exp: it starts at once), backing off to the scoop end once past steep."""
+    """From a given state (here, or where the plunge will end): the food point -- the piece's centre on the tines --
+    rises while the utensil turns 90 deg about it (the turn = 90 * s**rot_exp: it starts at once), to lift_m over the
+    free-space tip floor above the bowl's centre (scene.tip_floor: the bowl's top + min_tip_above_bowl_m + the scene
+    camera's error_m), moving across to that centre once past steep (backoff_from); the arm's shape follows on from where it
+    starts."""
     S = A.scoop
     tip = arm.tip_tool
     o_piv = tip - np.array([0, 0, max(0.0, food.height / 2.0 - food.floor_m)])
     piv0 = T0 + R0 @ o_piv
-    se = scene.scoop_end(arm)
-    pivE = np.array(se["tool_m"]) + rot("x", 90.0) @ R0 @ o_piv
+    ws = scene.workspace()
+    cx, cy = ws["bowl_xy"]                              # ends lift_m over the free-space floor there: where the swing
+    pivE = np.array([cx, cy, scene.tip_floor(cx, cy) + float(S.lift_m)])   # that follows may start from
     back = pivE - piv0
     rise = back[2]
     back[2] = 0.0
     if np.linalg.norm(back) > float(S.max_backoff_m):
-        raise MoveError("backing off %.0f mm is too far -- not the bowl this was built for" % (1000 * np.linalg.norm(back)))
+        raise MoveError("the scoop's %.0f mm across to the bowl's centre is too far -- rammp detect" % (1000 * np.linalg.norm(back)))
     frm = float(S.backoff_from)
 
     def piv_at(s):
@@ -160,10 +170,11 @@ def plan_scoop(arm: Arm, q0, T0, R0, food: Food) -> dict:
         R = rot("x", 90.0 * s ** float(S.rot_exp)) @ R0
         return piv_at(s) - R @ o_piv, R
     n, jump = int(S.waypoints), float(S.max_joint_step_deg)
-    path, _ = arm.homotopy(q0, at, n, toward=se["joints_deg"], max_jump=jump)
+    path, why = arm.homotopy(q0, at, n, max_jump=jump)
     if path is None:
-        raise MoveError("no continuous scoop path from here -- nothing moved")
-    log.info("    scoop: the food rises %.0f mm, backing off %.0f mm, turning 90 deg; joint margin >= %.1f deg",
+        raise MoveError("no continuous scoop path from here (%s) -- nothing moved" % why)
+    log.info("    scoop: the food rises %.0f mm, %.0f mm across to over the bowl's centre, turning 90 deg; joint margin "
+             ">= %.1f deg",
              1000 * rise, 1000 * np.linalg.norm(back), min(arm.margin(q) for q in path))
     return dict(path=path, o_piv=o_piv, plan=np.array([piv_at(k / 400) for k in range(401)]), piv0=piv0)
 
@@ -207,19 +218,21 @@ def descend(arm: Arm, u: dict, to_above: float) -> None:
     arm.straight(T - np.array([0, 0, down]), R, float(S.descend_mps), "descend")
 
 
-def rise(arm: Arm) -> None:
-    """Straight back up to food_detect_start's height, where it is (after a hover)."""
+def rise(arm: Arm, label: str = "rise") -> None:
+    """Straight up to food_detect_start's height, where it is, the utensil's orientation held: vertical after a hover
+    or a plunge, level after the scoop."""
     T, R = arm.tool()
-    ws = scene.workspace()
-    if math.hypot(T[0] - ws["bowl_xy"][0], T[1] - ws["bowl_xy"][1]) > ws["bowl_radius"] + float(A.over_max_m):
-        raise MoveError("not over the bowl -- not a hover")
+    tip, ws = arm.tip(), scene.workspace()
+    if math.hypot(tip[0] - ws["bowl_xy"][0], tip[1] - ws["bowl_xy"][1]) > ws["bowl_radius"] + float(A.over_max_m):
+        raise MoveError("the utensil's tip is not over the bowl -- %s refused" % label)
     top = scene.overlook_goal(arm)[0][2]
     if top - T[2] > 0.003:
-        arm.straight(np.array([T[0], T[1], top]), R, float(A.stepped.rise_mps), "rise")
+        arm.straight(np.array([T[0], T[1], top]), R, float(A.stepped.rise_mps), label,
+                     max_tilt=max(float(cfg.motion.max_tilt_deg), tilt_deg(R) + 5.0))
 
 
 def acquire(robot, arm: Arm, target: dict, out: Path, stop_after: str = "", start_at: str = "over") -> int:
-    """over -> measure -> plunge + scoop (the default), or the hover route (stop_after hover30 / hover10)."""
+    """over -> measure -> plunge + scoop + lift (the default), or the hover route (stop_after hover30 / hover10)."""
     H = A.stepped
     if start_at not in ("over", "plunge", "scoop"):
         raise ValueError("acquire starts at over, plunge or scoop, not %r" % start_at)
@@ -234,6 +247,7 @@ def acquire(robot, arm: Arm, target: dict, out: Path, stop_after: str = "", star
                             % max_step(q, kept["joints_deg"]))
         T, R = arm.tool(q)
         run_scoop(arm, plan_scoop(arm, q, T, R, Food(kept["height"], kept["floor_m"])))
+        rise(arm, "lift")
         return 0
     if start_at == "over":
         over(arm, target)

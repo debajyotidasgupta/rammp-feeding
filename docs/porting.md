@@ -22,7 +22,7 @@ Conventions:
 | 4. The deployment manifest | The stack's nodes for this robot, the module's node among them |
 | 5. The site file | `local.yaml`: the profiles and every hand measurement |
 | 6. Bring the stack up | Every node but `feeding`; `rammp check` |
-| 7. Captures | `home.json`, `overlook.json`, `scoop_end.json`, `deliver.json` |
+| 7. Captures | `home.json`, `overlook.json`, `deliver.json` |
 | 8. Calibrations | `wrist_mount.json`, then `scene_extrinsic.json`: measured with the board, or entered from an existing calibration (8b) |
 | 9. Verification | One bite, stage by stage |
 | 10. Feeding | `rammp feed`, under sheppy or by hand |
@@ -105,7 +105,7 @@ Intrinsics are never configured: they come from the driver's `camera_info` and `
 - [ ] **The module's image**, pinned to its release:
 
       ```bash
-      docker pull debajyotidasgupta/rammp-feeding:0.2.3
+      docker pull debajyotidasgupta/rammp-feeding:0.2.4
       ```
 
 - [ ] **SAM3's weights.** They are gated on Hugging Face and not in SAM3's image. Accept the licence for
@@ -127,7 +127,7 @@ Intrinsics are never configured: they come from the driver's `camera_info` and `
       tty=-i; [ -t 0 ] && tty=-it
       exec docker run --rm $tty --network host --ipc host --user 1000:1000 -e ROS_DOMAIN_ID=0 -e HOME=/tmp \
         -v /srv/rammp_feeding/config:/config -v /srv/rammp_feeding/runs:/runs \
-        debajyotidasgupta/rammp-feeding:0.2.3 ros2 run rammp_feeding rammp "$@"
+        debajyotidasgupta/rammp-feeding:0.2.4 ros2 run rammp_feeding rammp "$@"
       ```
 
       Never run it while sheppy's `feeding` node is up: two clients would command the arm.
@@ -196,10 +196,9 @@ marked REQUIRED, and keep a copy under version control as `config/machines/<robo
 | What | How | Key |
 | --- | --- | --- |
 | Wrist camera glass to the utensil's tips | A ruler from the camera's front glass straight out, along the camera's axis, to the level of the tips. Not along the utensil: a slanted reading comes out long. | `utensil.glass_to_tip_m` |
-| The bowl's inner floor above the table | A ruler, inside the bowl. The plunge never aims under it, because a clear bowl's depth reads the table through its floor. | `bowl.floor_above_table_m` |
+| The bowl's inner floor above the table | **5 mm by default**, for a bowl standing flat on the table; measure it with a ruler only for a bowl on a raised base. Two things use it: the plunge never goes under it (a clear bowl's depth reads the table through its floor), and the planner's world builds the bowl's floor box up to it. | `bowl.floor_above_table_m` |
 | The table's edges | From the arm's base, in its frame: `{x: [near, far], y: [right, left]}`. The planner's table and the utensil's tip floor use them. | `workspace.table_extent_m` |
 | Where the bowl is laid | Its centre, `[x, y]`. Of the bowls the scene camera finds, the one nearest this point is taken. | `workspace.bowl_centre_m` |
-| Where the user sits | Their mouth when seated, `[x, y, z]`. The planner's world puts the user's head and torso there, and a mouth measured further than `delivery.seated_tol_m` (0.10 m) away is refused. Fixed for a session. | `motion.free_space.user_mouth_m` |
 | The ChArUco board as printed | After printing it (section 8), measure across all its squares and divide: printers scale. For a board printed elsewhere, also its layout. | `perception.wrist_calibration.square_m`; `squares`, `marker_ratio`, `dictionary`, `legacy_pattern` |
 
 The bowl's centre and rim radius, the table's height and the bowl's top are never entered by hand. The scene camera
@@ -233,9 +232,8 @@ Capture them in this order: later poses are reached from earlier ones.
 | Capture | Pose | Used as |
 | --- | --- | --- |
 | `home` | **feeding_start**: the utensil straight down, the arm parked beside the table and clear of the user. Leave room above it: `calibrate-wrist` rises 0.10 m and moves 0.15 m out from there. | The start and end of every session, and the calibration route's start |
-| `overlook` | **food_detect_start's arm shape**: the utensil straight down over the bowl, the wrist camera looking down at it. | The orientation and arm shape of food_detect_start. Its position is computed each time: the tip over the bowl's centre, the camera 0.45 m (`workspace.overlook_camera_height_m`) above the table. |
-| `scoop_end` | **Where the scoop ends**: the utensil level, its tips along the base's +y (the scoop turns the utensil 90° about the base's x axis from straight down), just past the bowl's rim, clear of the table, at most 0.30 m (`acquisition.scoop.max_backoff_m`) across from the bowl. | The scoop's end (FK of its joints) and the arm shape its IK keeps. The swing to the user starts there. |
-| `deliver` | **The delivery look**: the utensil level toward the seated user's mouth, the wrist camera on their face, the food out of its view of the mouth. | The swing's goal, and where the mouth is measured |
+| `overlook` | **food_detect_start's arm shape**: the utensil straight down over the bowl, the wrist camera looking down at it. | The orientation and arm shape of food_detect_start. Its position is computed each time: the wrist camera centred on the bowl, 0.45 m (`workspace.overlook_camera_height_m`) above the table. |
+| `deliver` | **The delivery look**: the utensil level toward the seated user's mouth, the wrist camera on their face, the food out of its view of the mouth, the arm clear of the user. | The swing's goal, and where the mouth is measured on every delivery. The planner's world has no user until then, so the swing to it is planned without one. |
 
 ## 8. Calibrations
 
@@ -252,18 +250,21 @@ has checked that the way is clear.
 
 1. `rammp calibrate-wrist --plan` prints the route's tool poses without moving.
 2. Run `rammp calibrate-wrist`. The arm rises, moves out from the base and stops at pose 0.
-3. Lay the board flat under the utensil, **behind the tines' tips**, so that the board fills the image around and
-   beyond them. The command waits up to 60 s (`wait_board_s`) for it.
+3. Lay the board flat on the table under pose 0 (`--plan` prints where). It can stay fixed there. The command waits
+   up to 60 s (`wait_board_s`) for it.
 4. The arm visits 7 poses. They pivot on a point 0.30 m along the tool axis: tilted ±10° about the tool's x and y
-   axes, and turned ±20° about its own axis, at 10°/s. Then it returns to feeding_start.
+   axes, and turned ±20° about its own axis, at 10°/s. From these it measures the mount, and where the board lies.
+5. **The fork pass.** The arm hangs the utensil's tips 0.10 m over the board's centre (`fork_height_m`), then shifts
+   them 0.03 m each way (`fork_shift_m`), so the board slides behind the still utensil. Then it returns to
+   feeding_start. The board never needs moving: the arm places itself over it.
 
 What it measures:
 
 - **The mount**, the colour optical frame in the tool frame, by OpenCV's hand-eye solve (Park). The board's pose
   comes from the camera's own `camera_info`.
 - **The utensil's pixels**: `tip_px`, the middle of the tines' far end, and `image_region_px`, the utensil's box grown
-  by 10 px. The utensil is what stays still in the image while the board moves behind it, searched near the tool's
-  axis as the measured mount projects it.
+  by 10 px, from the fork pass's frames. The utensil is what stays still in the image while the board moves behind
+  it, searched near the tool's axis as the measured mount projects it.
 
 It is accepted only when all of these hold:
 
@@ -273,7 +274,7 @@ It is accepted only when all of these hold:
 | Views that saw the board | ≥ 5 of 7 (`min_poses`) |
 | The print's scale, at pose 0 | The board's distance by the camera's depth matches its distance from the image within 2 % (`max_scale_error`). A mismeasured `square_m` moves the camera by the same factor. |
 | The board's place in the base frame across the views | Within 5 mm and 1.0° (`max_spread_m`, `max_spread_deg`) |
-| The utensil | Told apart from the board behind it, with the board visible beyond its tips |
+| The utensil | Told apart from the board behind it, with the board moving just beyond its tips (`wrist_fork*.jpg` in the run record) |
 
 The result goes to `<state_dir>/wrist_mount.json`, keyed to the camera and utensil profiles. The configuration takes
 the mount, `tip_px` and `image_region_px` from it.
@@ -380,9 +381,10 @@ None of these steps needs the board.
 2. `rammp locate-scene`. In `scene_detection.jpg` the bowl's box is green, and the logged centre is where the bowl
    stands (a tape measure from the arm's base is enough).
 3. `rammp detect`. The log line `the wrist camera: the bowl at (...), N mm from the scene camera's` is how far the
-   two calibrations disagree about the bowl. `detect` refuses beyond twice the scene camera's `error_m` (100 mm by
-   default). Most of it is the scene camera's own depth error along its line of sight, which grows when the camera
-   sees the table at a shallow angle.
+   two calibrations disagree about the bowl. `detect` takes the wrist camera's bowl however far off the scene
+   camera's reading was, as long as the coarse look leaves the bowl in its view. Most of the difference is the scene
+   camera's own depth error along its line of sight, which grows when the camera sees the table at a shallow angle;
+   set its `error_m` to it (the planner pads the bowl's top and the table's near edge by it).
 4. `rammp perceive`, then `rammp acquire --stop-after hover10`. The tines stop about 10 mm above the centre of the
    piece: the wrist mount and `tip_px` together. Then `rammp rise`.
 
@@ -404,7 +406,13 @@ Run these in order. Each stage writes its images to the run record.
 7. `rammp acquire --stop-after hover10`: the tips should stop about 10 mm above the centre of the target piece. Look
    from two sides. If they are off, check `glass_to_tip_m` and the wrist calibration.
 8. `rammp rise`, then `rammp detect` and `rammp perceive` again: `acquire` starts at food_detect_start.
-9. `rammp acquire`: over the piece, the plunge and the scoop, ending at scoop_end.
+9. `rammp acquire`: over the piece, the plunge, the scoop -- the piece turned level above the bowl's centre, 4 cm
+   (`acquisition.scoop.lift_m`) over the height free-space moves keep above the bowl, computed from the bowl, not
+   captured -- and a straight lift, the fork level, to food_detect_start's height, where the swing starts. Open
+   `acquire/plunge_end.jpg` and look from the side: the tines should be well into the piece where the plunge stopped.
+   The plunge stops `utensil.punch_floor_margin_m` (5 mm) above the bowl's floor as the wrist camera reads it. If the
+   tines only touch the piece, measure `utensil.glass_to_tip_m` and `bowl.floor_above_table_m` again; if they are
+   right and there is still room under the tines, lower `utensil.punch_floor_margin_m` in `local.yaml`.
 10. The delivery, one stage at a time:
     - `rammp deliver --stop-after swing`;
     - `rammp deliver --start-at present --stop-after present`;
@@ -416,8 +424,7 @@ Run these in order. Each stage writes its images to the run record.
 
 For each session:
 
-1. Seat the user, and update `motion.free_space.user_mouth_m` if the seat moved. For a new seat, also capture
-   `deliver` and set `delivery.second_look_m`.
+1. Seat the user facing the delivery look. For a new seat, capture `deliver` and set `delivery.second_look_m`.
 2. Lay the bowl near `workspace.bowl_centre_m`.
 3. Run `rammp check`.
 4. Then either:
@@ -438,8 +445,8 @@ user declines, or a bite is missed, and then returns home. The commands, options
 | Wrist camera or its bracket moved | The wrist calibration, then the scene calibration |
 | Scene camera moved | The scene calibration |
 | New table, or the arm moved against it | `table_extent_m`, `bowl_centre_m`, and the captures |
-| New bowl | `floor_above_table_m`; `bowl_centre_m` and `scoop_end` if it sits elsewhere |
-| New seat | `user_mouth_m`, `deliver`, `second_look_m` |
+| New bowl | `floor_above_table_m` (if on a raised base); `bowl_centre_m` if it sits elsewhere |
+| New seat | `deliver`, `second_look_m` |
 
 ## Safety
 

@@ -8,5 +8,6 @@ glass_to_tip_m: null            # SITE: the camera's front glass straight out to
                                 # adds the camera's glass_to_optical_m)
 tip_px: null                    # the tine tips in the colour image (fixed to the camera: the same pixel at every pose)
 image_region_px: null           # the utensil's box in the colour image: never food
-punch_floor_margin_m: 0.008     # the plunge stops this far above the bowl floor (the scoop's first turn sweeps the tines
-                                # down and across: at the floor they catch the bowl)
+punch_floor_margin_m: 0.005     # the plunge stops this far above the bowl's floor (bowl.floor_above_table_m over the
+                                # table): deep enough that the piece does not slip off in the scoop, clear of the floor
+                                # the scoop's first turn sweeps the tines across

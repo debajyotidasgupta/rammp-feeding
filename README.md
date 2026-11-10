@@ -44,6 +44,8 @@ Tests run on an arm64 Docker host (a Jetson), not on a laptop:
 docker build -t rammp_feeding:dev .
 docker run --rm -v "$PWD:/work" -w /work rammp_feeding:dev bash tests/offline.sh   # unit tests + the whole bite (fake robot)
 tests/test_ros.sh                                                                  # the ROS wiring against the simulated driver
+ROBOT=<rammp-deployments config/robots/<robot>> tests/test_e2e.sh                  # one whole bite through the real 2.0 driver,
+                                                                                   # description and planner nodes (a CUDA host)
 ```
 To release: build `debajyotidasgupta/rammp-feeding:<version>` from the tagged commit, push it, and pin that tag in the
 manifest.

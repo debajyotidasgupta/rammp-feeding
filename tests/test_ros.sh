@@ -7,14 +7,15 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 IMG=${IMG:-rammp_feeding:dev}
 ARM=ghcr.io/rammp-org/kinova-gen3-ros2:2.0.0
+D="-e ROS_DOMAIN_ID=${ROS_TEST_DOMAIN:-78}"        # a domain of its own: a stack running on the host is left alone
 docker rm -f rammp-arm-sim rammp-stubs >/dev/null 2>&1 || true
 trap 'docker rm -f rammp-arm-sim rammp-stubs >/dev/null 2>&1 || true' EXIT
-docker run -d --name rammp-arm-sim $ARM /module_ws/install/kinova_gen3_ros2/lib/kinova_gen3_ros2/kinova_gen3_node \
+docker run -d --name rammp-arm-sim $D $ARM /module_ws/install/kinova_gen3_ros2/lib/kinova_gen3_ros2/kinova_gen3_node \
   --sim >/dev/null                                 # (its model from /arm/robot_description: the stand-ins serve it)
-docker run -d --name rammp-stubs --network container:rammp-arm-sim -v "$PWD/tests:/tests:ro" -v rammp-share:/share $IMG python3 /tests/ros_stubs.py >/dev/null
+docker run -d --name rammp-stubs --network container:rammp-arm-sim $D -v "$PWD/tests:/tests:ro" -v rammp-share:/share $IMG python3 /tests/ros_stubs.py >/dev/null
 sleep 4
-docker run --rm --network container:rammp-arm-sim -v "$PWD/tests:/tests:ro" -v rammp-share:/share $IMG python3 /tests/ros_wiring.py
-out=$(docker run --rm --network container:rammp-arm-sim -v "$PWD/tests/poses:/tmp/s:ro" -e RAMMP_NO_LOCAL=1 -e RAMMP_STATE_DIR=/tmp/s \
+docker run --rm --network container:rammp-arm-sim $D -v "$PWD/tests:/tests:ro" -v rammp-share:/share $IMG python3 /tests/ros_wiring.py
+out=$(docker run --rm --network container:rammp-arm-sim $D -v "$PWD/tests/poses:/tmp/s:ro" -e RAMMP_NO_LOCAL=1 -e RAMMP_STATE_DIR=/tmp/s \
   -e RAMMP_SET="deployment.runs_dir=/tmp/r,utensil.glass_to_tip_m=0.233,workspace.table_extent_m.x=[0.08, 0.76],workspace.table_extent_m.y=[-0.30, 0.80],workspace.bowl_centre_m=[0.290, 0.158],utensil.tip_px=[456, 374],utensil.image_region_px=[280, 365, 660, 480],camera.mount.camera_in_tool_m=[0.0, 0.075, -0.125],camera.mount.rotation_quat_xyzw=[0.0, 0.0, 1.0, 0.0]" \
   $IMG ros2 run rammp_feeding rammp check || true)
 echo "$out"

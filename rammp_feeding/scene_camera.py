@@ -3,7 +3,7 @@ camera aims), and the camera's own pose, measured through a ChArUco board both c
 
 The camera's model -- its intrinsics, depth -> colour, and where its optical frames sit in its link frame -- is its
 driver's (camera_info, /tf_static); where its link frame sits on the robot is ours: state_dir/scene_extrinsic.json
-(rammp calibrate-scene), published as the static transform base_link -> <its link frame> for everyone on the graph.
+(rammp calibrate-scene), published as the static transform arm_mount -> <its link frame> for everyone on the graph.
 
 locate     the bowl: SAM3 with perception.scene.bowl_prompts (boxes and masks); its points in the base frame; the
            table round it (a plane fit to the dominant flat surface), its centre and radius (a circle through its rim)
@@ -38,7 +38,7 @@ SC, PS = cfg.scene_camera, cfg.perception.scene
 
 
 def extrinsic() -> tuple[np.ndarray, str]:
-    """base_link <- the camera's link frame (4 x 4): our calibration (state_dir/scene_extrinsic.json)."""
+    """arm.base_frame <- the camera's link frame (4 x 4): our calibration (state_dir/scene_extrinsic.json)."""
     f = state_dir() / "scene_extrinsic.json"
     if not f.exists():
         raise RuntimeError("the scene camera is not calibrated (%s): rammp calibrate-scene, the ChArUco board where it "
@@ -50,9 +50,9 @@ def extrinsic() -> tuple[np.ndarray, str]:
 
 
 def publish(robot) -> None:
-    """Our measured pose of the camera on /tf_static, base_link -> its link frame, if there is one."""
+    """Our measured pose of the camera on /tf_static, arm.base_frame -> its link frame, if there is one."""
     if (state_dir() / "scene_extrinsic.json").exists():
-        robot.publish_static("base_link", str(SC.link_frame), extrinsic()[0])
+        robot.publish_static(str(cfg.arm.base_frame), str(SC.link_frame), extrinsic()[0])
 
 
 def _points(robot, D: np.ndarray, base_from_link: np.ndarray):
@@ -200,11 +200,12 @@ def calibrate(robot, arm) -> dict | None:
     X[:3, :3], X[:3, 3] = CAM_ROT, CAM_IN_TOOL
     B, spread_m, _ = wc.board_in_base(caps, X)
     T = camera_in_base(B, C, robot.transform(str(SC.link_frame), cam.colour_frame))
-    res = dict(parent_frame="base_link", child_frame=str(SC.link_frame), xyz=[round(float(v), 5) for v in T[:3, 3]],
+    res = dict(parent_frame=str(cfg.arm.base_frame), child_frame=str(SC.link_frame), xyz=[round(float(v), 5) for v in T[:3, 3]],
                quat_xyzw=[round(v, 6) for v in matrix_quat(T[:3, :3])], board_spread_m=round(spread_m, 4), corners=n,
                method="the ChArUco board, through the wrist camera", t=time.time())
     (state_dir() / "scene_extrinsic.json").write_text(json.dumps(res, indent=1))
     publish(robot)
     record.event("scene_extrinsic", **res)
-    log.info("  -> %s (and on /tf_static: base_link -> %s)", state_dir() / "scene_extrinsic.json", SC.link_frame)
+    log.info("  -> %s (and on /tf_static: %s -> %s)", state_dir() / "scene_extrinsic.json", cfg.arm.base_frame,
+             SC.link_frame)
     return res

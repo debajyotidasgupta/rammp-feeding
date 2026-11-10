@@ -49,7 +49,22 @@ class Geometry(unittest.TestCase):
 
 
 class Kinematics(unittest.TestCase):
-    kin = chain()
+    kin = chain(FakeRobot(Scene(), [0.0] * 7))
+
+    def test_the_model_is_the_served_one_rooted_at_arm_mount(self):
+        """The model is the description node's (rooted at arm.base_frame, its joints arm_joint_1..7); none, or one
+        rooted elsewhere, is refused."""
+        from unittest import mock
+        self.assertEqual(self.kin.base, "arm_mount")
+        self.assertEqual([j.name for j in self.kin.arm], ["arm_joint_%d" % i for i in range(1, 8)])
+        robot = FakeRobot(Scene(), [0.0] * 7)
+        with mock.patch.object(robot, "robot_description", lambda: None):
+            with self.assertRaisesRegex(RuntimeError, "no arm model"):
+                chain(robot)
+        from fake_robot import MODEL
+        with mock.patch.object(robot, "robot_description", lambda: MODEL.replace('"arm_mount"', '"world"')):
+            with self.assertRaisesRegex(RuntimeError, "rooted at world"):
+                chain(robot)
 
     def test_jacobian_matches_finite_differences(self):
         q = scene.captured("overlook")
@@ -515,11 +530,9 @@ class World(unittest.TestCase):
         arm.travel(scene.overlook_joints(arm), "to food_detect_start")
         self.assertTrue(robot.world_pushed)
         self.assertEqual([b["name"] for b in robot.worlds[-1]["obstacles"]], [b["name"] for b in scene.world()["obstacles"]])
-        scene.restore_world(robot)                      # no `world` parameter: the config's
-        self.assertEqual((robot.worlds[-1], robot.world_pushed), (str(cfg.planner.restore_world), False))
-        robot.world_param = "world_empty.yaml"          # a planner run with one, as a profile sets it
-        scene.restore_world(robot)
-        self.assertEqual(robot.worlds[-1], "world_empty.yaml")
+        self.assertEqual(robot.worlds[-1]["base_frame"], "arm_mount")
+        scene.restore_world(robot)                      # the planner's own world back: /reset
+        self.assertEqual((robot.worlds[-1], robot.world_pushed), ("reset", False))
 
     def test_the_utensil_is_kept_clear_of_our_boxes(self):
         """A path that brings a utensil sphere into a box, or nearer than the clearance, is refused; one that keeps
@@ -570,7 +583,7 @@ class World(unittest.TestCase):
         arm = Arm(robot)
         q = scene.captured("home")
         past = list(q)
-        past[3] = -float(cfg.motion.joint_limits_deg[4]) - 1.0              # J4 a degree past ours
+        past[3] = -arm.limits[3] - 1.0                                       # J4 a degree past the model's
         with self.assertRaisesRegex(MoveError, "past its limit"):
             arm.check_path([q, past, q], lambda x, y: -np.inf)
 
@@ -774,7 +787,7 @@ class Profiles(unittest.TestCase):
         mount = dict(camera="realsense_d435i", utensil="fork", camera_in_tool_m=[0.023, 0.05, -0.103],
                      rotation_quat_xyzw=[0.0, 0.0, 1.0, 0.0], tip_px=[438.0, 443.0], image_region_px=[300, 380, 640, 480])
         (d / "wrist_mount.json").write_text(json.dumps(mount))
-        pose = dict(parent_frame="base_link", child_frame="scene_camera_link", xyz=[0.6, -0.5, 0.12],
+        pose = dict(parent_frame="arm_mount", child_frame="scene_camera_link", xyz=[0.6, -0.5, 0.12],
                     quat_xyzw=[0.0, 0.0, 0.7071068, 0.7071068])
         (d / "scene_extrinsic.json").write_text(json.dumps(pose))
         env = dict(os.environ)

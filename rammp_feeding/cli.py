@@ -157,17 +157,13 @@ def check(robot, arm) -> int:
             if robot.arbitration and not any(robot.token) else "enforced, token held" if robot.arbitration else "disabled")
     except Exception as e:  # noqa: BLE001
         row(False, "arm", str(e))
-    row(robot.description is not None, "robot model", "/robot_description" if robot.description else
-        "no /robot_description (arm_state_publisher): the bundled copy of the driver's", warn=True)
+    row(True, "robot model", "%s, rooted at %s" % (cfg.ros.robot_description, arm.kin.base))
     for name, client in (("trajectories", robot._exec), ("planner", robot._plan)):
         row(client.wait_for_server(timeout_sec=2.0), name, "action server up")
     for name, client in (("planner world", robot._world), ("sam3", robot._detect)):
         row(client.wait_for_service(timeout_sec=2.0), name, "service up")
-    try:
-        row(True, "planner scene", "%s (ours from a command's first planned move to its end, then this again)"
-            % (robot.planner_parameter("world") or "%s (its config's)" % cfg.planner.restore_world))
-    except Exception as e:  # noqa: BLE001
-        row(False, "planner scene", str(e))
+    row(robot.planner_listens(), "planner reset", "the planner listens on %s (its own world back after ours)"
+        % cfg.ros.planner_reset)
     missing = unmeasured()
     try:
         if missing:

@@ -1,5 +1,5 @@
-"""The real planner in place of fake_robot's straight line: RAMMP-CuRobo's core (rammp_curobo), on a CUDA box, as its
-ROS node would run it for every client -- plan_to_joints and set_world exactly as the module calls them over ROS."""
+"""The real planner in place of fake_robot's straight line: RAMMP-CuRobo 2.0's core (rammp_curobo), on a CUDA box, as
+its ROS node would run it for every client -- plan_to_joints and set_world exactly as the module calls them over ROS."""
 
 from __future__ import annotations
 
@@ -9,9 +9,18 @@ from rammp_feeding.ros import RobotError
 
 
 class CuroboPlanner:
-    def __init__(self, config: str = "gen3_real.yaml"):
+    def __init__(self, config: str, urdf_path: str):
+        """config: a robot's curobo/planner.yaml (rammp-deployments config/robots/<robot>/curobo/); urdf_path: the arm's
+        model as a file (as /arm/robot_description serves it)."""
+        import tempfile
         from rammp_curobo import CuRoboPlanner
-        self.p = CuRoboPlanner.from_config(config)
+        from rammp_curobo.config import load_planner_config
+        from rammp_curobo.contract import check_robot_dir
+        from rammp_curobo.urdf_model import write_urdf
+        cfg = load_planner_config(config)
+        xml = check_robot_dir(*cfg, open(urdf_path).read())        # as the planner node prepares the served model
+        self._dir = tempfile.TemporaryDirectory(prefix="rammp_curobo_")
+        self.p = CuRoboPlanner(*cfg, urdf_path=write_urdf(xml, self._dir.name))
         self.calls = []
 
     def plan_joints(self, start_deg, goal_deg, timeout_s):

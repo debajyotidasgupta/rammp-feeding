@@ -22,7 +22,7 @@ from typing import Callable, Sequence
 import numpy as np
 
 from rammp_feeding import record
-from rammp_feeding.config import ROOT, cfg, unmeasured
+from rammp_feeding.config import cfg, unmeasured
 from rammp_feeding.geometry import densify, fold, max_step, sphere_box_clearance, tilt_deg
 from rammp_feeding.kinematics import Chain
 
@@ -36,14 +36,17 @@ class MoveError(RuntimeError):
     """A move was refused, ignored, or stopped. The arm is stationary."""
 
 
-def chain(robot=None) -> Chain:
-    """The arm's kinematics from its node's /robot_description; the bundled copy of the driver's model without one."""
-    urdf = robot.robot_description() if robot is not None else None
+def chain(robot) -> Chain:
+    """The arm's kinematics from the model its description node serves (ros.robot_description), rooted at
+    arm.base_frame."""
+    urdf = robot.robot_description()
     if urdf is None:
-        if robot is not None:
-            log.info("  (no /robot_description from the arm's node: the bundled %s)", cfg.arm.urdf)
-        urdf = ROOT / str(cfg.arm.urdf)
-    return Chain(urdf, cfg.arm.tool_from_flange_m)
+        raise RuntimeError("no arm model on %s -- is the arm's description node (arm_state_publisher) up?"
+                           % cfg.ros.robot_description)
+    kin = Chain(urdf, cfg.arm.tool_from_flange_m)
+    if kin.base != str(cfg.arm.base_frame):
+        raise RuntimeError("the arm's model is rooted at %s, not arm.base_frame (%s)" % (kin.base, cfg.arm.base_frame))
+    return kin
 
 
 class TorqueGuard:
@@ -137,7 +140,7 @@ class Arm:
         self.robot, self.kin = robot, kin or chain(robot)
         self.cam = robot.camera_model("camera") if measured else None
         self.tip_tool = tip_in_tool(self.cam) if measured else None
-        self.limits = {int(j) - 1: float(v) for j, v in M.joint_limits_deg.items()}
+        self.limits = {i: min(-lo, hi) for i, (lo, hi) in self.kin.limits.items()}   # J2 / J4 / J6, the model's
 
     # ------------------------------------------------------------------ state
     def q(self) -> Joints:
@@ -254,7 +257,9 @@ class Arm:
                 raise MoveError("%s STOPPED: %s" % (label, why))
             code, msg = traj.result()
             if code != 0:
-                raise MoveError("%s: the arm driver ended it (%d %s)" % (label, code, msg))
+                raise MoveError("%s: the arm driver ended it (%d %s)%s" % (label, code, msg, {
+                    -11: " -- its own contact stop tripped, and stays latched until /clear_faults",
+                    -9: " -- the arm is not available (faulted or reconnecting)"}.get(code, "")))
         except BaseException:                          # a guard, Ctrl-C, sheppy stopping us: the arm halts first
             if not traj.done():
                 traj.cancel()
@@ -313,7 +318,7 @@ class Arm:
         qs = densify(path, float(FS.check_step_deg))
         near = min(qs, key=self.margin)
         if self.margin(near) < 0:
-            raise MoveError("the path takes a joint %.1f deg past its limit (motion.joint_limits_deg): %s"
+            raise MoveError("the path takes a joint %.1f deg past its limit (the arm's model): %s"
                             % (-self.margin(near), np.round(near, 1).tolist()))
         poses = [self.tool(q) for q in qs]
         tips = [T + R @ self.tip_tool for T, R in poses]

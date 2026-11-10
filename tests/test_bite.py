@@ -3,6 +3,7 @@ food_detect_start, perceive, acquire (OVER, plunge, then the scoop and the lift 
 record), deliver (swing, present, bite, retract), home.
 
     python3 tests/test_bite.py [--user-offset dx,dy,dz] [--piece dx,dy] [--expect 8] [--planner curobo]
+        (--planner curobo: CUROBO_CONFIG=<a robot's curobo/planner.yaml>)
         curobo: RAMMP-CuRobo's real planner (a CUDA box) as the deployment shares it: its default config, our world
         pushed before each planned move
 
@@ -14,6 +15,7 @@ images (SAM3 and the face are stand-ins; the depth is rendered from the arm's po
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 
@@ -42,7 +44,8 @@ def main() -> int:
     robot = FakeRobot(sc, scene.captured("home"))
     if "--planner" in sys.argv and sys.argv[sys.argv.index("--planner") + 1] == "curobo":
         from curobo_planner import CuroboPlanner
-        real, fake_world = CuroboPlanner(), robot.set_world
+        real = CuroboPlanner(os.environ["CUROBO_CONFIG"], os.path.join(os.path.dirname(__file__), "arm_level.urdf"))
+        fake_world = robot.set_world
         robot.plan_joints = real.plan_joints
         robot.set_world = lambda path: (fake_world(path), real.set_world(path))   # recorded, and to the planner
     arm = Arm(robot)

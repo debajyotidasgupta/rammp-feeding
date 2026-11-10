@@ -153,7 +153,7 @@ def at_food_detect_start(arm, q=None) -> None:
 
 # ------------------------------------------------------------------ the planner's world
 def world() -> dict:
-    """RAMMP-CuRobo's world (base_link): the table raised to our tip floor, a hollow bowl (a floor up to
+    """RAMMP-CuRobo's world (arm.base_frame): the table raised to our tip floor, a hollow bowl (a floor up to
     bowl.floor_above_table_m and 12 wall boxes: a solid box would put the utensil over its opening inside it), the
     user's head and torso round the measured mouth (once measured), the pedestal. The bowl grows by the workspace's
     error_m and its top by scene_error_m; the table's top rises by error_m, and its near edge (toward the arm) moves
@@ -183,7 +183,7 @@ def world() -> dict:
     for o in obs:
         o["position"], o["dims"] = [float(v) for v in o["position"]], [float(v) for v in o["dims"]]
         o["rpy_deg"] = [float(v) for v in o.get("rpy_deg", [0.0, 0.0, 0.0])]
-    return dict(base_frame="base_link", obstacles=obs, objects=[], targets=[])
+    return dict(base_frame=str(cfg.arm.base_frame), obstacles=obs, objects=[], targets=[])
 
 
 def utensil_spheres(arm, food: bool = False) -> list[list[float]]:
@@ -201,7 +201,7 @@ def utensil_spheres(arm, food: bool = False) -> list[list[float]]:
 def push_world(robot) -> None:
     """The latest workspace and mouth into the shared planner: a YAML file both containers see, then set_world (padded
     as the planner pads every box). Done before each planned move (Arm.travel), and undone when the command ends
-    (restore_world): other clients plan against the planner's own world."""
+    (restore_world: the planner's /reset): other clients plan against the planner's own world."""
     from pathlib import Path
     p = Path(str(cfg.planner.world_file)).expanduser()
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -211,8 +211,8 @@ def push_world(robot) -> None:
 
 
 def restore_world(robot) -> None:
-    """The planner's own world back: its `world` parameter where it has one, else planner.restore_world (its config's)."""
-    robot.set_world(robot.planner_parameter("world") or str(cfg.planner.restore_world))
+    """The planner's own world back (its boot world and configured layers)."""
+    robot.reset_world()
     robot.world_pushed = False
 
 

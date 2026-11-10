@@ -7,12 +7,13 @@ title: Deployment checklist
 From a new Jetson to `rammp feed`, in order.
 - Site state lives in `/srv/rammp_feeding/config` (`/config` in the container), and runs in `/srv/rammp_feeding/runs`.
 - The module runs as uid 1000.
-- Positions are metres in the arm's `base_link` (x forward, y left, z up).
+- Positions are metres in `arm_mount`, the arm model's gravity-aligned root (x forward, y left, z up).
 - Keep someone at the e-stop for every command that moves the arm.
 
 ## 1. Hardware
 - An NVIDIA Jetson AGX Orin (arm64) with Docker and the NVIDIA runtime.
-- A Kinova Gen3 7-DoF with a Robotiq 2F-85, mounted level (kinova-gen3-ros2 1.1.0, rammp-curobo 1.1.0).
+- A Kinova Gen3 7-DoF with a Robotiq 2F-85, on the arm stack's 2.0 generation (kinova-gen3-ros2 2.0.0, rammp-curobo
+  2.0.1). rammp-feeding 0.2.x is for the 1.1.0 stack.
 - A fork in the gripper. The module never opens or closes it.
 - A wrist RGB-D camera (RealSense D405 or D435i), and a fixed scene camera that sees the table (Orbbec Gemini 336L or
   D435i). Another model needs its own `config/camera/` profile. Intrinsics always come from `camera_info`.
@@ -36,7 +37,7 @@ From a new Jetson to `rammp feed`, in order.
 ```bash
 uv tool install "sheppy @ git+https://github.com/rammp-org/sheppy@dev"
 git clone https://github.com/rammp-org/rammp-deployments.git
-docker pull debajyotidasgupta/rammp-feeding:0.2.5
+docker pull debajyotidasgupta/rammp-feeding:0.3.0
 sudo mkdir -p /srv/rammp_feeding/config /srv/rammp_feeding/runs && sudo chown -R 1000:1000 /srv/rammp_feeding
 ```
 - SAM3's weights are gated: accept the `facebook/sam3` licence on Hugging Face and download the snapshot to the Jetson.
@@ -46,17 +47,20 @@ sudo mkdir -p /srv/rammp_feeding/config /srv/rammp_feeding/runs && sudo chown -R
   tty=-i; [ -t 0 ] && tty=-it
   exec docker run --rm $tty --network host --ipc host --user 1000:1000 -e ROS_DOMAIN_ID=0 -e HOME=/tmp \
     -v /srv/rammp_feeding/config:/config -v /srv/rammp_feeding/runs:/runs \
-    debajyotidasgupta/rammp-feeding:0.2.5 ros2 run rammp_feeding rammp "$@"
+    debajyotidasgupta/rammp-feeding:0.3.0 ros2 run rammp_feeding rammp "$@"
   ```
 
 ## 4. The deployment manifest
 Edit rammp-deployments' `december_2026/sheppy-manifest.yaml`:
 - **feeding:** the `feeding` node, copied from this repo's `rammp-alternative.yaml`.
-- **planner:** `curobo_planner` mounts `/srv/rammp_feeding/config:/config:ro`. Our world reaches it as a file.
+- **planner:** both `curobo_planner` alternatives mount `/srv/rammp_feeding/config:/feeding:ro`. Our world reaches the
+  planner as a file there; the planner's own world comes back through `/reset`.
+- **arm:** the driver's own contact stop (`contact_detection`, `enforce` by default) stops and latches the arm until
+  `/clear_faults`. Set it to `observe` in the profile's overrides if it should not stop the plunge or the scoop.
 - **sam3:** its weights mount points at the snapshot: `<snapshot_dir>:/models/sam3:ro`.
 - **scene camera:** runs as `/scene_camera`, with `camera_name: scene_camera`.
-- **The robot:** `config/robots/<robot>/mount.yaml` holds `robot: <robot>` and `rpy_deg: [0, 0, 0]`. Activate it with
-  `uv run scripts/set_robot.py december_2026/config/robots/<robot>`.
+- **The robot:** `config/robots/<robot>/` holds `mount.yaml` (`robot: <robot>`, `rpy_deg` of the mount) and the
+  planner's `curobo/` (as dojo's). Activate it with `uv run scripts/set_robot.py december_2026/config/robots/<robot>`.
 - **The profile:** `profiles/<robot>.yaml` selects `kinova_gen3_driver`, `kinova_gen3_description`, `curobo_planner`,
   the two cameras with their serials, and `sam3_docker`. Leave `feeding` out until section 7. Check it with
   `uv run scripts/validate_manifest.py`.
@@ -124,9 +128,9 @@ If the setup was calibrated elsewhere, write the two files instead of running th
 {"camera": "<profiles.camera>", "utensil": "<profiles.utensil>", "camera_in_tool_m": [x, y, z],
  "rotation_quat_xyzw": [qx, qy, qz, qw], "tip_px": [u, v], "image_region_px": [x1, y1, x2, y2]}
 ```
-`<state_dir>/scene_extrinsic.json`. The pose is of the scene camera's link frame in `base_link`:
+`<state_dir>/scene_extrinsic.json`. The pose is of the scene camera's link frame in `arm_mount`:
 ```json
-{"parent_frame": "base_link", "child_frame": "scene_camera_link", "xyz": [x, y, z], "quat_xyzw": [qx, qy, qz, qw]}
+{"parent_frame": "arm_mount", "child_frame": "scene_camera_link", "xyz": [x, y, z], "quat_xyzw": [qx, qy, qz, qw]}
 ```
 Common mistakes:
 - a (w, x, y, z) quaternion;

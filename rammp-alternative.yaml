@@ -1,7 +1,8 @@
 # This module's node for a rammp-deployments manifest (rammp-deployments/CONTRIBUTING.md: "a module's own
 # rammp-alternative*.yaml fragment is the source for what belongs in a node here"). Transcribed into
-# december_2026/sheppy-manifest.yaml, with one more change there: the planner node mounts the same state folder
-# (/srv/rammp_feeding/config) at /config read-only (set_world takes the world as a file path).
+# december_2026/sheppy-manifest.yaml, with one more change there: both curobo_planner alternatives mount the same
+# state folder (/srv/rammp_feeding/config) at /feeding read-only (set_world takes the world as a file path). For the
+# arm stack's 2.0 generation (kinova-gen3-ros2 2.0.0, rammp-curobo 2.0.1).
 - name: feeding
   description: Robot-assisted feeding -- bite after bite until the bowl is empty or the user declines
   select: single
@@ -15,7 +16,7 @@
     - id: rammp_feeding_docker
       kind: docker
       container:
-        image: debajyotidasgupta/rammp-feeding:0.2.5     # Docker Hub, arm64
+        image: debajyotidasgupta/rammp-feeding:0.3.0     # Docker Hub, arm64
         network_mode: host
         ipc: host
         user: "1000:1000"
@@ -31,7 +32,7 @@
         command: ros2 launch rammp_feeding feed.launch.py
       # (the cameras' topics: the selected camera profiles', config/camera/*.yaml; these are the default profiles')
       subscribes:
-        - /robot_description
+        - /arm/robot_description
         - /joint_states
         - /control_status
         - /tf

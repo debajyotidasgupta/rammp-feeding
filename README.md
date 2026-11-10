@@ -3,7 +3,8 @@
 Robot-assisted feeding on the Kinova Gen3, as a RAMMP module: it finds the bowl, picks a piece with a fork, waits for
 the user's open mouth, feeds them and returns, bite after bite.
 
-**Release 0.2.5:** `debajyotidasgupta/rammp-feeding:0.2.5` (Docker Hub, arm64). It is the `feeding` node of
+**Release 0.3.0:** `debajyotidasgupta/rammp-feeding:0.3.0` (Docker Hub, arm64), for the arm stack's 2.0 generation
+(kinova-gen3-ros2 2.0.0, rammp-curobo 2.0.1); 0.2.5 is for the 1.1.0 stack. It is the `feeding` node of
 rammp-deployments' `december_2026/sheppy-manifest.yaml`, copied from `rammp-alternative.yaml`.
 
 ## Getting started

@@ -22,7 +22,7 @@ import yaml
 
 
 def _root() -> Path:
-    """Where config/ and urdf/ are: the source tree, or the installed package's share."""
+    """Where config/ is: the source tree, or the installed package's share."""
     src = Path(__file__).resolve().parent.parent
     if (src / "config" / "rammp.yaml").exists():
         return src

@@ -1,14 +1,15 @@
 """The robot, as the RAMMP stack serves it -- the only module that speaks ROS 2. One node, spun on its own thread:
 
-  arm       kinova-gen3-ros2: /robot_description (its model), /joint_states (joints, torques), /control_status (the
-            e-stop, arbitration), /execute_joint_trajectory (position or impedance)
-  planner   RAMMP-CuRobo, shared: /rammp_curobo/plan_to_joints, set_world, its `world` parameter (it plans; we
-            execute)
+  arm       kinova-gen3-ros2 2.0: /arm/robot_description (its model, rooted at arm_mount), /joint_states
+            (arm_joint_1..7: joints, torques), /control_status (the e-stop, arbitration), /execute_joint_trajectory
+            (position or impedance)
+  planner   RAMMP-CuRobo 2.0, shared: /rammp_curobo/plan_to_joints, set_world, and /reset (its own world back) -- it
+            plans; we execute
   cameras   rammp-suite-software's drivers: colour and depth images, their camera_info, their /tf_static
   detection rammp-perception: SAM3's /perception/sam3/detect (boxes and masks) on either camera
-  tf        ours: the scene camera's measured pose, base_link -> its link frame (rammp calibrate-scene), static
+  tf        ours: the scene camera's measured pose, arm_mount -> its link frame (rammp calibrate-scene), static
 
-Joint vectors are degrees (folded, joint_1..7) through joints(); joint_sample() and execute() carry the arm's raw
+Joint vectors are degrees (folded, arm_joint_1..7) through joints(); joint_sample() and execute() carry the arm's raw
 (unwrapped) radians, so a trajectory continues from the arm's own reading. tests/fake_robot.py implements the same
 interface without ROS.
 """
@@ -29,7 +30,8 @@ from rammp_feeding.camera import CameraModel, Intrinsics
 from rammp_feeding.config import cfg
 from rammp_feeding.geometry import fold, matrix_quat, quat_matrix
 
-JOINTS = ["joint_%d" % i for i in range(1, 8)]
+JOINTS = ["arm_joint_%d" % i for i in range(1, 8)]
+PROFILE_CUSTOM = 4                    # rammp_arm_interfaces/ImpedanceGains: the gains in `custom`
 
 
 class RobotError(RuntimeError):
@@ -159,10 +161,9 @@ class Robot:
         from rammp_common_interfaces.msg import ControlStatus
         from rammp_curobo_interfaces.action import PlanToJoints
         from rammp_curobo_interfaces.srv import SetWorld
-        from rcl_interfaces.srv import GetParameters
         from rammp_perception_interfaces.srv import Detect
         from sensor_msgs.msg import CameraInfo, Image, JointState
-        from std_msgs.msg import String
+        from std_msgs.msg import Empty, String
         from tf2_ros import Buffer, StaticTransformBroadcaster, TransformListener
 
         if not rclpy.ok():                 # no rclpy signal handlers: Ctrl-C must reach the move in flight (it cancels)
@@ -178,10 +179,11 @@ class Robot:
 
         def status(m):
             self.estopped, self.arbitration = bool(m.estopped), bool(m.arbitration_enabled)
-        n.create_subscription(JointState, "/joint_states", self._on_joints, qos_profile_sensor_data,
+        R = cfg.ros
+        n.create_subscription(JointState, str(R.joint_states), self._on_joints, qos_profile_sensor_data,
                               callback_group=MutuallyExclusiveCallbackGroup())          # (in order: one at a time)
-        n.create_subscription(ControlStatus, "/control_status", status, latched, callback_group=cb)
-        n.create_subscription(String, "/robot_description", lambda m: setattr(self, "description", m.data), latched,
+        n.create_subscription(ControlStatus, str(R.control_status), status, latched, callback_group=cb)
+        n.create_subscription(String, str(R.robot_description), lambda m: setattr(self, "description", m.data), latched,
                               callback_group=cb)
         self.tf = Buffer()
         self._tf_listener = TransformListener(self.tf, n, spin_thread=False)
@@ -199,14 +201,12 @@ class Robot:
                                       lambda m, c=cam, k=kind: c.info.__setitem__(k, (Intrinsics.from_camera_info(m),
                                                                                       m.header.frame_id)),
                                       qos_profile_sensor_data, callback_group=cb)
-        R = cfg.ros
         self._exec = ActionClient(n, ExecuteJointTrajectory, str(R.execute_action), callback_group=cb)
         self._plan = ActionClient(n, PlanToJoints, str(R.plan_action), callback_group=cb)
         self._world = n.create_client(SetWorld, str(R.set_world_service), callback_group=cb)
-        self._params = n.create_client(GetParameters, str(R.planner_node) + "/get_parameters", callback_group=cb)
+        self._reset = n.create_publisher(Empty, str(R.planner_reset), 1)
         self._detect = n.create_client(Detect, str(R.detect_service), callback_group=cb)
-        self._types = dict(Execute=ExecuteJointTrajectory, Plan=PlanToJoints, SetWorld=SetWorld, Detect=Detect,
-                           GetParameters=GetParameters)
+        self._types = dict(Execute=ExecuteJointTrajectory, Plan=PlanToJoints, SetWorld=SetWorld, Detect=Detect, Empty=Empty)
         self._executor = MultiThreadedExecutor(num_threads=4)
         self._executor.add_node(n)
         self._spinner = threading.Thread(target=self._executor.spin, daemon=True)
@@ -214,7 +214,7 @@ class Robot:
 
     # ------------------------------------------------------------------ the models the stack serves
     def robot_description(self, wait_s: float = 3.0) -> str | None:
-        """The arm's URDF as its node publishes it (/robot_description, latched), or None."""
+        """The arm's URDF as its description node publishes it (ros.robot_description, latched), or None."""
         t_end = time.time() + wait_s
         while self.description is None and time.time() < t_end:
             time.sleep(0.05)
@@ -302,10 +302,11 @@ class Robot:
             g.goal_tolerance = [JointTolerance(name=j, position=float(goal_tolerance_rad)) for j in JOINTS]
         g.control_mode = 1 if impedance else 0
         g.preemption = 0                             # queue: never preempt a move in flight
-        if impedance:
-            g.gains.kq = [float(v) for v in impedance["kq"]]
-            g.gains.zeta = float(impedance["zeta"])
-            g.gains.torque_limit = [float(v) for v in impedance["torque_limit"]]
+        if impedance:                                # (a position goal keeps the default gains: others are refused)
+            g.gains.profile = PROFILE_CUSTOM
+            g.gains.custom.kq = [float(v) for v in impedance["kq"]]
+            g.gains.custom.zeta = float(impedance["zeta"])
+            g.gains.custom.torque_limit = [float(v) for v in impedance["torque_limit"]]
         g.sender_id, g.token = self.node.get_name(), self.token
         if self.arbitration and not any(self.token):
             raise RobotError("the arm enforces arbitration and this module holds no token (RAMMP_ARM_TOKEN, from the "
@@ -355,16 +356,12 @@ class Robot:
         if not r.success:
             raise RobotError("the planner refused the world %s: %s" % (path, r.message))
 
-    def planner_parameter(self, name: str) -> str | None:
-        """One of the planner node's own string parameters, or None where it has none, it is empty, or the planner does
-        not answer."""
-        if not self._params.wait_for_service(timeout_sec=2.0):
-            return None
-        r = self._wait(self._params.call_async(self._types["GetParameters"].Request(names=[name])), 5.0, "no parameters")
-        v = r.values[0] if r.values else None
-        if v is None:
-            return None
-        return (v.string_value or None) if v.type == 4 else None     # (4: PARAMETER_STRING)
+    def reset_world(self) -> None:
+        """The planner's own world back (its boot world, its configured layers), for its other clients."""
+        self._reset.publish(self._types["Empty"]())
+
+    def planner_listens(self) -> bool:
+        return self.node.count_subscribers(str(cfg.ros.planner_reset)) > 0
 
     # ------------------------------------------------------------------ perception
     def detect(self, role: str, prompts: list[str], threshold: float) -> list[Detection]:

@@ -1,7 +1,7 @@
-"""The module's ROS interface against the real arm driver (kinova-gen3-ros2 --sim) and the stand-ins (tests/ros_stubs.py):
-joint states, a trajectory that runs to the end, one cancelled mid-way, the planner, set_world (our world by file, then
-the planner's own back, read from its `world` parameter), SAM3 (its masks), the cameras, our static transform.
-Run inside the module's image (tests/test_ros.sh)."""
+"""The module's ROS interface against the real arm driver (kinova-gen3-ros2 2.0.0 --sim) and the stand-ins
+(tests/ros_stubs.py): the model, joint states (arm_joint_1..7), a trajectory that runs to the end, one compliant and
+cancelled mid-way, the planner, set_world (our world by file) and /reset (the planner's own back), SAM3 (its masks),
+the cameras, our static transform from arm_mount. Run inside the module's image (tests/test_ros.sh)."""
 
 from __future__ import annotations
 
@@ -22,6 +22,8 @@ from rammp_feeding.ros import Robot  # noqa: E402
 
 def main() -> int:
     r = Robot("rammp_wiring")
+    model = r.robot_description(wait_s=10)
+    assert model and 'link name="arm_mount"' in model, "no 2.0 model on /arm/robot_description"
     t, raw, tau = r.joint_sample(wait_s=10)
     print("joint states: q", np.round(np.degrees(raw), 2), "tau", np.round(tau, 2))
     q = r.joints()
@@ -42,12 +44,14 @@ def main() -> int:
     pos, times = r.plan_joints(q, np.asarray(q) + 5, 10.0)
     print("planner: %d points, %.1f s" % (len(pos), times[-1]))
     assert np.allclose(pos[-1], np.asarray(q) + 5, atol=1e-6)
-    open("/share/world.yaml", "w").write("base_frame: base_link\nobstacles: []\n")
-    r.set_world("/share/world.yaml")      # the planner reads it: a shared mount (/config on the robot)
-    r.set_world(r.planner_parameter("world"))
+    open("/share/world.yaml", "w").write("base_frame: arm_mount\nobstacles: []\n")
+    r.set_world("/share/world.yaml")      # the planner reads it: a shared mount (/feeding on the robot)
+    assert r.planner_listens(), "nothing subscribes to /reset"
+    r.reset_world()
+    time.sleep(0.5)
     got = json.load(open("/share/planner_worlds.json"))
-    print("set_world:", got)
-    assert got == ["/share/world.yaml", "world_real_bench.yaml"]
+    print("set_world, then reset:", got)
+    assert got == ["/share/world.yaml", "reset"]
     d = r.detect("camera", ["bowl", "piece of food"], 0.5)
     print("sam3:", [(x.label, x.box, int(x.mask.sum())) for x in d])
     assert d and d[0].label == "piece of food" and d[0].mask.sum() == 41 * 41
@@ -58,9 +62,9 @@ def main() -> int:
         print("%s: colour %s, depth %s median %d mm; camera_info fx %.1f; depth -> colour %s" % (
             role, rgb.shape, D.shape, int(np.median(D)), m.colour.fx, np.round(m.d2c[:3, 3], 4)))
     assert abs(r.camera_model("scene_camera").d2c[0, 3] - 0.0235) < 1e-6
-    r.publish_static("base_link", "scene_camera_link", np.eye(4))
-    T = r.transform("base_link", "scene_camera_depth_optical_frame")
-    print("tf base_link <- the scene camera's depth frame, through our static transform:", np.round(T[:3, 3], 4))
+    r.publish_static("arm_mount", "scene_camera_link", np.eye(4))
+    T = r.transform("arm_mount", "scene_camera_depth_optical_frame")
+    print("tf arm_mount <- the scene camera's depth frame, through our static transform:", np.round(T[:3, 3], 4))
     print("ROS WIRING OK")
     r.close()
     return 0

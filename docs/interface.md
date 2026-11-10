@@ -9,18 +9,19 @@ static transform.
 
 | Name | Type | From | Use |
 | --- | --- | --- | --- |
-| `/robot_description` | `std_msgs/String` | `arm_state_publisher` | The arm's model; the bundled driver URDF if absent |
-| `/joint_states` | `sensor_msgs/JointState` | `arm` | Joints, and torques for the contact stop and the bite |
+| `/arm/robot_description` | `std_msgs/String` | `arm_state_publisher` | The arm's model, rooted at `arm_mount` (required) |
+| `/joint_states` | `sensor_msgs/JointState` | `arm` | `arm_joint_1..7`: joints, and torques for the contact stop and the bite |
 | `/control_status` | `rammp_common_interfaces/ControlStatus` | `arm` | E-stop, arbitration |
 | `/tf_static` | `tf2_msgs/TFMessage` | camera drivers | Each camera's frames |
 | `/wrist_camera/...`, `/scene_camera/...` | `sensor_msgs/Image`, `CameraInfo` | the cameras | Colour, depth, intrinsics (topics in the camera profiles) |
 | `/execute_joint_trajectory` | `rammp_arm_interfaces/action/ExecuteJointTrajectory` | `arm` | Every move, in position control; cancelled to stop |
 | `/rammp_curobo/plan_to_joints` | `rammp_curobo_interfaces/action/PlanToJoints` | `planner` | Free-space paths |
-| `/rammp_curobo/set_world` | `rammp_curobo_interfaces/srv/SetWorld` | `planner` | Our world (`/config/planner_world.yaml`) while we plan; the planner's own is put back after |
+| `/rammp_curobo/set_world` | `rammp_curobo_interfaces/srv/SetWorld` | `planner` | Our world while we plan: `/config/planner_world.yaml`, read by the planner at `/feeding/planner_world.yaml` |
+| `/reset` | `std_msgs/Empty` (published) | `planner` | The planner's own world back when a command ends |
 | `/perception/sam3/detect` | `rammp_perception_interfaces/srv/Detect` | `sam3` | Boxes and masks: the bowl and the food |
 
 ## Publishes
-`/tf_static`: `base_link -> <scene camera link_frame>`, from `/config/scene_extrinsic.json`.
+`/tf_static`: `arm_mount -> <scene camera link_frame>`, from `/config/scene_extrinsic.json`.
 
 ## Arbitration
 Goals carry the token in `RAMMP_ARM_TOKEN`. When arbitration is enforced and no token is set, no goals are sent.

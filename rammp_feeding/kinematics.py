@@ -1,9 +1,9 @@
-"""The Gen3's kinematics from the arm's own model -- the URDF its node publishes on /robot_description (the bundled
-copy of the driver's, urdf/, only without one): forward kinematics of every link, the Jacobian, and a damped
-least-squares IK seeded from a nearby configuration (no IK service is offered: straight-line and scoop paths are ours).
+"""The Gen3's kinematics from the arm's own model -- the URDF its description node serves (ros.robot_description),
+rooted at arm_mount: forward kinematics of every link, the Jacobian, and a damped least-squares IK seeded from a nearby
+configuration (no IK service is offered: straight-line and scoop paths are ours).
 
-The tool frame is the flange (the URDF's end_effector_link) plus arm.tool_from_flange_m: the 2F-85's TCP, the frame the
-utensil's tip model and the camera mount are measured in (and RAMMP-CuRobo's tool_frame).
+The tool frame is the flange (the URDF's arm_end_effector_link) plus arm.tool_from_flange_m: the 2F-85's TCP, the
+model's arm_tool_frame, the frame the utensil's tip model and the camera mount are measured in.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ class Joint:
 
 
 class Chain:
-    """base_link -> the flange, through the URDF's seven arm joints."""
+    """The model's root (arm_mount) -> the flange, through the URDF's seven arm joints."""
 
     def __init__(self, urdf: str | Path, tool_from_flange_m):
         root = ET.fromstring(urdf) if isinstance(urdf, str) and urdf.lstrip().startswith("<") else ET.parse(str(urdf)).getroot()

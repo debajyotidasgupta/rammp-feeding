@@ -1,7 +1,8 @@
-"""Stand-ins for the RAMMP nodes this module calls, for the ROS wiring test (tests/test_ros.sh): the planner's
-plan_to_joints (a straight joint line), set_world (a file it can open, or a packaged world's name) and its `world`
-parameter (world_real_bench.yaml); SAM3's detect (one box and its mask), and the two cameras as their drivers serve them (flat frames, camera_info, /tf_static between their frames). The worlds the
-planner was set to go to /share/planner_worlds.json. The arm is the real kinova-gen3-ros2 in its --sim mode."""
+"""Stand-ins for the RAMMP nodes this module calls, for the ROS wiring test (tests/test_ros.sh): the arm's description
+node (/arm/robot_description: the 2.0 level render, which the driver reads too); the planner's plan_to_joints (a
+straight joint line), set_world (a file it can open) and /reset; SAM3's detect (one box and its mask), and the two
+cameras as their drivers serve them (flat frames, camera_info, /tf_static between their frames). The worlds the planner
+was set to, and its resets, go to /share/planner_worlds.json. The arm is the real kinova-gen3-ros2 2.0.0 in --sim."""
 
 from __future__ import annotations
 
@@ -18,8 +19,9 @@ from rammp_perception_interfaces.msg import DetectedObject
 from rammp_perception_interfaces.srv import Detect
 from rclpy.action import ActionServer
 from rclpy.executors import MultiThreadedExecutor
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import CameraInfo, Image
+from std_msgs.msg import Empty, String
 from tf2_ros import StaticTransformBroadcaster
 from trajectory_msgs.msg import JointTrajectoryPoint
 
@@ -42,12 +44,16 @@ def main() -> None:
     worlds = []
 
     def world(req, resp):
-        resp.success = os.path.exists(req.world) or req.world.endswith(".yaml") and "/" not in req.world
+        resp.success = os.path.exists(req.world)
         resp.message = "" if resp.success else "no such file"
         if resp.success:
             worlds.append(req.world)
             open("/share/planner_worlds.json", "w").write(json.dumps(worlds))
         return resp
+
+    def reset(_):
+        worlds.append("reset")
+        open("/share/planner_worlds.json", "w").write(json.dumps(worlds))
 
     def detect(req, resp):
         resp.success = True
@@ -60,9 +66,11 @@ def main() -> None:
 
     ActionServer(n, PlanToJoints, "/rammp_curobo/plan_to_joints", plan)
     n.create_service(SetWorld, "/rammp_curobo/set_world", world)
-    p = rclpy.create_node("rammp_curobo")              # the planner node's own parameters
-    p.declare_parameter("world", "world_real_bench.yaml")
-    nodes = [n, p]
+    n.create_subscription(Empty, "/reset", reset, 10)
+    latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+    model = n.create_publisher(String, "/arm/robot_description", latched)
+    model.publish(String(data=open("/tests/arm_level.urdf").read()))
+    nodes = [n]
     n.create_service(Detect, "/perception/sam3/detect", detect)
     pubs = []
     for ns, frame, kind, enc, shape in (("/wrist_camera/color", "wrist_camera_color_optical_frame", "image_raw", "rgb8", (480, 848, 3)),

@@ -16,11 +16,14 @@ deployment:
                                 # camera's pose and latest reading (mounted from the host)
   runs_dir: /runs               # the run record (mounted from the host)
 
-ros:                            # the RAMMP stack's interfaces this module uses
-  execute_action: /execute_joint_trajectory          # kinova-gen3-ros2
+ros:                            # the RAMMP stack's interfaces this module uses (the arm stack's 2.0 generation)
+  robot_description: /arm/robot_description         # kinova-gen3-ros2's description node: the model, rooted at arm_mount
+  joint_states: /joint_states                        # kinova-gen3-ros2: arm_joint_1..7 (about 50 Hz)
+  control_status: /control_status
+  execute_action: /execute_joint_trajectory
   plan_action: /rammp_curobo/plan_to_joints          # RAMMP-CuRobo (plan only)
   set_world_service: /rammp_curobo/set_world
-  planner_node: /rammp_curobo                        # (its parameters: the world it runs with, put back after us)
+  planner_reset: /reset                              # RAMMP-CuRobo: its own world back, after us
   detect_service: /perception/sam3/detect            # rammp-perception's SAM3: every detection (bowl, food)
 
 planner:                         # the shared planner: the arm's paths; the utensil is ours to check (Arm.check_path)
@@ -33,13 +36,13 @@ planner:                         # the shared planner: the arm's paths; the uten
     food_radius_m: 0.025        # carrying (the swing): a ~25 mm piece riding the tip ...
     food_back_m: 0.010          # ... centred this far back from it along the tool's z
   world_file: /config/planner_world.yaml   # our collision world (scene.world), pushed before each planned move ...
-  world_file_in_planner: /config/planner_world.yaml   # ... where the planner's container reads it (the same mount)
-  restore_world: world_real_bench.yaml     # the planner's own world, put back when a command ends, where it has no
-                                           # `world` parameter: the release planner's startup world (gen3_real.yaml)
+  world_file_in_planner: /feeding/planner_world.yaml   # ... where the planner's container reads it: the deployment
+                                           # mounts this state directory into the planner at /feeding
 
 arm:
-  urdf: urdf/gen3_7dof_2f85.urdf    # the arm driver's model (kinova-gen3-driver models/, as built into kinova-gen3-ros2 1.1.0)
-  tool_from_flange_m: [0.0, 0.0, 0.12]   # the 2F-85's TCP: the tool frame the utensil and camera mount are measured in
+  base_frame: arm_mount         # the model's root: every position here, the planner's world, the scene camera's parent
+  tool_from_flange_m: [0.0, 0.0, 0.12]   # the 2F-85's TCP (the model's arm_tool_frame): the utensil and camera mount
+                                # are measured in it
 
 face:
   model: /opt/models/face_landmarker.task   # MediaPipe's face landmarker (in the image)
@@ -56,7 +59,6 @@ motion:
                                 # arm measured against the plan)
   trajectory_sample_s: 0.02     # a move is sent as its smooth speed profile sampled this often: the arm follows the
                                 # timed points directly, and a speed held over longer pieces jumps from one to the next
-  joint_limits_deg: {2: 128.9, 4: 147.8, 6: 120.3}   # J2 / J4 / J6, ours (inside the URDF's 138 / 152 / 128)
   max_tilt_deg: 25.0            # the utensil's worst tilt off straight down on any move, but 5 deg past the move's own
                                 # start or end where either is further (a move that turns it on purpose)
   max_joint_step_deg: 12        # a continuous IK path: a bigger step on any joint is a jump, not a path
@@ -85,7 +87,8 @@ motion:
     bowl_margin_m: 0.04         # "over the bowl": within its rim radius + this
 
 guards:                         # the contact guard: a joint-torque step this big against recent history = stop
-  torque_window: {span: 12, gap: 5}   # samples: the baseline window, and the gap before the sample compared to it
+  torque_window: {span: 6, gap: 3}    # samples (/joint_states at 50 Hz): the baseline window, and the gap before the
+                                      # sample compared to it
   torque_step_nm:
     default: 2.5
     approach: 4.0               # the user moving in the chair shakes the arm's mount past 2.5
@@ -202,7 +205,7 @@ delivery:
   bite_hold_s: 0.10
   bite_settle_s: 10.0           # after the bite: at most this long for the force to settle (the user lets go)
   bite_timeout_s: 60.0
-  bite_baseline_samples: 40
+  bite_baseline_samples: 20     # (/joint_states at 50 Hz)
   face:
     eye_corners_m: 0.090        # the outer eye corners' spacing: the face's range without depth
     depth_beyond_eyes_factor: 1.6   # lips' depth past this x the eye-spacing range (and 0.3 m beyond) is not theirs

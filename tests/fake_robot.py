@@ -23,6 +23,7 @@ from rammp_feeding.ros import Detection
 # the site D405's camera_info (848x480, 2026-09-30): colour and depth one sensor
 D405 = Intrinsics(434.884, 434.330, 423.960, 237.798, 848, 480)
 CAM = CameraModel(D405, D405, np.eye(4))
+MODEL = open(os.path.join(os.path.dirname(__file__), "arm_level.urdf")).read()   # (RAMMP-CuRobo 2.0.1's render)
 
 
 @dataclass
@@ -88,14 +89,13 @@ class FakeRobot:
         self.traj: FakeTrajectory | None = None
         self.cameras = {"camera": FakeCamera(self, "camera")}
         self.moves: list[str] = []
-        self.worlds: list = []                          # set_world: a file's content, or the scene's name
-        self.world_param = None                         # the planner's `world` parameter (None: it has none)
+        self.worlds: list = []                          # set_world: a file's content; "reset": the planner's own back
         from rammp_feeding.arm import chain
-        self.kin = chain()
+        self.kin = chain(self)
 
     # --- the models the stack serves
     def robot_description(self, wait_s: float = 3.0):
-        return None                                     # the bundled model (the driver's)
+        return MODEL                                    # the 2.0 description's level render, rooted at arm_mount
 
     def camera_model(self, role: str, wait_s: float = 5.0) -> CameraModel:
         return CAM
@@ -136,8 +136,11 @@ class FakeRobot:
     def set_world(self, path):
         self.worlds.append(yaml.safe_load(open(path)) if os.path.isfile(path) else path)
 
-    def planner_parameter(self, name):
-        return self.world_param if name == "world" else None
+    def reset_world(self):
+        self.worlds.append("reset")
+
+    def planner_listens(self):
+        return True
 
     # --- the wrist camera: depth rendered from the arm's pose, SAM3's boxes projected
     def camera_pose(self):

@@ -39,11 +39,9 @@ DL, G = cfg.delivery, cfg.guards.torque_step_nm
 
 
 def swing(arm: Arm) -> None:
-    """One planned path to the delivery look, carrying: the utensil no further off vertical than swing_max_tilt_deg,
-    or than it already is (plus 5 deg) where it starts beyond that."""
-    from rammp_feeding.geometry import tilt_deg
-    arm.travel(scene.captured("deliver"), "swing to the user", dps=float(DL.swing_dps), torque_limit=float(G.swing),
-               max_tilt=max(float(DL.swing_max_tilt_deg), tilt_deg(arm.tool()[1]) + 5.0), carrying=True)
+    """One planned path to the delivery look, carrying: the utensil at most swing_max_tilt_deg off vertical (or 5 deg
+    past where it starts)."""
+    arm.travel(scene.captured("deliver"), "swing to the user", tilt_cap=float(DL.swing_max_tilt_deg), carrying=True)
 
 
 def measure_mouth(robot, arm: Arm, face, t_frame: float, rgb, out: Path, look: int) -> np.ndarray | None:
@@ -87,7 +85,7 @@ def approach(arm: Arm, mouth: np.ndarray) -> None:
     if path is None:
         raise MoveError("the approach: %s -- the user out of reach from here" % err)
     arm.run(path, "approach", dps=dps_for(path, L, float(DL.approach_mps)), torque_limit=float(G.approach),
-            max_tilt=95.0, impedance=DL.get("approach_impedance"))
+            impedance=DL.get("approach_impedance"))
     log.info("    presented: the tip %.0f mm from the mouth", 1000 * np.linalg.norm(mouth - arm.tip()))
 
 
@@ -96,7 +94,7 @@ def present(robot, arm: Arm, face, out: Path, wait_open: bool = True) -> int:
     for look in (1, 2):
         if look == 2:
             T, R = arm.tool()
-            arm.straight(T + np.array(DL.second_look_m, float), R, float(DL.look_mps), "to the second look", max_tilt=95.0)
+            arm.straight(T + np.array(DL.second_look_m, float), R, float(DL.look_mps), "to the second look")
         if not face.find(cam, float(DL.face_find_s)):
             log.info("    no face in view from look %d", look)
             continue
@@ -163,14 +161,10 @@ def retract(robot, arm: Arm) -> None:
     Te, Re = arm.tool(scene.captured("deliver"))
     ahead = float((T0 - Te) @ axis(Re))                  # how far in front of the delivery look, along its utensil
     if abs(axis(R0)[2]) <= float(DL.level_tol) and ahead > float(cfg.motion.arrived_m):   # at the user: back the way
-        L = float(np.linalg.norm(Te - T0))                                               # the approach came
-        if L > float(R_.max_from_look_m):
-            raise MoveError("%.0f mm from the delivery look -- not backing off from here" % (1000 * L))
-        arm.straight(Te, Re, float(R_.back_off_mps), "back to the delivery look", torque_stop=False, max_tilt=95.0)
+        arm.straight(Te, Re, float(R_.back_off_mps), "back to the delivery look", torque_stop=False)   # it came
     goal = scene.overlook_joints(arm)
     reach = max(math.hypot(*arm.tip()[:2]), math.hypot(*arm.tip(goal)[:2])) + float(R_.reach_margin_m)
-    arm.travel(goal, "back to food_detect_start", dps=float(R_.home_dps), torque_limit=float(G.retract), max_reach_m=reach,
-               carrying=True)
+    arm.travel(goal, "back to food_detect_start", max_reach_m=reach, carrying=True)
 
 
 def deliver(robot, arm: Arm, face, out: Path, stop_after: str = "", start_at: str = "swing", wait_open: bool = True) -> int:

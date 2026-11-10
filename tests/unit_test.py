@@ -242,9 +242,9 @@ class Delivery(unittest.TestCase):
         path = [list(q0 + [-15.0 * k / 10, 0, 0, 0, 0, 0, 0]) for k in range(11)]
         n = len(robot.moves)
         with self.assertRaisesRegex(MoveError, "joint 1 would cross"):
-            arm.run(path, "approach", dps=10.0, max_tilt=95.0, impedance="approach")
+            arm.run(path, "approach", dps=10.0, impedance="approach")
         self.assertEqual(len(robot.moves), n)                    # nothing sent
-        arm.run(path, "approach", dps=10.0, max_tilt=95.0)
+        arm.run(path, "approach", dps=10.0)
         self.assertLess(g.max_step(arm.q(), path[-1]), 0.1)
         self.assertEqual(robot.moves[-1], "position")
         self.assertFalse(cfg.delivery.approach_impedance)        # the approach runs in position control
@@ -571,19 +571,24 @@ class World(unittest.TestCase):
         q = scene.captured("home")
         past = list(q)
         past[3] = -float(cfg.motion.joint_limits_deg[4]) - 1.0              # J4 a degree past ours
-        with self.assertRaisesRegex(MoveError, "within .* of its limit"):
+        with self.assertRaisesRegex(MoveError, "past its limit"):
             arm.check_path([q, past, q], lambda x, y: -np.inf)
 
     def test_a_planned_path_that_tilts_too_far_is_refused_before_it_runs(self):
+        """One rule for every move: the utensil at most max_tilt_deg (or a move's own cap) off vertical, or 5 deg past
+        the move's own start or end -- a path that tips it further on the way is refused before anything moves."""
         sc = Scene()
         site(sc)
         robot = FakeRobot(sc, scene.captured("home"))
         arm = Arm(robot)
-        path = [scene.captured("home"), scene.overlook_joints(arm)]
+        home = np.array(scene.captured("home"))
+        path = [list(home), list(home + [0, 0, 0, 0, 0, 40.0, 0]), list(home)]         # tips the fork on the way
         worst = max(g.tilt_deg(arm.tool(q)[1]) for q in g.densify(path, 0.5))
-        arm.check_path(path, lambda x, y: -np.inf, None, max_tilt=worst + 0.5)
+        self.assertGreater(worst, float(cfg.motion.max_tilt_deg) + 5)
         with self.assertRaisesRegex(MoveError, "tilts the utensil"):
-            arm.check_path(path, lambda x, y: -np.inf, None, max_tilt=worst - 0.5)
+            arm.check_path(path, lambda x, y: -np.inf)
+        arm.check_path(path, lambda x, y: -np.inf, tilt_cap=worst + 0.5)
+        self.assertEqual(arm.tilt_limit([path[0], path[1]]), g.tilt_deg(arm.tool(path[1])[1]) + 5.0)   # its own end
         self.assertEqual(robot.moves, [])
 
     def test_the_utensil_checks_our_boxes_the_bowl_exact(self):
@@ -655,6 +660,42 @@ class Refine(unittest.TestCase):
         with mock.patch.object(sc_, "bowl_at", lambda *a: dict(rejected="nothing bowl-sized on the table")):
             with self.assertRaisesRegex(RuntimeError, "sees no bowl"):
                 sc_.refine(robot, arm)
+
+
+class Setup(unittest.TestCase):
+    def test_setup_captures_each_pose_and_skips_what_it_is_told(self):
+        """rammp setup home overlook deliver: each pose captured where the arm is when Enter is pressed, the delivery
+        look checked for a face; s skips a step, and the last (home, then check) can be skipped too."""
+        from fake_robot import FakeFace
+        from rammp_feeding import setup_steps as su
+        sc = Scene()
+        site(sc)
+        robot = FakeRobot(sc, scene.captured("home"))
+        arm = Arm(robot)
+        keep = {n: (state_dir() / (n + ".json")).read_text() for n in ("home", "overlook", "deliver")}
+        try:
+            robot.raw = np.radians(np.asarray(scene.captured("deliver")) + [1.0, 0, 0, 0, 0, 0, 0])
+            answers = iter(["s", "s", "", "s"])                     # home: skip; overlook: skip; deliver: go; end: skip
+            self.assertEqual(su.run(robot, arm, ("home", "overlook", "deliver"), ask=lambda _: next(answers),
+                                    face=FakeFace(robot)), 0)
+            self.assertLess(g.max_step(scene.captured("deliver"), np.degrees(robot.raw)), 0.01)
+            self.assertEqual((state_dir() / "home.json").read_text(), keep["home"])           # skipped: untouched
+        finally:
+            for n, t in keep.items():
+                (state_dir() / (n + ".json")).write_text(t)
+
+    def test_setup_writes_the_bowl_centre_in_place(self):
+        from rammp_feeding import setup_steps as su
+        p = state_dir() / "local.yaml"
+        p.write_text("workspace:\n  table_extent_m: {x: [0.1, 0.7], y: [-0.3, 0.8]}\n  bowl_centre_m: [0.29, 0.16]   # old\n")
+        try:
+            self.assertTrue(su.write_bowl_centre([0.501, -0.089]))
+            self.assertIn("bowl_centre_m: [0.501, -0.089]", p.read_text())
+            self.assertIn("table_extent_m: {x: [0.1, 0.7]", p.read_text())
+            p.write_text("utensil: {}\n")
+            self.assertFalse(su.write_bowl_centre([0.5, 0.0]))
+        finally:
+            p.unlink()
 
 
 class Cli(unittest.TestCase):

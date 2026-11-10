@@ -97,11 +97,8 @@ def food_left(W: np.ndarray, uv: np.ndarray, bowl: np.ndarray, ws: dict) -> floa
 def perceive(robot, arm, out: Path) -> dict:
     """At food_detect_start: the target -> out/target.json (tool_goal, the piece in the base frame); NoTarget else."""
     from rammp_feeding.arm import MoveError
-    from rammp_feeding.geometry import max_step
     q = arm.q()
-    off = max_step(q, scene.overlook_joints(arm))
-    if off > float(cfg.motion.near_pose_deg):
-        raise MoveError("not at food_detect_start (%.1f deg away) -- rammp detect" % off)
+    scene.at_food_detect_start(arm, q)
     since = time.time()
     cam = robot.cameras["camera"]
     _, rgb = cam.frame(after=since)

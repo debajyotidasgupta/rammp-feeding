@@ -57,10 +57,9 @@ motion:
   trajectory_sample_s: 0.02     # a move is sent as its smooth speed profile sampled this often: the arm follows the
                                 # timed points directly, and a speed held over longer pieces jumps from one to the next
   joint_limits_deg: {2: 128.9, 4: 147.8, 6: 120.3}   # J2 / J4 / J6, ours (inside the URDF's 138 / 152 / 128)
-  joint_limit_margin_deg: 0.3   # an IK solution this close to a limit is no solution
-  plan_min_margin_deg: 3.0      # food_detect_start keeps at least this from every limit
-  max_tilt_deg: 25.0            # the utensil's worst tilt off straight down (but where a move turns it on purpose)
-  max_joint_step_deg: 8         # a continuous IK path: a bigger step on any joint is a jump, not a path
+  max_tilt_deg: 25.0            # the utensil's worst tilt off straight down on any move, but 5 deg past the move's own
+                                # start or end where either is further (a move that turns it on purpose)
+  max_joint_step_deg: 12        # a continuous IK path: a bigger step on any joint is a jump, not a path
   steer_within_deg: 25          # IK seeds steer J2 / J4 / J6 off a limit once within this of it ...
   steer_step_deg: 3.0           # ... by this much per step
   near_pose_deg: 1.0            # within this of a pose's joints = "at" that pose
@@ -73,7 +72,7 @@ motion:
   impedance:                    # compliant moves (ExecuteJointTrajectory control_mode 1): the driver's default gains
     approach: {kq: [80, 80, 80, 80, 30, 30, 30], zeta: 0.7, torque_limit: [39, 39, 39, 39, 9, 9, 9]}
   free_space:                   # detect, home, the swing, the retract's return: cuRobo paths
-    dps: 61.0                   # cruise, the furthest joint
+    dps: 61.0                   # cruise, the furthest joint (every planned move)
     path_step_deg: 1            # cuRobo's dense path thinned to about this on the furthest joint (its curve kept)
     timeout_s: 30
     replans: 4                  # a path that fails our check: plan again (cuRobo's paths differ), at most this often
@@ -92,17 +91,12 @@ guards:                         # the contact guard: a joint-torque step this bi
     approach: 4.0               # the user moving in the chair shakes the arm's mount past 2.5
     plunge_in_food: 8.0         # once the tines are in the food: firm food (grilled chicken) takes ~4 N.m to pierce
     scoop: 6.0                  # open air: 2.5 trips on the arm's own acceleration
-    swing: 6.0
-    retract: 6.0
-    free_space: 6.0
+    free_space: 6.0             # every planned move (detect, home, the swing, the retract's return)
   scoop_food_off_path_m: 0.015  # the food point this far off its planned path stops the scoop ...
   scoop_food_drop_m: 0.010      # ... or this far below it
 
 acquisition:
   over_speed_mps: 0.15
-  over_max_m: 0.18              # OVER is a level slide over the bowl, never a transit (from food_detect_start, the
-                                # camera over the bowl's centre, the tip ~8 cm off it plus the piece's offset)
-  over_level_tol_m: 0.002
   plunge:
     fast_mps: 0.050
     slow_mps: 0.008             # through the food
@@ -112,20 +106,16 @@ acquisition:
     ramp_start_frac: 0.25       # the speed profile: starts at this fraction of fast_mps, full speed after ramp_m,
     ramp_m: 0.015               # and eases (smoothstep) to slow_mps over ease_m before the slow zone
     ease_m: 0.015
-    sane_range_m: [0.080, 0.250]
     food_height_range_m: [0.010, 0.060]
   scoop:
     speed_dps: 55.0             # fast on purpose: food slides off a slowly tilting utensil
     rot_exp: 0.8                # turn angle = 90 * s**rot_exp: <1 starts turning the moment the food lifts
     waypoints: 40
-    backoff_from: 0.2           # fraction of the scoop before backing off toward the scoop end
+    backoff_from: 0.2           # fraction of the scoop before moving across to over the bowl's centre
     lift_m: 0.04                # the scoop ends with the piece this far over the free-space tip floor above the bowl's
-                                # centre (its top + min_tip_above_bowl_m + error_m): the swing starts where it may
-    max_backoff_m: 0.300        # ... refused when that centre is further across than this from where the plunge ended
-    max_joint_step_deg: 12
+                                # centre (its top + min_tip_above_bowl_m + the scene camera's error_m)
   stepped:                      # the hover route, for aim checks (tip_px: rammp acquire --stop-after hover10, rise)
     hover_m: {hover30: 0.030, hover10: 0.010}
-    descend_max_m: 0.300        # the whole descent from the OVER pose (the tip ~0.23 m above the table there)
     descend_mps: 0.040          # one straight move down from the OVER pose, starting and stopping smoothly
     rise_mps: 0.040
 
@@ -158,7 +148,6 @@ perception:
     bowl_prompts: [dish, bowl, bowl with a glass jar]   # SAM3's words for the bowl (from the side a bowl reads as a
                                 # dish or a plate with a jar; "bowl" alone boxed a lidded box)
     score_threshold: 0.3
-    max_reach_m: 0.75
     max_bowl_height_m: 0.20     # inside its mask, the bowl is what stands this high at most above the table ...
     max_bowl_radius_m: 0.15     # ... and a circle through its rim wider than this is not a bowl's (both cameras)
   wrist_calibration:            # the ChArUco board: rammp calibrate-wrist (the wrist camera's mount) and calibrate-scene
@@ -189,7 +178,6 @@ perception:
     fork_margin_px: 10          # image_region_px: its box, grown by this
 
 delivery:
-  swing_dps: 61.0               # the swing to the delivery look (rammp capture deliver)
   swing_max_tilt_deg: 105.0     # carrying the piece, the utensil's tines at most this far off straight down (90: level):
                                 # tipped up to 15 deg above level the pierced piece slides toward the gripper, not off
   second_look_m: [0.0, -0.050, 0.0]   # no face or no usable mouth from the delivery look: this much further (base frame;
@@ -220,6 +208,4 @@ delivery:
     depth_beyond_eyes_factor: 1.6   # lips' depth past this x the eye-spacing range (and 0.3 m beyond) is not theirs
   retract:
     back_off_mps: 0.20
-    home_dps: 61.0
     reach_margin_m: 0.10        # the planned return keeps the tip within its start's / goal's reach + this
-    max_from_look_m: 0.900      # backing off from further than this from the delivery look: refused

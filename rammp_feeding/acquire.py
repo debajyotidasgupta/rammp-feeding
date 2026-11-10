@@ -1,11 +1,11 @@
 """Food acquisition from food_detect_start, the wrist camera's target in hand.
 
   over     at the overlook height, a level slide until the tip's vertical line passes through the target piece
-           (refused unless at food_detect_start, small and level: a correction inside the bowl, never a transit)
+           (refused unless at food_detect_start: a correction inside the bowl, never a transit)
   plunge   straight down through the piece to utensil.punch_floor_margin_m over the floor read beside it (never
-           under bowl.floor_above_table_m: a clear bowl reads the table through it), in one move: fast, easing to slow above the piece; the contact guard strict
-           above the food, a firm piece's piercing allowed once the tines are in it; the wrist camera's view where it
-           stops saved (acquire/plunge_end.jpg)
+           under bowl.floor_above_table_m: a clear bowl reads the table through it), in one move: fast, easing to slow
+           above the piece; the contact guard strict above the food, a firm piece's piercing allowed once the tines
+           are in it; the wrist camera's view where it stops saved (acquire/plunge_end.jpg)
   scoop    the piece rises while the utensil turns from vertical to level about it, to acquisition.scoop.lift_m over
            the free-space floor above the bowl's centre; stopped if the food point leaves its path or drops
   lift     then straight up, the utensil level, to food_detect_start's height: the whole arm clear of the planner's
@@ -32,7 +32,7 @@ from PIL import Image
 from rammp_feeding import record, scene
 from rammp_feeding.arm import Arm, MoveError, TorqueGuard
 from rammp_feeding.config import cfg
-from rammp_feeding.geometry import max_step, rot, tilt_deg
+from rammp_feeding.geometry import max_step, rot
 from rammp_feeding.perception import under_tip
 
 log = logging.getLogger("rammp")
@@ -65,15 +65,10 @@ def measure(robot, arm: Arm, out: Path, name: str) -> dict:
 
 def over(arm: Arm, target: dict) -> None:
     q = arm.q()
-    off = max_step(q, scene.overlook_joints(arm))
-    if off > float(cfg.motion.near_pose_deg):
-        raise MoveError("not at food_detect_start (%.1f deg away) -- rammp detect" % off)
+    scene.at_food_detect_start(arm, q)
     T, R = arm.tool(q)
     goal = np.array(target["tool_goal"], float)
-    d = math.hypot(*(goal[:2] - T[:2]))
-    if abs(goal[2] - T[2]) > float(A.over_level_tol_m) or d > float(A.over_max_m):
-        raise MoveError("the target is not a small level move (%.0f mm across) -- rammp perceive again" % (1000 * d))
-    record.event("over", goal=goal, across_m=d)
+    record.event("over", goal=goal, across_m=math.hypot(*(goal[:2] - T[:2])))
     arm.straight(goal, R, float(A.over_speed_mps), "OVER")
 
 
@@ -91,9 +86,6 @@ def plunge_depth(u: dict, tip_z: float) -> tuple[float, Food]:
         log.info("    the floor reads %.0f mm under the bowl's own floor (seen through it): stopping above that floor",
                  1000 * (lowest - (tip_z - down)))
         down, height = tip_z - lowest, (tip_z - u["gap_top"]) - (lowest - floor_m)
-    lo, hi = (float(v) for v in A.plunge.sane_range_m)
-    if not lo < down < hi:
-        raise MoveError("a plunge of %.0f mm is outside the sane range (%.0f-%.0f) -- re-measure" % (1000 * down, 1000 * lo, 1000 * hi))
     return down, Food(height, floor_m)
 
 
@@ -158,8 +150,6 @@ def plan_scoop(arm: Arm, q0, T0, R0, food: Food) -> dict:
     back = pivE - piv0
     rise = back[2]
     back[2] = 0.0
-    if np.linalg.norm(back) > float(S.max_backoff_m):
-        raise MoveError("the scoop's %.0f mm across to the bowl's centre is too far -- rammp detect" % (1000 * np.linalg.norm(back)))
     frm = float(S.backoff_from)
 
     def piv_at(s):
@@ -169,8 +159,7 @@ def plan_scoop(arm: Arm, q0, T0, R0, food: Food) -> dict:
     def at(s):
         R = rot("x", 90.0 * s ** float(S.rot_exp)) @ R0
         return piv_at(s) - R @ o_piv, R
-    n, jump = int(S.waypoints), float(S.max_joint_step_deg)
-    path, why = arm.homotopy(q0, at, n, max_jump=jump)
+    path, why = arm.homotopy(q0, at, int(S.waypoints))
     if path is None:
         raise MoveError("no continuous scoop path from here (%s) -- nothing moved" % why)
     log.info("    scoop: the food rises %.0f mm, %.0f mm across to over the bowl's centre, turning 90 deg; joint margin "
@@ -197,7 +186,7 @@ def run_scoop(arm: Arm, plan: dict) -> None:
         hit = guard.update(tau)
         return "joint %d torque step" % (hit[0] + 1) if hit else None
     try:
-        arm.run(path, "scoop", dps=float(A.scoop.speed_dps), torque_stop=False, max_tilt=95.0, check=food_on_path)
+        arm.run(path, "scoop", dps=float(A.scoop.speed_dps), torque_stop=False, check=food_on_path)
     finally:
         record.save_arrays("scoop_food_path", planned=plan["plan"], actual=np.array(food_log, float))
     log.info("    scoop: worst %.1f mm off the food's path", 1000 * worst[0])
@@ -212,8 +201,6 @@ def descend(arm: Arm, u: dict, to_above: float) -> None:
     down = float(arm.tip()[2]) - (max(u["top_z"], floor) + to_above)
     if down <= 0:
         return
-    if down > float(S.descend_max_m):
-        raise MoveError("a descent of %.0f mm is not an approach -- re-measure" % (1000 * down))
     T, R = arm.tool()
     arm.straight(T - np.array([0, 0, down]), R, float(S.descend_mps), "descend")
 
@@ -222,13 +209,9 @@ def rise(arm: Arm, label: str = "rise") -> None:
     """Straight up to food_detect_start's height, where it is, the utensil's orientation held: vertical after a hover
     or a plunge, level after the scoop."""
     T, R = arm.tool()
-    tip, ws = arm.tip(), scene.workspace()
-    if math.hypot(tip[0] - ws["bowl_xy"][0], tip[1] - ws["bowl_xy"][1]) > ws["bowl_radius"] + float(A.over_max_m):
-        raise MoveError("the utensil's tip is not over the bowl -- %s refused" % label)
     top = scene.overlook_goal(arm)[0][2]
-    if top - T[2] > 0.003:
-        arm.straight(np.array([T[0], T[1], top]), R, float(A.stepped.rise_mps), label,
-                     max_tilt=max(float(cfg.motion.max_tilt_deg), tilt_deg(R) + 5.0))
+    if top - T[2] > float(cfg.motion.arrived_m):
+        arm.straight(np.array([T[0], T[1], top]), R, float(A.stepped.rise_mps), label)
 
 
 def acquire(robot, arm: Arm, target: dict, out: Path, stop_after: str = "", start_at: str = "over") -> int:

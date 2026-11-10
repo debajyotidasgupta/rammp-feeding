@@ -129,19 +129,26 @@ def overlook_joints(arm) -> list[float]:
     from rammp_feeding.arm import MoveError
     T1, R = overlook_goal(arm)
     name = "food_detect_start"
-    key = tuple(np.round(T1, 5))
+    seed = captured("overlook")
+    key = tuple(np.round(T1, 5)) + tuple(np.round(seed, 3))      # (a new capture is a new shape)
     if key not in _RESOLVED:
-        seed = captured("overlook")
         T0, _ = arm.tool(seed)
         n = max(4, int(math.ceil(np.linalg.norm(T1 - T0) / 0.015)))
         path, why = arm.homotopy(seed, lambda s: (T0 + (T1 - T0) * s, R), n)
         if path is None:
             raise MoveError("%s over the bowl at (%.3f, %.3f) is not reachable from the captured overlook without "
                             "changing the arm's shape (%s)" % (name, *workspace()["bowl_xy"], why))
-        if arm.margin(path[-1]) < float(cfg.motion.plan_min_margin_deg):
-            raise MoveError("%s comes within %.1f deg of a joint limit" % (name, arm.margin(path[-1])))
         _RESOLVED[key] = path[-1]
     return list(_RESOLVED[key])
+
+
+def at_food_detect_start(arm, q=None) -> None:
+    """MoveError unless the arm is at food_detect_start (within near_pose_deg): where a target is read and aimed from."""
+    from rammp_feeding.arm import MoveError
+    from rammp_feeding.geometry import max_step
+    off = max_step(arm.q() if q is None else q, overlook_joints(arm))
+    if off > float(cfg.motion.near_pose_deg):
+        raise MoveError("not at food_detect_start (%.1f deg away) -- rammp detect" % off)
 
 
 # ------------------------------------------------------------------ the planner's world

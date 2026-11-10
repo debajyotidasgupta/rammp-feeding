@@ -7,8 +7,8 @@ driver's (camera_info, /tf_static); where its link frame sits on the robot is ou
 
 locate     the bowl: SAM3 with perception.scene.bowl_prompts (boxes and masks); its points in the base frame; the
            table round it (a plane fit to the dominant flat surface), its centre and radius (a circle through its rim)
-           and its top -> state_dir/scene_state.json, the reachable bowl nearest workspace.bowl_centre_m (where the
-           operator lays it)
+           and its top -> state_dir/scene_state.json, the bowl nearest workspace.bowl_centre_m (where the operator
+           lays it)
 refine     the same fit on the wrist camera's view from food_detect_start (rammp detect): the bowl it finds nearest
            this one's, however far from it, replaces its centre, radius and the table's height
 calibrate  through the ChArUco board on the table (perception.wrist_calibration's, as rammp calibrate-wrist uses it):
@@ -116,10 +116,7 @@ def locate(robot, out: Path) -> dict:
     ref = list(cfg.workspace.bowl_centre_m)                # where the operator lays the bowl
     cands = []
     for d in sorted(dets, key=lambda d: -d.score):
-        m = bowl_at(d.mask, d.box, uv, p)
-        if "bowl_xy" in m and np.hypot(*m["bowl_xy"]) > float(PS.max_reach_m):
-            m["rejected"] = "out of reach"
-        cands.append(m)
+        cands.append(bowl_at(d.mask, d.box, uv, p))
     im = Image.fromarray(rgb)
     dr = ImageDraw.Draw(im)
     for m in cands:
@@ -128,7 +125,7 @@ def locate(robot, out: Path) -> dict:
     im.save(out / "scene_detection.jpg", quality=90)
     ok = [m for m in cands if not m.get("rejected")]
     if not ok:
-        raise RuntimeError("no reachable bowl in the scene camera's view (%d candidates: %s; %s)"
+        raise RuntimeError("no bowl in the scene camera's view (%d candidates: %s; %s)"
                            % (len(cands), ", ".join(m["rejected"] for m in cands) or "none", out / "scene_detection.jpg"))
     best = min(ok, key=lambda m: np.hypot(m["bowl_xy"][0] - ref[0], m["bowl_xy"][1] - ref[1]))
     st = dict(best, t=time.time(), extrinsic=source, record=str(out))

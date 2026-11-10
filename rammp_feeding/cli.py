@@ -23,6 +23,8 @@
                                    feeding_start, the wrist camera's route over it and back; after calibrate-wrist)
     rammp capture home|overlook|deliver   the arm's joints now as feeding_start / food_detect_start's arm shape / the
                                    delivery look (state_dir). Never moves.
+    rammp setup [step ...]         after the arm moved against the table, the bowl or the user: each step in turn
+                                   (site, home, scene, overlook, bowl, deliver); Enter runs it, s skips it
 
 Exit codes: 0 done (feed: also when the bowl is empty or the user declines); 1 stopped or refused (the arm stationary
 where it stopped); 3 the bowl is empty (perceive); 4 no bite (deliver, feed: retracted with the piece); 5 food left
@@ -42,7 +44,6 @@ import numpy as np
 
 from rammp_feeding import record, scene
 from rammp_feeding.config import CAPTURES, cfg, state_dir
-from rammp_feeding.geometry import fold
 
 log = logging.getLogger("rammp")
 # --stop-after / --start-at per command (empty: the whole command / from its first stage)
@@ -83,9 +84,7 @@ def home(robot, arm, direct: bool = False, dps: float | None = None) -> None:
     """To feeding_start: a planned path; --direct: one joint move, no planner -- only for a workspace someone has
     checked is clear (the line can pass close to the table). The utensil's tilt only falls along it."""
     if direct:
-        from rammp_feeding.geometry import tilt_deg
-        arm.goto(scene.captured("home"), "direct to feeding_start", dps=dps or float(cfg.motion.direct_dps),
-                 max_tilt=max(float(cfg.motion.max_tilt_deg), tilt_deg(arm.tool()[1]) + 3.0))
+        arm.goto(scene.captured("home"), "direct to feeding_start", dps=dps or float(cfg.motion.direct_dps))
         return
     arm.travel(scene.captured("home"), "to feeding_start")
 
@@ -198,8 +197,8 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="rammp", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", choices=["check", "state", "home", "detect", "perceive", "acquire", "rise", "deliver",
                                         "retract", "feed", "locate-scene", "calibrate-scene", "calibrate-wrist",
-                                        "capture"])
-    ap.add_argument("name", nargs="?", help="capture: " + " | ".join(CAPTURES))
+                                        "capture", "setup"])
+    ap.add_argument("name", nargs="*", help="capture: " + " | ".join(CAPTURES) + "; setup: its steps (default: all)")
     ap.add_argument("--plan", action="store_true")
     ap.add_argument("--stop-after", default="", help="acquire: over | hover30 | hover10 | plunge; deliver: swing | "
                     "present | bite")
@@ -214,8 +213,11 @@ def main(argv=None) -> int:
     if a.stop_after and a.stop_after not in stops or a.start_at and a.start_at not in starts:
         ap.error("rammp %s: --stop-after %s, --start-at %s" % (a.command, " | ".join(stops) or "(none)",
                                                                " | ".join(starts) or "(none)"))
-    if a.command == "capture" and a.name not in CAPTURES:
+    from rammp_feeding.setup_steps import STEPS
+    if a.command == "capture" and (len(a.name) != 1 or a.name[0] not in CAPTURES):
         ap.error("rammp capture " + " | ".join(CAPTURES))
+    if a.command == "setup" and not set(a.name) <= set(STEPS):
+        ap.error("rammp setup [%s ...]" % " | ".join(STEPS))
     import signal
 
     def _stop(*_):
@@ -274,13 +276,11 @@ def main(argv=None) -> int:
             from rammp_feeding.wrist_calibration import calibrate as calibrate_wrist
             rc = 0 if calibrate_wrist(robot, arm, a.plan) or a.plan else 1
         elif c == "capture":
-            qs = []
-            for _ in range(30):
-                qs.append(arm.q())
-                time.sleep(0.02)
-            q = [round(float(v), 3) for v in fold(np.asarray(qs[0]) + np.median(fold(np.asarray(qs) - qs[0]), axis=0))]
-            (state_dir() / (a.name + ".json")).write_text(json.dumps(dict(joints_deg=q, captured=time.strftime("%F %T")), indent=1))
-            log.info("  %s <- %s", state_dir() / (a.name + ".json"), q)
+            from rammp_feeding.setup_steps import capture
+            capture(arm, a.name[0])
+        elif c == "setup":
+            from rammp_feeding.setup_steps import run
+            rc = run(robot, arm, a.name or STEPS)
         if c in ("home", "detect", "rise", "retract", "acquire", "deliver"):
             report(arm, "now")
     except (MoveError, RuntimeError, OSError, ValueError) as e:      # (FileNotFoundError is an OSError)

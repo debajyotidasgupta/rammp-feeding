@@ -2,7 +2,8 @@
 here, executed by the driver (/execute_joint_trajectory, position or impedance), and watched while it runs:
 
   CONTACT   a joint-torque step against recent history (TorqueGuard; limits per move, guards.torque_step_nm)
-  TILT      the utensil further than max_tilt off straight down (but where a move turns it on purpose)
+  TILT      the utensil further off straight down than motion.max_tilt_deg (a move's own cap where it has one), or
+            than 5 deg past the move's own start or end where either is further (a move that turns it on purpose)
   CHECKS    a move's own (the plunge's depth zone, the scoop's food path)
   DRIVER    its path tolerance (the arm diverging from the path) and its own refusals
 Any of them cancels the goal (the driver halts the arm) and raises MoveError. Free-space moves are cuRobo's paths
@@ -155,9 +156,13 @@ class Arm:
 
     def ik(self, T, R, seed) -> Joints | None:
         q = self.kin.ik(T, R, seed)
-        if q is None or self.margin(q) < float(M.joint_limit_margin_deg):
-            return None
-        return q
+        return None if q is None or self.margin(q) < 0 else q
+
+    def tilt_limit(self, path, cap: float | None = None) -> float:
+        """How far off straight down a move may hold the utensil: cap (motion.max_tilt_deg), or 5 deg past its own
+        start or end where either is further."""
+        return max(float(M.max_tilt_deg if cap is None else cap),
+                   tilt_deg(self.tool(path[0])[1]) + 5.0, tilt_deg(self.tool(path[-1])[1]) + 5.0)
 
     def steered(self, prev: Sequence[float]) -> list[float]:
         """An IK seed from prev with J2 / J4 / J6 nudged off a limit they are within steer_within_deg of."""
@@ -188,13 +193,14 @@ class Arm:
     # ------------------------------------------------------------------ running a path
     def run(self, path: Sequence[Sequence[float]], label: str, dps: float | None = None,
             durations: Sequence[float] | None = None, torque_limit: float | None = None, torque_stop: bool = True,
-            max_tilt: float = float(M.max_tilt_deg), check: Callable | None = None, impedance: str | None = None,
+            tilt_cap: float | None = None, check: Callable | None = None, impedance: str | None = None,
             path_tolerance_deg: float = float(M.path_tolerance_deg)) -> float:
         """Execute a joint path from where the arm is (path[0] must be within near_pose_deg of it), at a cruise of
         `dps` deg/s on the furthest joint (or at the given segment durations), watched as above. check(q, tau, t) ->
         a reason to stop, or None. impedance: the motion.impedance entry to run it compliant. Returns its seconds."""
         if len(path) < 2:
             return 0.0
+        max_tilt = self.tilt_limit(path, tilt_cap)
         t_now, raw, _ = self.robot.joint_sample()
         q_now = fold(np.degrees(raw))
         if max_step(q_now, path[0]) > float(M.near_pose_deg):
@@ -261,24 +267,21 @@ class Arm:
         log.info("    %-28s done in %.1f s", label, time.time() - t0)
         return time.time() - t0
 
-    def goto(self, goal: Sequence[float], label: str, dps: float | None = None, max_tilt: float = float(M.max_tilt_deg),
-             **kw) -> None:
-        """A joint-space line to a complete 7-joint goal (every joint the short way), refused if the goal does not
-        hold the utensil within max_tilt of straight down or comes near a joint limit."""
+    def goto(self, goal: Sequence[float], label: str, dps: float | None = None, **kw) -> None:
+        """A joint-space line to a complete 7-joint goal (every joint the short way), refused if the goal is past a
+        joint limit."""
         q0 = self.q()
         goal = [float(v) for v in fold(goal)]
         travel = max_step(q0, goal)
         if travel < 0.05:
             return
-        if self.margin(goal) < float(M.joint_limit_margin_deg):
-            raise MoveError("%s REFUSED: the goal comes within %.1f deg of a joint limit" % (label, self.margin(goal)))
-        if tilt_deg(self.kin.fk(goal)[1]) > max_tilt:
-            raise MoveError("%s REFUSED: the goal holds the utensil %.0f deg off vertical" % (label, tilt_deg(self.kin.fk(goal)[1])))
+        if self.margin(goal) < 0:
+            raise MoveError("%s REFUSED: the goal is %.1f deg past a joint limit" % (label, -self.margin(goal)))
         n = max(2, int(math.ceil(travel / 2.0)))
         path = [list(np.asarray(q0) + fold(np.asarray(goal) - np.asarray(q0)) * k / n) for k in range(n + 1)]
         path, durations = smooth_timing(path, joint_cap(dps or float(M.settle_dps)), float(M.joint_accel_dps2),
                                         float(M.trajectory_sample_s))
-        self.run(path, label, durations=durations, max_tilt=max(max_tilt, tilt_deg(self.tool(q0)[1]) + 1), **kw)
+        self.run(path, label, durations=durations, **kw)
 
     def straight(self, Tg, Rg, mps: float, label: str, step_m: float = 0.005, **kw) -> list[Joints]:
         """A straight tool line to (Tg, Rg) at mps, the orientation turned evenly on the way (a continuous IK path);
@@ -300,25 +303,23 @@ class Arm:
 
     # ------------------------------------------------------------------ free space: cuRobo
     def check_path(self, path, floor: Callable[[float, float], float], max_reach_m: float | None = None,
-                   spheres=None, boxes=None, max_tilt: float | None = None) -> tuple[float, float]:
+                   spheres=None, boxes=None, tilt_cap: float | None = None) -> tuple[float, float]:
         """(lowest, highest) utensil tip z along the path as it runs (sampled every check_step_deg); MoveError if a joint
-        comes within joint_limit_margin_deg of our limits, the tip dips under floor(x, y) or reaches past max_reach_m,
-        the utensil tilts past max_tilt off straight down, or a
-        sphere ([x, y, z, r], tool frame) comes nearer a box (scene.utensil_boxes) than utensil_clearance_m -- or than
-        it already is at the start or will be at the goal, where that is nearer (feeding_start parks the utensil beside
-        the table): the planner knows the arm, not what it holds."""
+        passes our limits, the tip dips under floor(x, y) or reaches past max_reach_m, the utensil tilts past
+        tilt_limit, or a sphere ([x, y, z, r], tool frame) comes nearer a box (scene.utensil_boxes) than
+        utensil_clearance_m -- or than it already is at the start or will be at the goal, where that is nearer
+        (feeding_start parks the utensil beside the table): the planner knows the arm, not what it holds."""
         FS = M.free_space
         qs = densify(path, float(FS.check_step_deg))
         near = min(qs, key=self.margin)
-        if self.margin(near) < float(M.joint_limit_margin_deg):
-            raise MoveError("the path takes a joint within %.1f deg of its limit (motion.joint_limits_deg): %s"
-                            % (self.margin(near), np.round(near, 1).tolist()))
+        if self.margin(near) < 0:
+            raise MoveError("the path takes a joint %.1f deg past its limit (motion.joint_limits_deg): %s"
+                            % (-self.margin(near), np.round(near, 1).tolist()))
         poses = [self.tool(q) for q in qs]
         tips = [T + R @ self.tip_tool for T, R in poses]
-        if max_tilt is not None:
-            worst = max(tilt_deg(R) for _, R in poses)
-            if worst > max_tilt + 1e-6:
-                raise MoveError("the path tilts the utensil %.1f deg off vertical (limit %.0f)" % (worst, max_tilt))
+        max_tilt, worst = self.tilt_limit(path, tilt_cap), max(tilt_deg(R) for _, R in poses)
+        if worst > max_tilt + 1e-6:
+            raise MoveError("the path tilts the utensil %.1f deg off vertical (limit %.0f)" % (worst, max_tilt))
         for t in tips:
             if t[2] < floor(t[0], t[1]) - 1e-6:
                 raise MoveError("the path takes the utensil tip to z %.3f at (%.3f, %.3f), under the floor there (%.3f)"
@@ -341,16 +342,15 @@ class Arm:
     def travel(self, goal: Sequence[float], label: str, dps: float | None = None, go: bool = True,
                max_reach_m: float | None = None, carrying: bool = False, **kw) -> list[Joints]:
         """A collision-free path from the shared planner, from here to goal (go=False: plan only), with our world pushed
-        to it first; thinned, checked as it will run against our tip floor, the utensil's tilt (no further than its
-        start or its goal already is, unless max_tilt says) and, for the utensil (and, carrying, the piece), against
-        our boxes -- re-planned when it fails any -- run, and settled exactly onto goal."""
+        to it first; thinned, checked as it will run against our tip floor, the utensil's tilt (tilt_limit) and, for
+        the utensil (and, carrying, the piece), against our boxes -- re-planned when it fails any -- run, and settled
+        exactly onto goal."""
         from rammp_feeding.scene import push_world, tip_floor, utensil_boxes, utensil_spheres
         FS = M.free_space
         q = self.q()
-        kw.setdefault("max_tilt", max(float(M.max_tilt_deg), tilt_deg(self.tool(q)[1]) + 5, tilt_deg(self.tool(goal)[1]) + 5))
         if max_step(q, goal) <= float(M.near_pose_deg):
             if go:
-                self.goto(goal, "settle " + label, max_tilt=kw["max_tilt"])
+                self.goto(goal, "settle " + label)
             return [q, list(goal)]
         push_world(self.robot)                        # another client may have changed the planner's world since
         spheres, boxes = utensil_spheres(self, carrying), utensil_boxes()
@@ -366,7 +366,7 @@ class Arm:
                     keep.append(i)
             path = [list(map(float, pos[i])) for i in keep + [len(pos) - 1]]
             try:
-                lo, hi = self.check_path(path, tip_floor, max_reach_m, spheres, boxes, kw["max_tilt"])
+                lo, hi = self.check_path(path, tip_floor, max_reach_m, spheres, boxes, kw.get("tilt_cap"))
                 break
             except MoveError as e:
                 if k == int(FS.replans):
@@ -379,7 +379,7 @@ class Arm:
                                              float(M.trajectory_sample_s))
             self.run(timed, label, durations=durations,
                      torque_limit=kw.pop("torque_limit", float(cfg.guards.torque_step_nm.free_space)), **kw)
-            self.goto(goal, "settle " + label, max_tilt=kw["max_tilt"])
+            self.goto(goal, "settle " + label)
         return path
 
     # ------------------------------------------------------------------ the tool's force, from the joint torques

@@ -47,6 +47,7 @@
         - /scene_camera/depth/camera_info
       publishes:
         - /tf_static
+        - /reset
     # Wiring only, like every mock here: the module is reached through its command, not a topic.
     - id: feeding_mock
       kind: process

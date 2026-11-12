@@ -37,7 +37,7 @@ From a new Jetson to `rammp feed`, in order.
 ```bash
 uv tool install "sheppy @ git+https://github.com/rammp-org/sheppy@dev"
 git clone https://github.com/rammp-org/rammp-deployments.git
-docker pull debajyotidasgupta/rammp-feeding:0.3.0
+docker pull debajyotidasgupta/rammp-feeding:0.4.2
 sudo mkdir -p /srv/rammp_feeding/config /srv/rammp_feeding/runs && sudo chown -R 1000:1000 /srv/rammp_feeding
 ```
 - SAM3's weights are gated: accept the `facebook/sam3` licence on Hugging Face and download the snapshot to the Jetson.
@@ -47,7 +47,7 @@ sudo mkdir -p /srv/rammp_feeding/config /srv/rammp_feeding/runs && sudo chown -R
   tty=-i; [ -t 0 ] && tty=-it
   exec docker run --rm $tty --network host --ipc host --user 1000:1000 -e ROS_DOMAIN_ID=0 -e HOME=/tmp \
     -v /srv/rammp_feeding/config:/config -v /srv/rammp_feeding/runs:/runs \
-    debajyotidasgupta/rammp-feeding:0.3.0 ros2 run rammp_feeding rammp "$@"
+    debajyotidasgupta/rammp-feeding:0.4.2 ros2 run rammp_feeding rammp "$@"
   ```
 
 ## 4. The deployment manifest

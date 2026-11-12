@@ -1,0 +1,17 @@
+# Luxonis OAK-D Pro PoE on the wrist, through ROS 2 (rammp-deployments: wrist_camera -> oak_d_pro_docker, 640x400 at
+# 15 fps, mounted upside down and rotated on the device). Its depth is aligned to its colour image (published at the
+# colour's size, in the colour's frame), so the colour stream's camera_info serves both. Its intrinsics are its
+# driver's (camera_info); its depth starts about 0.24 m out (extended disparity): the overlook and the mouth are beyond.
+
+streams:
+  colour_topic: /wrist_camera/color/image_raw
+  depth_topic: /wrist_camera/depth/image_rect_raw
+  depth_info_topic: /wrist_camera/color/camera_info   # depth aligned to colour: the colour's intrinsics and frame
+
+glass_to_optical_m: 0.0         # not measured for this camera: a utensil's ruler reading is taken from its optical origin
+
+mount:                          # where it sits on the arm (ours): the colour optical frame in the tool frame, measured
+  camera_in_tool_m: null        # by rammp calibrate-wrist (state_dir/wrist_mount.json, which these take)
+  rotation_quat_xyzw: null
+  image_rotated_at_delivery: true              # the face is upright after a quarter turn at the user (rammp setup
+                                               # deliver checks that a face is found there)

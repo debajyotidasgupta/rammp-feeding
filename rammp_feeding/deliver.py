@@ -44,17 +44,16 @@ def swing(arm: Arm) -> None:
     arm.travel(scene.captured("deliver"), "swing to the user", tilt_cap=float(DL.swing_max_tilt_deg), carrying=True)
 
 
-def measure_mouth(robot, arm: Arm, face, t_frame: float, rgb, out: Path, look: int) -> np.ndarray | None:
+def measure_mouth(robot, arm: Arm, face, t_frame: float, rgb, out: Path | None, look: int) -> np.ndarray | None:
     """The mouth in the base frame from a frame taken here (the arm still), from its lips' depth; None if not usable."""
-    from PIL import Image
     from rammp_feeding.scene import cam_to_tool
     D = robot.cameras["camera"].depth_median(5, t_frame - 0.2, wait_s=1.5, min_frames=3)
     m = face.mouth(rgb, D, arm.cam)
     why = ("no face" if m is None else "its range is only from the face's size (no depth on the lips)"
            if m["source"] != "depth" else None)
-    (out / ("face_%d.json" % look)).write_text(json.dumps(dict(mouth=m, why=why), indent=1))
-    Image.fromarray(rgb).save(out / ("look_%d.jpg" % look), quality=90)
-    np.save(out / ("depth_%d.npy" % look), D)
+    record.save_json(out, "face_%d.json" % look, dict(mouth=m, why=why))
+    record.save_image(out, "look_%d.jpg" % look, rgb)
+    record.save_npy(out, "depth_%d.npy" % look, D)
     if why is not None:
         log.info("    the mouth not usable from look %d (%s)", look, why)
         return None
@@ -89,7 +88,7 @@ def approach(arm: Arm, mouth: np.ndarray) -> None:
     log.info("    presented: the tip %.0f mm from the mouth", 1000 * np.linalg.norm(mouth - arm.tip()))
 
 
-def present(robot, arm: Arm, face, out: Path, wait_open: bool = True) -> int:
+def present(robot, arm: Arm, face, out: Path | None, wait_open: bool = True, open_timeout_s: float | None = None) -> int:
     cam = robot.cameras["camera"]
     for look in (1, 2):
         if look == 2:
@@ -99,7 +98,7 @@ def present(robot, arm: Arm, face, out: Path, wait_open: bool = True) -> int:
             log.info("    no face in view from look %d", look)
             continue
         if wait_open:
-            got = face.wait_open(cam, float(DL.open_mouth_timeout_s), out)
+            got = face.wait_open(cam, float(DL.open_mouth_timeout_s if open_timeout_s is None else open_timeout_s), out)
             if got is None:
                 return 7
         else:
@@ -107,13 +106,13 @@ def present(robot, arm: Arm, face, out: Path, wait_open: bool = True) -> int:
         mouth = measure_mouth(robot, arm, face, got[0], got[1], out, look)
         if mouth is not None:
             scene.measured_mouth(mouth)                     # the user in the planner's world from here on
-            (out / "mouth.json").write_text(json.dumps(dict(mouth=[float(v) for v in mouth], t=time.time()), indent=1))
+            record.save_json(out, "mouth.json", dict(mouth=[float(v) for v in mouth], t=time.time()))
             approach(arm, mouth)
             return 0
     raise MoveError("no usable mouth from either look")
 
 
-def bite(robot, arm: Arm, timeout_s: float) -> int:
+def bite(robot, arm: Arm, timeout_s: float, settle_s: float | None = None) -> int:
     """Wait (read-only) for the bite: the tip force above bite_n for bite_hold_s. 4 = no bite."""
     def sample(after):
         while True:
@@ -142,7 +141,7 @@ def bite(robot, arm: Arm, timeout_s: float) -> int:
         elif last - above >= float(DL.bite_hold_s):
             log.info("    BITE (%.1f N)", peak)
             t_bite, n = time.time(), int(DL.bite_baseline_samples)
-            while time.time() - t_bite < float(DL.bite_settle_s):     # then the force settles: the user has let go
+            while time.time() - t_bite < float(DL.bite_settle_s if settle_s is None else settle_s):   # the user lets go
                 last, _, tau = sample(last)
                 trace.append((last - t, float(np.linalg.norm(arm.tool_force(tau - base, q)))))
                 if len(trace) > n and max(f for _, f in trace[-n:]) < float(DL.bite_n):
@@ -167,36 +166,46 @@ def retract(robot, arm: Arm) -> None:
     arm.travel(goal, "back to food_detect_start", max_reach_m=reach, carrying=True)
 
 
-def deliver(robot, arm: Arm, face, out: Path, stop_after: str = "", start_at: str = "swing", wait_open: bool = True) -> int:
+def deliver(robot, arm: Arm, face, out: Path | None, stop_after: str = "", start_at: str = "swing",
+            wait_open: bool = True, open_timeout_s: float | None = None, bite_timeout_s: float | None = None,
+            settle_s: float | None = None, step=None) -> int:
     """swing -> present -> bite -> retract. 4: no bite (retracted); 7: declined (retracted); 8: the presentation refused
-    (retracted)."""
+    (retracted). The waits default to delivery.*; step(name), if given, is called as each stage starts."""
     stages = ["swing", "present", "bite", "retract"]
     run = stages[stages.index(start_at):]
-    if "present" not in run and (out / "mouth.json").exists():        # this bite's mouth, measured by its present
+    step = step or (lambda name: None)
+    if "present" not in run and out is not None and (out / "mouth.json").exists():   # this bite's mouth, by its present
         scene.measured_mouth(json.loads((out / "mouth.json").read_text())["mouth"])
     if "swing" in run:
+        step("swing")
         swing(arm)
         if stop_after == "swing":
             return 0
     if "present" in run:
+        step("present")
         try:
-            rc = present(robot, arm, face, out, wait_open)
+            rc = present(robot, arm, face, out, wait_open, open_timeout_s)
         except MoveError as e:
             log.info("    the presentation stopped (%s) -- retracting", e)
             record.event("present_refused", why=str(e))
+            step("retract")
             retract(robot, arm)
             return 8
         if rc == 7:
             log.info("    no open mouth -- not approaching; retracting")
+            step("retract")
             retract(robot, arm)
             return 7
         if stop_after == "present":
             return 0
     if "bite" in run:
-        rc = bite(robot, arm, float(DL.bite_timeout_s))
+        step("bite")
+        rc = bite(robot, arm, float(DL.bite_timeout_s if bite_timeout_s is None else bite_timeout_s), settle_s)
         if stop_after == "bite":
             return rc
+        step("retract")
         retract(robot, arm)
         return rc
+    step("retract")
     retract(robot, arm)
     return 0

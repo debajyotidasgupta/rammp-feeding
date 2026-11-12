@@ -37,8 +37,16 @@ log = logging.getLogger("rammp")
 SC, PS = cfg.scene_camera, cfg.perception.scene
 
 
-def extrinsic() -> tuple[np.ndarray, str]:
-    """arm.base_frame <- the camera's link frame (4 x 4): our calibration (state_dir/scene_extrinsic.json)."""
+def from_platform() -> bool:
+    """Whether the robot's own /tf_static places this camera (scene_camera.pose_from: platform), not our calibration."""
+    return str(SC.get("pose_from", "calibration")) == "platform"
+
+
+def extrinsic(robot=None) -> tuple[np.ndarray, str]:
+    """arm.base_frame <- the camera's link frame (4 x 4): the robot's own mount on /tf_static (pose_from: platform), or
+    our calibration (state_dir/scene_extrinsic.json)."""
+    if from_platform():
+        return robot.transform(str(cfg.arm.base_frame), str(SC.link_frame)), "the robot's /tf_static"
     f = state_dir() / "scene_extrinsic.json"
     if not f.exists():
         raise RuntimeError("the scene camera is not calibrated (%s): rammp calibrate-scene, the ChArUco board where it "
@@ -50,8 +58,9 @@ def extrinsic() -> tuple[np.ndarray, str]:
 
 
 def publish(robot) -> None:
-    """Our measured pose of the camera on /tf_static, arm.base_frame -> its link frame, if there is one."""
-    if (state_dir() / "scene_extrinsic.json").exists():
+    """Our measured pose of the camera on /tf_static, arm.base_frame -> its link frame, if there is one (never when the
+    robot's own /tf_static places the camera)."""
+    if not from_platform() and (state_dir() / "scene_extrinsic.json").exists():
         robot.publish_static(str(cfg.arm.base_frame), str(SC.link_frame), extrinsic()[0])
 
 
@@ -103,32 +112,34 @@ def bowl_at(mask: np.ndarray, box, uv: np.ndarray, p: np.ndarray) -> dict:
     return dict(res, bowl_xy=[float(cx), float(cy)], table_z=tz, bowl_top_z=top, rim_radius_m=round(radius, 3))
 
 
-def locate(robot, out: Path) -> dict:
-    T, source = extrinsic()
+def locate(robot, out: Path | None) -> dict:
+    T, source = extrinsic(robot)
     cam = robot.cameras["scene_camera"]
     since = time.time()
     _, rgb = cam.frame()
     D = cam.depth_median(15, since, wait_s=5.0)
-    Image.fromarray(rgb).save(out / "scene_colour.jpg", quality=90)
-    np.save(out / "scene_depth.npy", D)
+    record.save_image(out, "scene_colour.jpg", rgb)
+    record.save_npy(out, "scene_depth.npy", D)
     p, uv = _points(robot, D, T)
     dets = robot.detect("scene_camera", list(PS.bowl_prompts), float(PS.score_threshold))
     ref = list(cfg.workspace.bowl_centre_m)                # where the operator lays the bowl
     cands = []
     for d in sorted(dets, key=lambda d: -d.score):
         cands.append(bowl_at(d.mask, d.box, uv, p))
-    im = Image.fromarray(rgb)
-    dr = ImageDraw.Draw(im)
-    for m in cands:
-        dr.rectangle(m["box"], outline=(239, 68, 68) if m.get("rejected") else (34, 197, 94), width=3)
-        dr.text((m["box"][0], m["box"][1] - 14), m.get("rejected") or "(%.3f, %.3f)" % tuple(m["bowl_xy"]), fill=(255, 255, 255))
-    im.save(out / "scene_detection.jpg", quality=90)
+    if out is not None:
+        im = Image.fromarray(rgb)
+        dr = ImageDraw.Draw(im)
+        for m in cands:
+            dr.rectangle(m["box"], outline=(239, 68, 68) if m.get("rejected") else (34, 197, 94), width=3)
+            dr.text((m["box"][0], m["box"][1] - 14), m.get("rejected") or "(%.3f, %.3f)" % tuple(m["bowl_xy"]),
+                    fill=(255, 255, 255))
+        record.save_image(out, "scene_detection.jpg", im)
     ok = [m for m in cands if not m.get("rejected")]
     if not ok:
-        raise RuntimeError("no bowl in the scene camera's view (%d candidates: %s; %s)"
-                           % (len(cands), ", ".join(m["rejected"] for m in cands) or "none", out / "scene_detection.jpg"))
+        raise RuntimeError("no bowl in the scene camera's view (%d candidates: %s)"
+                           % (len(cands), ", ".join(m["rejected"] for m in cands) or "none"))
     best = min(ok, key=lambda m: np.hypot(m["bowl_xy"][0] - ref[0], m["bowl_xy"][1] - ref[1]))
-    st = dict(best, t=time.time(), extrinsic=source, record=str(out))
+    st = dict(best, t=time.time(), extrinsic=source, record=str(out) if out is not None else None)
     (state_dir() / "scene_state.json").write_text(json.dumps(st, indent=1))
     log.info("  the bowl at (%.3f, %.3f) (+-%.2f m), rim radius %.3f m, table z %.3f, top z %.3f", *best["bowl_xy"],
              float(SC.error_m), best["rim_radius_m"], best["table_z"], best["bowl_top_z"])
@@ -147,8 +158,7 @@ def refine(robot, arm) -> dict:
     since = time.time()
     _, rgb = cam.frame(after=since)
     D = cam.depth_median(int(cfg.perception.depth_frames), since, wait_s=float(cfg.perception.depth_wait_s))
-    if record.here() is not None:                         # (the run record: what the wrist camera saw)
-        Image.fromarray(rgb).save(record.here() / "wrist_look.jpg", quality=90)
+    record.save_image(record.here(), "wrist_look.jpg", rgb)      # (the run record: what the wrist camera saw)
     o, Rc = camera_pose(arm)
     pc = model.depth_points(D)
     uv = np.round(np.stack(model.pixel(pc.T), 1)).astype(int)
@@ -184,9 +194,12 @@ def calibrate(robot, arm) -> dict | None:
     feeding_start and back; the board kept still); written and published."""
     from rammp_feeding import wrist_calibration as wc
     from rammp_feeding.scene import CAM_IN_TOOL, CAM_ROT
+    if from_platform():
+        raise RuntimeError("the robot's own /tf_static places the scene camera (scene_camera.pose_from: platform): "
+                           "nothing to calibrate")
     model, cam = robot.camera_model("scene_camera"), robot.cameras["scene_camera"]
     _, rgb = cam.frame(after=time.time())
-    Image.fromarray(rgb).save(record.here() / "scene_board.jpg", quality=90)
+    record.save_image(record.here(), "scene_board.jpg", rgb)
     C, n = wc.board_pose(model, rgb)
     if C is None:
         log.info("  NOT measured: the scene camera sees %d of the board's corners, %d needed: lay it where it sees it",

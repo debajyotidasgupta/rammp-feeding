@@ -17,7 +17,8 @@ moves are computed on the arm's model. It never commands the gripper.
 Deploying: the [deployment checklist](porting.md). ROS interfaces: the [interface reference](interface.md).
 
 ## Commands
-`rammp <command>`. Under sheppy, the `feeding` node runs `rammp feed`.
+`rammp <command>`, by hand. Under sheppy, the `feeding` node is a capability engine: the orchestrator starts its
+actions (`start_meal`, `feed` for one bite, `finish_meal`) and nothing moves otherwise ([interface](interface.md)).
 
 | Command | What it does |
 | --- | --- |

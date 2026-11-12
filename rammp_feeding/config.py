@@ -7,7 +7,8 @@
 
 Layers, later wins: config/rammp.yaml < the selected profiles (config/<kind>/<name>.yaml) < the machine's own file
 (<state_dir>/local.yaml: /config/local.yaml in the container) < the wrist camera's measured mount and the utensil's
-pixels (<state_dir>/wrist_mount.json: rammp calibrate-wrist) < RAMMP_SET="a.b=1,c=[1, 2]" (one run; the tests).
+pixels (<state_dir>/wrist_mount.json: rammp calibrate-wrist) < RAMMP_SET="a.b=1,c=[1, 2]" (one run, the tests; the
+node's ROS parameters arrive this way, rammp_feeding/engine.py). A `profiles.<kind>` override selects that profile.
 Units are in the key names (_m, _mps, _dps, _nm, _n, _s, _px).
 """
 
@@ -79,12 +80,25 @@ def _set(d, dotted, value):
     d[parts[-1]] = value
 
 
+def overrides(text: str) -> list[tuple[str, object]]:
+    """RAMMP_SET's syntax: "a.b=1,c=[1, 2]" -> [(dotted key, YAML value)]."""
+    out = []
+    for item in filter(None, re.split(r",(?![^\[]*\])", text)):
+        k, _, v = item.partition("=")
+        out.append((k.strip(), yaml.safe_load(v)))
+    return out
+
+
 def load() -> Cfg:
     c = yaml.safe_load((CONFIG / "rammp.yaml").read_text())
     state = Path(os.path.expanduser(os.environ.get("RAMMP_STATE_DIR", c["deployment"]["state_dir"])))
     local_path = state / "local.yaml"
     local = {} if os.environ.get("RAMMP_NO_LOCAL") or not local_path.exists() else (yaml.safe_load(local_path.read_text()) or {})
+    sets = overrides(os.environ.get("RAMMP_SET", ""))
     _merge(c["profiles"], local.get("profiles") or {})
+    for k, v in sets:                   # a profile selected for this run loads in place of the machine's
+        if k.startswith("profiles."):
+            _set(c, k, v)
     for kind in ("camera", "scene_camera", "utensil", "bowl", "food"):
         folder = "camera" if kind == "scene_camera" else kind
         c[kind] = yaml.safe_load((CONFIG / folder / (str(c["profiles"][kind]) + ".yaml")).read_text())
@@ -96,9 +110,8 @@ def load() -> Cfg:
             c["camera"]["mount"].update(camera_in_tool_m=m["camera_in_tool_m"], rotation_quat_xyzw=m["rotation_quat_xyzw"])
             if m.get("utensil") == c["profiles"]["utensil"]:                     # the utensil's pixels, the same run
                 c["utensil"].update(tip_px=m["tip_px"], image_region_px=m["image_region_px"])
-    for item in filter(None, re.split(r",(?![^\[]*\])", os.environ.get("RAMMP_SET", ""))):
-        k, _, v = item.partition("=")
-        _set(c, k.strip(), yaml.safe_load(v))
+    for k, v in sets:
+        _set(c, k, v)
     u = c["utensil"]                    # a ruler reading from the camera's glass + the camera's own glass-to-optical
     if u.get("glass_to_tip_m") is not None:
         u["camera_to_tip_m"] = round(float(u["glass_to_tip_m"]) + float(c["camera"].get("glass_to_optical_m", 0.0)), 6)
@@ -107,6 +120,38 @@ def load() -> Cfg:
 
 
 cfg = load()
+
+
+# ROS parameter -> its default and the config key it sets ("" leaves config/ and the site's local.yaml as they are)
+PARAMS = {
+    "state_dir": ("/config", None),                          # the site's state folder (deployment.state_dir)
+    "runs_dir": ("/runs", "deployment.runs_dir"),
+    "record": (False, "record.enabled"),                     # the run record: a debug setting
+    "camera_profile": ("", "profiles.camera"),               # config/camera/<name>.yaml: the wrist camera
+    "scene_camera_profile": ("", "profiles.scene_camera"),   # config/camera/<name>.yaml: the scene camera
+    "config": ("", None),                                    # any other key: "a.b=1,c=[1, 2]" (RAMMP_SET's syntax)
+}
+
+
+def apply_parameters(values: dict) -> None:
+    """The parameters into RAMMP_STATE_DIR / RAMMP_SET, then config/ loaded again with them."""
+    os.environ["RAMMP_STATE_DIR"] = str(values["state_dir"])
+    sets = ["%s=%s" % (key, str(values[name]).lower() if isinstance(values[name], bool) else values[name])
+            for name, (_, key) in PARAMS.items() if key and values[name] != ""]
+    if values["config"]:
+        sets.append(str(values["config"]))
+    if os.environ.get("RAMMP_SET"):
+        sets.insert(0, os.environ["RAMMP_SET"])
+    os.environ["RAMMP_SET"] = ",".join(sets)
+    reload()
+
+
+def reload() -> Cfg:
+    """Load again (after RAMMP_STATE_DIR / RAMMP_SET changed: the node's parameters), into the same `cfg` object. Modules
+    that keep a section of it (`DL = cfg.delivery`) keep the old values: reload before importing them."""
+    cfg.clear()
+    cfg.update(load())
+    return cfg
 
 # The site's own values -- measured on the robot (the wrist camera's mount, the utensil against that camera) or set
 # for the site (the table, where the bowl is laid): null until they are, and nothing that needs them builds the arm

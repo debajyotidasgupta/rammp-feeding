@@ -25,5 +25,5 @@ for p in (ROOT / "tests" / "poses").glob("*.json"):
 os.environ.update(RAMMP_NO_LOCAL="1", RAMMP_STATE_DIR=str(STATE),
                   RAMMP_SET="utensil.glass_to_tip_m=0.233,workspace.table_extent_m.x=[0.08, 0.76],"
                             "workspace.table_extent_m.y=[-0.30, 0.80],workspace.bowl_centre_m=[0.290, 0.158],"
-                            "deployment.runs_dir=%s,"
+                            "deployment.runs_dir=%s,record.enabled=true,"
                             "planner.world_file=%s,planner.world_file_in_planner=" % (WORK / "runs", STATE / "world.yaml"))

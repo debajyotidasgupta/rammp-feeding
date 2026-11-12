@@ -20,7 +20,7 @@ os.environ["RAMMP_SET"] += (",planner.world_file=/share/planner_world.yaml,"
 
 import numpy as np  # noqa: E402
 
-from fake_robot import FakeFace, FakeRobot, Scene  # noqa: E402
+from fake_robot import FakeFace, Scene  # noqa: E402
 from rammp_feeding import record, scene  # noqa: E402
 from rammp_feeding.acquire import acquire  # noqa: E402
 from rammp_feeding.arm import Arm  # noqa: E402
@@ -28,41 +28,7 @@ from rammp_feeding.cli import _target, detect, home, perceive  # noqa: E402
 from rammp_feeding.config import cfg, state_dir  # noqa: E402
 from rammp_feeding.deliver import deliver  # noqa: E402
 from rammp_feeding.ros import Robot  # noqa: E402
-
-
-class SimArmRobot(FakeRobot):
-    """tests/fake_robot.py's arm and scene, with the real arm stack's model, driver (each goal accepted, then
-    cancelled) and planner over ROS."""
-
-    def __init__(self, sc: Scene, ros: Robot, q0):
-        self.ros, self.accepted = ros, 0
-        super().__init__(sc, q0)
-
-    def robot_description(self, wait_s: float = 3.0):
-        return self.ros.robot_description(wait_s)
-
-    def execute(self, positions_rad, times_s, impedance=None, path_tolerance_rad=None, goal_tolerance_rad=None):
-        sim = self.ros.joint_sample()[1]                # the driver's simulator, where it is (it never moves)
-        tr = self.ros.execute(np.asarray(positions_rad) - positions_rad[0] + sim, times_s, impedance,
-                              path_tolerance_rad, goal_tolerance_rad)     # RobotError if it rejects the goal
-        tr.cancel()
-        assert tr.result()[0] == -6, "the driver ended an accepted goal with %s, not PREEMPTED" % (tr.result(),)
-        self.accepted += 1
-        return super().execute(positions_rad, times_s, impedance, path_tolerance_rad, goal_tolerance_rad)
-
-    def plan_joints(self, start_deg, goal_deg, timeout_s):
-        return self.ros.plan_joints(start_deg, goal_deg, timeout_s)
-
-    def set_world(self, path):
-        self.worlds.append(path)
-        self.ros.set_world(path)
-
-    def reset_world(self):
-        self.worlds.append("reset")
-        self.ros.reset_world()
-
-    def planner_listens(self):
-        return self.ros.planner_listens()
+from sim_arm import SimArmRobot  # noqa: E402
 
 
 def main() -> int:

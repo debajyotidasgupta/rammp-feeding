@@ -1,0 +1,15 @@
+# Luxonis OAK-D Pro W PoE fixed on the scene, through ROS 2 (rammp-deployments: scene_camera -> oak_d_pro_w_docker,
+# 640x400 at 15 fps): the COARSE bowl + table (rammp locate-scene), never the aim. Its depth is aligned to its colour
+# image (the colour's size and frame), so the colour stream's camera_info serves both. The robot's own /tf_static places
+# it (static_tf: arm_mount -> scene_camera, its calibrated mount), so nothing here measures or publishes its pose.
+# Its depth starts about 0.45 m out.
+
+streams:
+  colour_topic: /scene_camera/color/image_raw
+  depth_topic: /scene_camera/depth/image_rect_raw
+  depth_info_topic: /scene_camera/color/camera_info   # depth aligned to colour: the colour's intrinsics and frame
+
+pose_from: platform             # the robot's /tf_static: arm.base_frame -> link_frame (not rammp calibrate-scene)
+link_frame: scene_camera        # the frame the robot's static_tf places (the driver's tf base frame)
+
+error_m: 0.05                   # how far its reading may be off: the planner's world and our tip floor keep it as clearance

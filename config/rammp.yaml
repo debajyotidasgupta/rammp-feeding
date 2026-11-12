@@ -16,6 +16,9 @@ deployment:
                                 # camera's pose and latest reading (mounted from the host)
   runs_dir: /runs               # the run record (mounted from the host)
 
+record:                         # the run record (rammp_feeding/record.py): every stage's images, depth, telemetry, log
+  enabled: false                # a debug setting: off, nothing is written under runs_dir (the node's `record` parameter)
+
 ros:                            # the RAMMP stack's interfaces this module uses (the arm stack's 2.0 generation)
   robot_description: /arm/robot_description         # kinova-gen3-ros2's description node: the model, rooted at arm_mount
   joint_states: /joint_states                        # kinova-gen3-ros2: arm_joint_1..7 (about 50 Hz)
@@ -212,3 +215,8 @@ delivery:
   retract:
     back_off_mps: 0.20
     reach_margin_m: 0.10        # the planned return keeps the tip within its start's / goal's reach + this
+
+node:                           # the node's feed action (rammp_feeding/engine.py), one bite in at most ~105 s: the
+  open_mouth_timeout_s: 25.0    # orchestrator cancels an action at 120 s. No open mouth by then: the user declined
+  bite_timeout_s: 25.0          # no bite felt by then: back to the bowl, the food still on the fork
+  bite_settle_s: 5.0            # after the bite: at most this long for the force to settle

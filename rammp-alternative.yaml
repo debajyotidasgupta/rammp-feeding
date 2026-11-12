@@ -4,33 +4,47 @@
 # state folder (/srv/rammp_feeding/config) at /feeding read-only (set_world takes the world as a file path). For the
 # arm stack's 2.0 generation (kinova-gen3-ros2 2.0.0, rammp-curobo 2.0.1).
 - name: feeding
-  description: Robot-assisted feeding -- bite after bite until the bowl is empty or the user declines
+  description: Robot-assisted feeding -- a capability engine the orchestrator drives, one bite per action
   select: single
   alternatives:
-    # Transcribed from the feeding module's rammp-alternative.yaml. It moves the arm only through the arm node
-    # (execute_joint_trajectory: its own IK paths and the planner's paths), so `arm`, `arm_state_publisher` and
-    # `planner` must be selected alongside, with `wrist_camera`, `scene_camera` and `sam3`.
-    # Stopping the node cancels the move in flight: the arm halts where it is. It never commands the gripper.
-    # It uses the shared planner as configured for everyone: its own world goes in only while it plans, and the
-    # planner's comes back after.
+    # Transcribed from the feeding module's rammp-alternative.yaml. A capability engine (rammp-kitchen-capability-
+    # engines' CapabilityEngine, engine id `feeding`): it registers with the orchestrator and moves the arm only in an
+    # action the orchestrator starts (start_meal, feed, finish_meal; docs/interface.md). It moves the arm only through
+    # the arm node (execute_joint_trajectory: its own IK paths and the planner's paths), so `arm`,
+    # `arm_state_publisher` and `planner` must be selected alongside, with `wrist_camera`, `scene_camera` and `sam3`.
+    # Stopping it cancels the action in flight: the move stops and the arm settles. It never commands the gripper.
+    # It uses the shared planner as configured for everyone: its own world goes in only while an action plans, and the
+    # planner's comes back as the action ends.
     - id: rammp_feeding_docker
+      tier: experimental
       kind: docker
       container:
-        image: debajyotidasgupta/rammp-feeding:0.3.0     # Docker Hub, arm64
+        image: debajyotidasgupta/rammp-feeding:0.4.0     # Docker Hub, arm64
         network_mode: host
         ipc: host
         user: "1000:1000"
         # State across runs (patterns/storing-state-across-runs): local.yaml, the captured poses, the wrist camera's
         # measured mount, the scene camera's measured pose and latest reading, the world it hands the planner. The run
-        # record beside it.
+        # record beside it (only with `record` on).
         volumes:
           - /srv/rammp_feeding/config:/config     # the host's folders, owned by uid 1000 (docs/porting.md)
           - /srv/rammp_feeding/runs:/runs
         environment:
           ROS_DOMAIN_ID: "0"
           HOME: /tmp
-        command: ros2 launch rammp_feeding feed.launch.py
-      # (the cameras' topics: the selected camera profiles', config/camera/*.yaml; these are the default profiles')
+        # The node's executable (sheppy appends --ros-args --params-file with the params below)
+        command: ["/module_ws/install/rammp_feeding/lib/rammp_feeding/feeding_node"]
+      # Per robot, overridable from a profile (docs/interface.md, Parameters). The defaults are the December demo
+      # robot's cameras (OAK-D Pro on the wrist, OAK-D Pro W on the scene).
+      params:
+        use_orchestrator: true
+        state_dir: /config
+        runs_dir: /runs
+        record: false                       # the run record: a debug setting, off
+        camera_profile: oak_d_pro
+        scene_camera_profile: oak_d_pro_w
+        config: ""                          # any other setting, "a.b=1,c=[1, 2]"
+      # (the cameras' topics: the selected camera profiles', config/camera/*.yaml; these are the defaults')
       subscribes:
         - /arm/robot_description
         - /joint_states
@@ -40,15 +54,39 @@
         - /wrist_camera/color/image_raw
         - /wrist_camera/color/camera_info
         - /wrist_camera/depth/image_rect_raw
-        - /wrist_camera/depth/camera_info
         - /scene_camera/color/image_raw
         - /scene_camera/color/camera_info
-        - /scene_camera/depth/image_raw
-        - /scene_camera/depth/camera_info
+        - /scene_camera/depth/image_rect_raw
       publishes:
+        - /feeding/status
         - /tf_static
         - /reset
-    # Wiring only, like every mock here: the module is reached through its command, not a topic.
+    # The real alternative's interface with no hardware: the same node with mock:=true (it registers and answers
+    # every action at once; nothing moves).
     - id: feeding_mock
-      kind: process
-      command: "bash -lc 'sleep infinity'"
+      tier: experimental
+      kind: docker
+      container:
+        image: debajyotidasgupta/rammp-feeding:0.4.0
+        network_mode: host
+        ipc: host
+        environment:
+          ROS_DOMAIN_ID: "0"
+          HOME: /tmp
+        command: ["ros2", "launch", "rammp_feeding", "feeding.launch.py", "mock:=true"]
+      subscribes:
+        - /arm/robot_description
+        - /joint_states
+        - /control_status
+        - /tf
+        - /tf_static
+        - /wrist_camera/color/image_raw
+        - /wrist_camera/color/camera_info
+        - /wrist_camera/depth/image_rect_raw
+        - /scene_camera/color/image_raw
+        - /scene_camera/color/camera_info
+        - /scene_camera/depth/image_rect_raw
+      publishes:
+        - /feeding/status
+        - /tf_static
+        - /reset

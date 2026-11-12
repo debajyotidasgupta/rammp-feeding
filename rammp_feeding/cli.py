@@ -89,15 +89,19 @@ def home(robot, arm, direct: bool = False, dps: float | None = None) -> None:
     arm.travel(scene.captured("home"), "to feeding_start")
 
 
-def perceive(robot, arm) -> int:
+def perceive_target(robot, arm) -> tuple[int, dict | None]:
+    """A new bite's target: (0, the target), or (NoTarget's code, None)."""
     from rammp_feeding.perception import NoTarget, perceive as run
     record.bite()
     try:
-        run(robot, arm, record.stage("perceive"))
+        return 0, run(robot, arm, record.stage("perceive"))
     except NoTarget as e:
         log.info("  %s", e)
-        return e.rc
-    return 0
+        return e.rc, None
+
+
+def perceive(robot, arm) -> int:
+    return perceive_target(robot, arm)[0]
 
 
 def _target() -> dict:
@@ -117,7 +121,7 @@ def feed(robot, arm, face, bites: int) -> int:
     while n < bites:
         t0 = time.time()
         log.info("\n== bite %d  %s", n + 1, time.strftime("%H:%M:%S"))
-        rc = perceive(robot, arm)
+        rc, target = perceive_target(robot, arm)
         if rc == 3:
             log.info("the bowl is empty")
             break
@@ -125,7 +129,7 @@ def feed(robot, arm, face, bites: int) -> int:
             log.info("food left but none pickable -- stopping")
             home(robot, arm)
             return rc
-        acquire(robot, arm, _target(), record.stage("acquire"))
+        acquire(robot, arm, target, record.stage("acquire"))
         rc = deliver(robot, arm, face, record.stage("deliver"))
         if rc in (4, 7, 8):
             log.info({4: "no bite: the piece may still be on the utensil -- stopping", 7: "the user declined",

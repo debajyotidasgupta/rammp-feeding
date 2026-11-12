@@ -4,7 +4,7 @@ from setuptools import setup
 
 setup(
     name="rammp_feeding",
-    version="0.3.0",
+    version="0.4.0",
     packages=["rammp_feeding"],
     data_files=[
         ("share/ament_index/resource_index/packages", ["resource/rammp_feeding"]),
@@ -13,5 +13,5 @@ setup(
         ("share/rammp_feeding/config", glob("config/*.yaml")),
     ] + [("share/rammp_feeding/config/" + d, glob("config/%s/*.yaml" % d)) for d in ("bowl", "camera", "food", "utensil", "machines")],
     install_requires=["setuptools"],
-    entry_points={"console_scripts": ["rammp = rammp_feeding.cli:main"]},
+    entry_points={"console_scripts": ["rammp = rammp_feeding.cli:main", "feeding_node = rammp_feeding.engine:main"]},
 )

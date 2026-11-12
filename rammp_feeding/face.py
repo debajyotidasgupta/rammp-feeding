@@ -9,13 +9,11 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
 
 from rammp_feeding import record
 from rammp_feeding.config import cfg
@@ -92,7 +90,7 @@ class Face:
                 return True
         return False
 
-    def wait_open(self, cam, timeout_s: float, out: Path) -> tuple[float, np.ndarray] | None:
+    def wait_open(self, cam, timeout_s: float, out: Path | None) -> tuple[float, np.ndarray] | None:
         """Watch the wrist camera until the mouth has been open open_mouth_hold_s (frames with no face found are
         skipped, up to open_mouth_gap_s: a far face is not found in every frame): (that frame's time, RGB), or None
         (the user declined). open_wait.json keeps the trace."""
@@ -111,7 +109,7 @@ class Face:
                 if o > float(DL.open_mouth_ratio):
                     since = since or time.time()
                     if time.time() - since >= float(DL.open_mouth_hold_s):
-                        Image.fromarray(rgb).save(out / "colour.jpg", quality=95)
+                        record.save_image(out, "colour.jpg", rgb, quality=95)
                         log.info("    mouth open (%.2f) after %.1f s", o, time.time() - t0)
                         return t, rgb
                 elif L is not None or time.time() - seen > float(DL.open_mouth_gap_s):
@@ -120,8 +118,8 @@ class Face:
             return None
         finally:
             try:
-                (out / "open_wait.json").write_text(json.dumps(dict(t=[r[0] for r in trace], open=[r[1] for r in trace],
-                                                                    face=[r[2] for r in trace])))
+                record.save_json(out, "open_wait.json", dict(t=[r[0] for r in trace], open=[r[1] for r in trace],
+                                                              face=[r[2] for r in trace]))
             except OSError:
                 pass
             record.event("open_wait", frames=len(trace), seconds=round(time.time() - t0, 2))

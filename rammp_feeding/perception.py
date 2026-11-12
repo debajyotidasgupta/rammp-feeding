@@ -12,7 +12,6 @@ bowl is empty; 5: food is left but no piece is pickable.
 
 from __future__ import annotations
 
-import json
 import logging
 import math
 import time
@@ -94,8 +93,8 @@ def food_left(W: np.ndarray, uv: np.ndarray, bowl: np.ndarray, ws: dict) -> floa
     return float((z > np.percentile(z, 10) + float(P.food_left_above_floor_mm) / 1000.0).mean())
 
 
-def perceive(robot, arm, out: Path) -> dict:
-    """At food_detect_start: the target -> out/target.json (tool_goal, the piece in the base frame); NoTarget else."""
+def perceive(robot, arm, out: Path | None) -> dict:
+    """At food_detect_start: the target (tool_goal, the piece in the base frame; also out/target.json), or NoTarget."""
     from rammp_feeding.arm import MoveError
     q = arm.q()
     scene.at_food_detect_start(arm, q)
@@ -103,8 +102,8 @@ def perceive(robot, arm, out: Path) -> dict:
     cam = robot.cameras["camera"]
     _, rgb = cam.frame(after=since)
     D = cam.depth_median(int(P.depth_frames), since, wait_s=float(P.depth_wait_s))
-    Image.fromarray(rgb).save(out / "colour.jpg", quality=95)
-    np.save(out / "depth.npy", D)
+    record.save_image(out, "colour.jpg", rgb, quality=95)
+    record.save_npy(out, "depth.npy", D)
     t0 = time.time()
     dets = robot.detect("camera", list(P.bowl_prompts) + [str(cfg.food.prompt)], float(P.bowl_score_threshold))
     from scipy.ndimage import binary_fill_holes                  # its mask stops at the food on it: the food is inside
@@ -115,36 +114,39 @@ def perceive(robot, arm, out: Path) -> dict:
     hits = [m for m in (binary_fill_holes(d.mask) for d in dets if d.label in P.bowl_prompts)
             if 0 <= v < m.shape[0] and 0 <= u < m.shape[1] and m[v, u]]
     if not hits:
-        _draw(rgb, None, [], out / "detection.jpg")
-        raise MoveError("no SAM3 bowl mask covers the bowl's centre, (%.3f, %.3f) at pixel (%d, %d) (%s)"
-                        % (*ws["bowl_xy"], u, v, out / "detection.jpg"))
+        _draw(rgb, None, [], out)
+        raise MoveError("no SAM3 bowl mask covers the bowl's centre, (%.3f, %.3f) at pixel (%d, %d)"
+                        % (*ws["bowl_xy"], u, v))
     bowl = min(hits, key=lambda m: int(m.sum()))
     pieces = food(rgb, [d for d in dets if d.label == str(cfg.food.prompt) and d.score >= float(P.score_threshold)], bowl)
     log.info("  SAM3 %.2f s: the bowl, %d piece(s) of %d detections", time.time() - t0, len(pieces), len(dets))
     W, uv, _ = world_points(arm.cam, arm, D, q)
     geo = [(d, piece_geometry(W, uv, d.mask)) for d in pieces]
     geo = [(d, g) for d, g in geo if g is not None]
-    _draw(rgb, bowl, pieces, out / "detection.jpg")
+    _draw(rgb, bowl, pieces, out)
     if not geo:
         left = food_left(W, uv, bowl, ws)
         if left > float(P.food_left_min_frac):
-            (out / "food_left").write_text("food left, no pickable piece detected\n")
+            record.save_text(out, "food_left", "food left, no pickable piece detected\n")
             raise NoTarget("food is left in the bowl (%.0f%% stands above its floor) but no piece is pickable" % (100 * left), 5)
-        (out / "no_food").write_text("no food detected\n")
+        record.save_text(out, "no_food", "no food detected\n")
         raise NoTarget("no food in the bowl", 3)
     d, g = min(geo, key=lambda dg: math.hypot(dg[1]["xy"][0] - ws["bowl_xy"][0], dg[1]["xy"][1] - ws["bowl_xy"][1]))
     T, _ = arm.tool(q)
     tip = arm.tip(q)
     goal = [float(T[0] + g["xy"][0] - tip[0]), float(T[1] + g["xy"][1] - tip[1]), float(T[2])]
     tgt = dict(piece=dict(g, box=d.box, score=d.score), tool_now=[float(v) for v in T], tool_goal=goal, t=time.time())
-    (out / "target.json").write_text(json.dumps(tgt, indent=1))
+    record.save_json(out, "target.json", tgt)
     log.info("  target: the piece at (%.3f, %.3f), its top z %.3f; the tool slides %+.1f, %+.1f mm", *g["xy"], g["top_z"],
              1000 * (goal[0] - T[0]), 1000 * (goal[1] - T[1]))
     record.event("perceived", target=tgt, pieces=len(geo))
     return tgt
 
 
-def _draw(rgb, bowl: np.ndarray | None, pieces, path: Path) -> None:
+def _draw(rgb, bowl: np.ndarray | None, pieces, out: Path | None) -> None:
+    """The detections drawn on the frame -> out/detection.jpg (the record)."""
+    if out is None:
+        return
     im = rgb.copy()
     if bowl is not None:
         im[bowl] = (0.6 * im[bowl] + 0.4 * np.array([234, 179, 8])).astype(np.uint8)
@@ -153,7 +155,7 @@ def _draw(rgb, bowl: np.ndarray | None, pieces, path: Path) -> None:
     for d in pieces:
         dr.rectangle(d.box, outline=(34, 197, 94), width=3)
     dr.rectangle(list(cfg.utensil.image_region_px), outline=(148, 163, 184), width=1)
-    pil.save(path, quality=90)
+    record.save_image(out, "detection.jpg", pil)
 
 
 # ------------------------------------------------------------------ under the tip

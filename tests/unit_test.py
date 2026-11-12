@@ -950,5 +950,121 @@ class SceneCalibration(unittest.TestCase):
         self.assertLess(math.degrees(np.linalg.norm(g.rot_log(Es[:3, :3] @ E[:3, :3].T))), 0.5)
 
 
+
+class Node(unittest.TestCase):
+    """What the capability engine (rammp_feeding/engine.py) relies on, without ROS."""
+
+    def test_with_the_record_off_nothing_is_written(self):
+        from rammp_feeding import record
+        from rammp_feeding.config import runs_dir
+        was, before = cfg["record"]["enabled"], sorted(runs_dir().rglob("*"))
+        cfg["record"]["enabled"] = False
+        try:
+            record.end_session()
+            self.assertIsNone(record.session("off"))
+            self.assertIsNone(record.bite())
+            self.assertIsNone(record.stage("perceive"))
+            self.assertIsNone(record.here())
+            record.event("x", a=1)
+            self.assertIsNone(record.save_arrays("y", a=[1.0]))
+            record.save_json(record.stage("s"), "f.json", {})
+            record.save_image(record.here(), "f.jpg", np.zeros((2, 2, 3), np.uint8))
+            with self.assertRaises(FileNotFoundError):
+                record.latest_bite()
+            self.assertEqual(sorted(runs_dir().rglob("*")), before)
+        finally:
+            cfg["record"]["enabled"] = was
+            record.end_session()
+
+    def test_the_nodes_parameters_select_the_sites_profiles(self):
+        from rammp_feeding import config
+        env = dict(os.environ)
+        try:
+            config.apply_parameters(dict(state_dir=str(state_dir()), runs_dir=str(WORK / "runs"), record=True,
+                                         camera_profile="oak_d_pro", scene_camera_profile="oak_d_pro_w",
+                                         config="delivery.stop_m=0.09"))
+            self.assertEqual((cfg.profiles.camera, cfg.profiles.scene_camera), ("oak_d_pro", "oak_d_pro_w"))
+            self.assertEqual(cfg.camera.streams.depth_info_topic, "/wrist_camera/color/camera_info")
+            self.assertEqual(cfg.scene_camera.streams.depth_topic, "/scene_camera/depth/image_rect_raw")
+            self.assertEqual(cfg.scene_camera.pose_from, "platform")
+            self.assertAlmostEqual(float(cfg.delivery.stop_m), 0.09)
+            self.assertIs(cfg.record.enabled, True)
+        finally:
+            os.environ.clear()
+            os.environ.update(env)
+            config.reload()
+        self.assertEqual(cfg.profiles.camera, "realsense_d405")
+
+    def test_the_robots_own_tf_places_the_scene_camera(self):
+        from rammp_feeding import scene_camera as sc_
+        from rammp_feeding.config import Cfg
+
+        class Tf:
+            published = []
+
+            def transform(self, target, source, wait_s=3.0):
+                T = np.eye(4)
+                T[:3, 3] = [0.1, -0.5, 0.4]
+                return T if (target, source) == (str(cfg.arm.base_frame), "scene_camera") else None
+
+            def publish_static(self, *a):
+                self.published.append(a)
+        was = sc_.SC
+        sc_.SC = Cfg(dict(was, pose_from="platform", link_frame="scene_camera"))
+        f = state_dir() / "scene_extrinsic.json"
+        existed = f.exists()
+        try:
+            f.write_text(json.dumps(dict(xyz=[0, 0, 0], quat_xyzw=[0, 0, 0, 1])))
+            T, source = sc_.extrinsic(Tf())
+            self.assertEqual(list(T[:3, 3]), [0.1, -0.5, 0.4])
+            self.assertIn("tf_static", source)
+            sc_.publish(Tf())
+            self.assertEqual(Tf.published, [], "our pose published over the robot's own")
+            with self.assertRaises(RuntimeError):
+                sc_.calibrate(Tf(), None)
+        finally:
+            sc_.SC = was
+            if not existed:
+                f.unlink()
+
+    def test_the_planners_world_file_is_written_only_when_it_changes(self):
+        sc = Scene()
+        site(sc)
+        robot = FakeRobot(sc, scene.captured("home"))
+        p = Path(str(cfg.planner.world_file)).expanduser()
+        scene.push_world(robot)
+        m0 = p.stat().st_mtime_ns
+        time.sleep(0.02)
+        scene.push_world(robot)
+        self.assertEqual(p.stat().st_mtime_ns, m0, "rewritten unchanged")
+        try:
+            scene.measured_mouth([-0.6, 0.3, 0.4])
+            scene.push_world(robot)
+            self.assertNotEqual(p.stat().st_mtime_ns, m0, "not written when it changed")
+        finally:
+            scene.measured_mouth(None)
+        self.assertEqual(len(robot.worlds), 3, "the planner not told every time")
+
+    def test_a_camera_keeps_a_few_frames_undecoded_and_sees_a_cancel(self):
+        from types import SimpleNamespace
+        from rammp_feeding.ros import Camera
+
+        def depth(v):
+            return SimpleNamespace(encoding="16UC1", height=2, width=3, data=np.full(6, v, np.uint16).tobytes())
+        cam, t0 = Camera("/c", "/d", keep=30), time.time()
+        for v in range(40):
+            cam.on_depth(depth(v + 1))
+        self.assertEqual(len(cam.depth), 30)
+        self.assertIsInstance(cam.depth[-1][1], SimpleNamespace, "decoded as it arrived")
+        self.assertTrue((cam.depth_median(5, t0) == 13).all())
+        polls = []
+
+        def check():
+            polls.append(1)
+            if len(polls) > 2:
+                raise KeyboardInterrupt
+        with self.assertRaises(KeyboardInterrupt):
+            Camera("/c", "/d", check=check).frame(wait_s=5.0)
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

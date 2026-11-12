@@ -227,7 +227,7 @@ def fork_views(robot, arm, X: np.ndarray, B: np.ndarray) -> list[np.ndarray]:
         _move(arm, Tk, R, "fork %d" % k)
         time.sleep(float(WC.settle_s))
         _, rgb = robot.cameras["camera"].frame(after=time.time())
-        Image.fromarray(rgb).save(out / ("wrist_fork%d.jpg" % k), quality=90)
+        record.save_image(out, "wrist_fork%d.jpg" % k, rgb)
         frames.append(rgb)
     for Tg, label in ((pts[0], "back over the board"), (up, "in"), (None, "down to feeding_start")):
         _move(arm, Tg, R, label)
@@ -286,7 +286,7 @@ def board_views(robot, arm) -> list | None:
             if label == "pose 0" and t_end - time.time() > float(WC.wait_board_s) - 2 * float(WC.settle_s):
                 log.info("    no board under the camera (%d corners): lay it under the utensil (waiting %.0f s)", n,
                          float(WC.wait_board_s))
-        Image.fromarray(rgb).save(out / ("wrist_%s.jpg" % label.replace(" ", "")), quality=90)
+        record.save_image(out, "wrist_%s.jpg" % label.replace(" ", ""), rgb)
         log.info("    %-22s %s", label, "the board, %d corners" % n if C is not None else "no board (%d corners)" % n)
         why = None
         if C is None and label == "pose 0":

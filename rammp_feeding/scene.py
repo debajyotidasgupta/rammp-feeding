@@ -204,8 +204,10 @@ def push_world(robot) -> None:
     (restore_world: the planner's /reset): other clients plan against the planner's own world."""
     from pathlib import Path
     p = Path(str(cfg.planner.world_file)).expanduser()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(yaml.safe_dump(world()))
+    text = yaml.safe_dump(world())
+    if not p.exists() or p.read_text() != text:          # (written only when it changes: a planned move is frequent)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text)
     robot.set_world(str(cfg.planner.world_file_in_planner or p))
     robot.world_pushed = True
 

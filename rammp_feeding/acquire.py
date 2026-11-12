@@ -27,7 +27,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
 
 from rammp_feeding import record, scene
 from rammp_feeding.arm import Arm, MoveError, TorqueGuard
@@ -47,16 +46,16 @@ class Food:
     floor_m: float                      # how far above the floor the tip stopped
 
 
-def measure(robot, arm: Arm, out: Path, name: str) -> dict:
+def measure(robot, arm: Arm, out: Path | None, name: str) -> dict:
     """What is under the tip, from depth frames that arrived after the arm stopped here."""
     D = robot.cameras["camera"].depth_median(int(cfg.perception.depth_frames), time.time(),
                                              wait_s=float(cfg.perception.depth_wait_s))
-    np.save(out / ("depth_%s.npy" % name), D)
+    record.save_npy(out, "depth_%s.npy" % name, D)
     try:
         u = under_tip(D, arm)
     except ValueError as e:
         raise MoveError(str(e))
-    (out / ("under_%s.json" % name)).write_text(json.dumps(u, indent=1))
+    record.save_json(out, "under_%s.json" % name, u)
     log.info("  under the tip: the top %.0f mm down%s", 1000 * u["gap_top"],
              ", the floor %.0f mm down, the food %.0f mm tall" % (1000 * u["gap_floor"], 1000 * u["height"])
              if "floor_z" in u else ", no floor seen")
@@ -100,7 +99,7 @@ def _speed(slow_at: float):
     return v
 
 
-def plunge(arm: Arm, u: dict, out: Path, scoop_after: bool = True) -> Food:
+def plunge(arm: Arm, u: dict, out: Path | None, scoop_after: bool = True) -> Food:
     q0 = arm.q()
     T0, R0 = arm.tool(q0)
     down, food = plunge_depth(u, float((T0 + R0 @ arm.tip_tool)[2]))
@@ -125,8 +124,9 @@ def plunge(arm: Arm, u: dict, out: Path, scoop_after: bool = True) -> Food:
         hit = guard.update(tau)
         return ("joint %d torque step %s" % (hit[0] + 1, "in the food" if inside else "above the food")) if hit else None
     arm.run(path, "plunge", durations=durations, torque_stop=False, check=contact)
-    (out / "food.json").write_text(json.dumps(dict(height=food.height, floor_m=food.floor_m, joints_deg=arm.q()), indent=1))
-    Image.fromarray(arm.robot.cameras["camera"].frame(after=time.time())[1]).save(out / "plunge_end.jpg", quality=90)
+    record.save_json(out, "food.json", dict(height=food.height, floor_m=food.floor_m, joints_deg=arm.q()))
+    if out is not None:
+        record.save_image(out, "plunge_end.jpg", arm.robot.cameras["camera"].frame(after=time.time())[1])
     if scoop is not None:
         run_scoop(arm, scoop)
         rise(arm, "lift")                                 # clear of the planner's world: the swing starts from here
@@ -214,14 +214,14 @@ def rise(arm: Arm, label: str = "rise") -> None:
         arm.straight(np.array([T[0], T[1], top]), R, float(A.stepped.rise_mps), label)
 
 
-def acquire(robot, arm: Arm, target: dict, out: Path, stop_after: str = "", start_at: str = "over") -> int:
+def acquire(robot, arm: Arm, target: dict, out: Path | None, stop_after: str = "", start_at: str = "over") -> int:
     """over -> measure -> plunge + scoop + lift (the default), or the hover route (stop_after hover30 / hover10)."""
     H = A.stepped
     if start_at not in ("over", "plunge", "scoop"):
         raise ValueError("acquire starts at over, plunge or scoop, not %r" % start_at)
     if start_at == "scoop":                               # the tines in the piece, where this bite's plunge left them
-        f = out / "food.json"
-        if not f.exists():
+        f = out / "food.json" if out is not None else None
+        if f is None or not f.exists():
             raise FileNotFoundError("no plunge in this bite (%s) -- the scoop starts where a plunge ends" % f)
         kept = json.loads(f.read_text())
         q = arm.q()

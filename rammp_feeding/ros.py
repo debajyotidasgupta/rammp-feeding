@@ -1,4 +1,11 @@
-"""The robot, as the RAMMP stack serves it -- the only module that speaks ROS 2. One node, spun on its own thread:
+"""The robot, as the RAMMP stack serves it -- the only module that speaks ROS 2. Two ways to run:
+
+  the rammp CLI   its own node, spun on its own thread, everything below subscribed for the command's life
+  the node        (rammp_feeding/engine.py) one Robot per action, on the engine's node: every subscription, client and
+                  publisher made in that action's scope and destroyed when it ends (close()), only the cameras the
+                  action uses, and `check()` -- the action's cancel -- polled by every wait here
+
+What it uses:
 
   arm       kinova-gen3-ros2 2.0: /arm/robot_description (its model, rooted at arm_mount), /joint_states
             (arm_joint_1..7: joints, torques), /control_status (the e-stop, arbitration), /execute_joint_trajectory
@@ -80,39 +87,65 @@ def median_depth(frames: list[np.ndarray]) -> np.ndarray:
     return np.nan_to_num(d, nan=0.0).astype(np.uint16)
 
 
+def transform_msg(stamp, parent: str, child: str, T: np.ndarray):
+    """geometry_msgs/TransformStamped: parent -> child (4 x 4)."""
+    from geometry_msgs.msg import TransformStamped
+    m = TransformStamped()
+    m.header.stamp = stamp
+    m.header.frame_id, m.child_frame_id = parent, child
+    m.transform.translation.x, m.transform.translation.y, m.transform.translation.z = (float(v) for v in T[:3, 3])
+    m.transform.rotation.x, m.transform.rotation.y, m.transform.rotation.z, m.transform.rotation.w = matrix_quat(T[:3, :3])
+    return m
+
+
 def _info_topic(image_topic: str) -> str:
     return image_topic.rsplit("/", 1)[0] + "/camera_info"
 
 
 class Camera:
-    """One camera: its latest colour frame, a few seconds of depth frames, and its model (camera_info + tf)."""
+    """One camera: its latest colour frame, the last couple of seconds of depth frames (kept as they arrive, decoded only
+    when asked for), and its model (camera_info + tf)."""
 
-    def __init__(self, colour_topic: str, depth_topic: str):
+    def __init__(self, colour_topic: str, depth_topic: str, depth_info_topic: str | None = None, check=None,
+                 keep: int = 30):
         self.colour_topic, self.depth_topic = colour_topic, depth_topic
-        self.colour: tuple[float, np.ndarray] | None = None
-        self.depth: deque = deque(maxlen=150)
+        self.depth_info_topic = depth_info_topic or _info_topic(depth_topic)
+        self.colour = None                         # (arrival, the message)
+        self.depth: deque = deque(maxlen=keep)     # (arrival, the message)
         self.info: dict = {}                       # "colour" / "depth" -> (Intrinsics, frame_id)
         self.model: CameraModel | None = None
         self.cv = threading.Condition()
+        self.check = check or (lambda: None)
 
     def on_colour(self, msg) -> None:
         with self.cv:
-            self.colour = (time.time(), image_array(msg))
+            self.colour = (time.time(), msg)
             self.cv.notify_all()
 
     def on_depth(self, msg) -> None:
         with self.cv:
-            self.depth.append((time.time(), image_array(msg)))
+            self.depth.append((time.time(), msg))
             self.cv.notify_all()
+
+    def _wait(self, t_end: float) -> bool:
+        """Wait for the next frame, at most until t_end, in short slices so a cancel is seen: False once past it."""
+        self.check()
+        left = t_end - time.time()
+        if left <= 0:
+            return False
+        self.cv.wait(min(left, 0.1))
+        return True
 
     def frame(self, after: float = 0.0, wait_s: float = 3.0) -> tuple[float, np.ndarray]:
         """The newest colour frame that arrived after `after` (unix s): (arrival, RGB)."""
+        self.check()
         t_end = time.time() + wait_s
         with self.cv:
             while self.colour is None or self.colour[0] <= after:
-                if not self.cv.wait(max(0.0, t_end - time.time())):
+                if not self._wait(t_end):
                     raise RobotError("no colour frame on %s in %.0f s" % (self.colour_topic, wait_s))
-            return self.colour
+            t, msg = self.colour
+        return t, image_array(msg)
 
     def depth_median(self, frames: int, since: float, wait_s: float = 3.0, min_frames: int = 5) -> np.ndarray:
         """The median of the first `frames` depth frames that arrived after `since` (when the arm stopped): after
@@ -120,13 +153,15 @@ class Camera:
         t_end = time.time() + wait_s
         with self.cv:
             while True:
-                got = [f for t, f in self.depth if t >= since]
+                got = [m for t, m in self.depth if t >= since]
                 if len(got) >= frames:
-                    return median_depth(got[:frames])
-                if not self.cv.wait(max(0.0, t_end - time.time())):
+                    got = got[:frames]
+                    break
+                if not self._wait(t_end):
                     if len(got) >= min_frames:
-                        return median_depth(got)
+                        break
                     raise RobotError("only %d depth frames on %s in %.0f s" % (len(got), self.depth_topic, wait_s))
+        return median_depth([image_array(m) for m in got])
 
 
 class Trajectory:
@@ -151,11 +186,14 @@ class Trajectory:
 
 
 class Robot:
-    def __init__(self, name: str = "rammp_feeding"):
+    def __init__(self, name: str = "rammp_feeding", *, node=None, group=None, roles=("camera", "scene_camera"),
+                 check=None, static_tf=None, reset=None):
+        """Standalone (node None): its own node and executor. Under the node: `node` and `group` the engine's, `roles`
+        the cameras this action uses, `check()` raising once the action is cancelled, `static_tf(msg)` the engine's
+        static broadcaster, `reset` its planner-reset publisher."""
         import rclpy
         from rclpy.action import ActionClient
         from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
-        from rclpy.executors import MultiThreadedExecutor
         from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
         from rammp_arm_interfaces.action import ExecuteJointTrajectory
         from rammp_common_interfaces.msg import ControlStatus
@@ -164,70 +202,97 @@ class Robot:
         from rammp_perception_interfaces.srv import Detect
         from sensor_msgs.msg import CameraInfo, Image, JointState
         from std_msgs.msg import Empty, String
-        from tf2_ros import Buffer, StaticTransformBroadcaster, TransformListener
 
-        if not rclpy.ok():                 # no rclpy signal handlers: Ctrl-C must reach the move in flight (it cancels)
-            from rclpy.signals import SignalHandlerOptions
-            rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
-        self.node = n = rclpy.create_node(name)
-        cb = ReentrantCallbackGroup()
-        latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.check = check or (lambda: None)
         self._lock = threading.Lock()
         self._joint: tuple[float, np.ndarray, np.ndarray] | None = None     # (time, raw q rad, effort N.m)
+        self._joint_stamp = -1.0
         self.estopped, self.arbitration, self.description = False, False, None
-        self.token = list(bytes.fromhex(os.environ.get("RAMMP_ARM_TOKEN", "00" * 16)))   # from the orchestrator
+        latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self._scope = self._executor = None
+        if node is None:                   # the rammp CLI: a node of its own
+            if not rclpy.ok():             # no rclpy signal handlers: Ctrl-C must reach the move in flight (it cancels)
+                from rclpy.signals import SignalHandlerOptions
+                rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
+            from tf2_ros import Buffer, StaticTransformBroadcaster, TransformListener
+            self.node = n = rclpy.create_node(name)
+            cb = ReentrantCallbackGroup()
+            sub = lambda t, topic, f, qos, group=cb: n.create_subscription(t, topic, f, qos, callback_group=group)  # noqa: E731
+            client = lambda t, name: n.create_client(t, name, callback_group=cb)                                    # noqa: E731
+            action = lambda t, name: ActionClient(n, t, name, callback_group=cb)                                    # noqa: E731
+            pub = n.create_publisher
+            self.tf = Buffer()
+            self._tf_listener = TransformListener(self.tf, n, spin_thread=False)
+            self._static_tf = StaticTransformBroadcaster(n).sendTransform
+            joints_group = MutuallyExclusiveCallbackGroup()             # (in order: one at a time)
+            self.token = list(bytes.fromhex(os.environ.get("RAMMP_ARM_TOKEN", "00" * 16)))
+        else:                              # under the node: this action's scope on the engine's node
+            from capability_engine.action_scope import ActionScope
+            self.node = node
+            self._scope = scope = ActionScope(node, group)
+            sub = lambda t, topic, f, qos, group=None: scope.create_subscription(t, topic, f, qos)    # noqa: E731
+            client, action, pub = scope.create_client, scope.create_action_client, scope.create_publisher
+            self.tf = scope.create_tf_buffer()
+            self._static_tf = static_tf
+            joints_group = None
+            self.token = [0] * 16          # (the orchestrator's token does not reach engines yet: self.arm sends none)
 
         def status(m):
             self.estopped, self.arbitration = bool(m.estopped), bool(m.arbitration_enabled)
         R = cfg.ros
-        n.create_subscription(JointState, str(R.joint_states), self._on_joints, qos_profile_sensor_data,
-                              callback_group=MutuallyExclusiveCallbackGroup())          # (in order: one at a time)
-        n.create_subscription(ControlStatus, str(R.control_status), status, latched, callback_group=cb)
-        n.create_subscription(String, str(R.robot_description), lambda m: setattr(self, "description", m.data), latched,
-                              callback_group=cb)
-        self.tf = Buffer()
-        self._tf_listener = TransformListener(self.tf, n, spin_thread=False)
-        self._static_tf = StaticTransformBroadcaster(n)
+        sub(JointState, str(R.joint_states), self._on_joints, qos_profile_sensor_data, joints_group)
+        sub(ControlStatus, str(R.control_status), status, latched)
+        sub(String, str(R.robot_description), lambda m: setattr(self, "description", m.data), latched)
         self.cameras: dict[str, Camera] = {}
-        for role in ("camera", "scene_camera"):
+        for role in roles:
             s = cfg.get(role + ".streams", None)
             if not s:
                 continue
-            cam = self.cameras[role] = Camera(str(s.colour_topic), str(s.depth_topic))
-            n.create_subscription(Image, cam.colour_topic, cam.on_colour, qos_profile_sensor_data, callback_group=cb)
-            n.create_subscription(Image, cam.depth_topic, cam.on_depth, qos_profile_sensor_data, callback_group=cb)
-            for kind, topic in (("colour", cam.colour_topic), ("depth", cam.depth_topic)):
-                n.create_subscription(CameraInfo, _info_topic(topic),
-                                      lambda m, c=cam, k=kind: c.info.__setitem__(k, (Intrinsics.from_camera_info(m),
-                                                                                      m.header.frame_id)),
-                                      qos_profile_sensor_data, callback_group=cb)
-        self._exec = ActionClient(n, ExecuteJointTrajectory, str(R.execute_action), callback_group=cb)
-        self._plan = ActionClient(n, PlanToJoints, str(R.plan_action), callback_group=cb)
-        self._world = n.create_client(SetWorld, str(R.set_world_service), callback_group=cb)
-        self._reset = n.create_publisher(Empty, str(R.planner_reset), 1)
-        self._detect = n.create_client(Detect, str(R.detect_service), callback_group=cb)
+            cam = self.cameras[role] = Camera(str(s.colour_topic), str(s.depth_topic), s.get("depth_info_topic", None),
+                                              self.check, keep=2 * int(cfg.perception.depth_frames))
+            sub(Image, cam.colour_topic, cam.on_colour, qos_profile_sensor_data)
+            sub(Image, cam.depth_topic, cam.on_depth, qos_profile_sensor_data)
+            for kind, topic in (("colour", _info_topic(cam.colour_topic)), ("depth", cam.depth_info_topic)):
+                sub(CameraInfo, topic, lambda m, c=cam, k=kind: c.info.__setitem__(k, (Intrinsics.from_camera_info(m),
+                                                                                        m.header.frame_id)),
+                    qos_profile_sensor_data)
+        self._exec = action(ExecuteJointTrajectory, str(R.execute_action))
+        self._plan = action(PlanToJoints, str(R.plan_action))
+        self._world = client(SetWorld, str(R.set_world_service))
+        self._reset = reset or pub(Empty, str(R.planner_reset), 1)
+        self._detect = client(Detect, str(R.detect_service))
         self._types = dict(Execute=ExecuteJointTrajectory, Plan=PlanToJoints, SetWorld=SetWorld, Detect=Detect, Empty=Empty)
-        self._executor = MultiThreadedExecutor(num_threads=4)
-        self._executor.add_node(n)
-        self._spinner = threading.Thread(target=self._executor.spin, daemon=True)
-        self._spinner.start()
+        if node is None:
+            from rclpy.executors import MultiThreadedExecutor
+            self._executor = MultiThreadedExecutor(num_threads=4)
+            self._executor.add_node(self.node)
+            self._spinner = threading.Thread(target=self._executor.spin, daemon=True)
+            self._spinner.start()
+
+    def _sleep(self, s: float) -> None:
+        self.check()
+        time.sleep(s)
 
     # ------------------------------------------------------------------ the models the stack serves
     def robot_description(self, wait_s: float = 3.0) -> str | None:
         """The arm's URDF as its description node publishes it (ros.robot_description, latched), or None."""
         t_end = time.time() + wait_s
         while self.description is None and time.time() < t_end:
-            time.sleep(0.05)
+            self._sleep(0.05)
         return self.description
 
     def transform(self, target: str, source: str, wait_s: float = 3.0) -> np.ndarray:
         """target <- source (4 x 4), from /tf and /tf_static."""
         from rclpy.duration import Duration
         from rclpy.time import Time
-        try:
-            t = self.tf.lookup_transform(target, source, Time(), timeout=Duration(seconds=wait_s))
-        except Exception as e:  # noqa: BLE001
-            raise RobotError("no transform %s <- %s (%s)" % (target, source, e))
+        t_end, t = time.time() + wait_s, None
+        while t is None:
+            self.check()
+            try:
+                t = self.tf.lookup_transform(target, source, Time(), timeout=Duration(seconds=0.2))
+            except Exception as e:  # noqa: BLE001
+                if time.time() > t_end:
+                    raise RobotError("no transform %s <- %s (%s)" % (target, source, e))
         T = np.eye(4)
         T[:3, :3] = quat_matrix([t.transform.rotation.x, t.transform.rotation.y, t.transform.rotation.z, t.transform.rotation.w])
         T[:3, 3] = [t.transform.translation.x, t.transform.translation.y, t.transform.translation.z]
@@ -240,8 +305,8 @@ class Robot:
             t_end = time.time() + wait_s
             while len(cam.info) < 2:
                 if time.time() > t_end:
-                    raise RobotError("no camera_info on %s / %s" % (_info_topic(cam.colour_topic), _info_topic(cam.depth_topic)))
-                time.sleep(0.05)
+                    raise RobotError("no camera_info on %s / %s" % (_info_topic(cam.colour_topic), cam.depth_info_topic))
+                self._sleep(0.05)
             (ci, cf), (di, df) = cam.info["colour"], cam.info["depth"]
             cam.colour_frame, cam.depth_frame = cf, df
             cam.model = CameraModel(ci, di, np.eye(4) if cf == df else self.transform(cf, df, wait_s))
@@ -249,14 +314,10 @@ class Robot:
 
     def publish_static(self, parent: str, child: str, T: np.ndarray) -> None:
         """A static transform parent -> child (ours: the scene camera's measured pose)."""
-        from geometry_msgs.msg import TransformStamped
-        m = TransformStamped()
-        m.header.stamp = self.node.get_clock().now().to_msg()
-        m.header.frame_id, m.child_frame_id = parent, child
-        m.transform.translation.x, m.transform.translation.y, m.transform.translation.z = (float(v) for v in T[:3, 3])
-        q = matrix_quat(T[:3, :3])
-        m.transform.rotation.x, m.transform.rotation.y, m.transform.rotation.z, m.transform.rotation.w = q
-        self._static_tf.sendTransform(m)
+        m = transform_msg(self.node.get_clock().now().to_msg(), parent, child, T)
+        if self._static_tf is None:
+            raise RobotError("no static broadcaster here")
+        self._static_tf(m)
 
     # ------------------------------------------------------------------ state
     def _on_joints(self, m) -> None:
@@ -265,11 +326,16 @@ class Robot:
             return
         q = np.array([m.position[idx[j]] for j in JOINTS])
         e = np.array([m.effort[idx[j]] if len(m.effort) > idx[j] else 0.0 for j in JOINTS])
+        stamp = m.header.stamp.sec + 1e-9 * m.header.stamp.nanosec
         with self._lock:
-            self._joint = (time.time(), q, e)
+            if stamp and stamp < self._joint_stamp:       # (callbacks may run concurrently: never step back)
+                return
+            self._joint, self._joint_stamp = (time.time(), q, e), stamp
 
     def joint_sample(self, wait_s: float = 2.0) -> tuple[float, np.ndarray, np.ndarray]:
-        """(time, raw joints rad as the driver reports them, joint torques N.m)."""
+        """(time, raw joints rad as the driver reports them, joint torques N.m). Every move in flight and every wait on
+        the arm polls this: it raises the action's cancel (check())."""
+        self.check()
         t_end = time.time() + wait_s
         while True:
             with self._lock:
@@ -278,7 +344,7 @@ class Robot:
                 return s
             if time.time() > t_end:
                 raise RobotError("no fresh /joint_states in %.0f s -- is the arm node running?" % wait_s)
-            time.sleep(0.003)
+            self._sleep(0.003)
 
     def joints(self) -> list[float]:
         return [float(v) for v in fold(np.degrees(self.joint_sample()[1]))]
@@ -341,7 +407,11 @@ class Robot:
         handle = self._wait(self._plan.send_goal_async(g), 5.0, "the planner did not answer")
         if not handle.accepted:
             raise RobotError("the planner rejected the goal")
-        r = self._wait(handle.get_result_async(), timeout_s, "the planner did not finish in %.0f s" % timeout_s).result
+        try:
+            r = self._wait(handle.get_result_async(), timeout_s, "the planner did not finish in %.0f s" % timeout_s).result
+        except BaseException:                        # given up on (a timeout, a cancel): the planner stops too
+            handle.cancel_goal_async()
+            raise
         if not r.success:
             raise RobotError("cuRobo found no collision-free path: %s" % r.message)
         pts = r.trajectory.points
@@ -381,11 +451,15 @@ class Robot:
         while not fut.done():
             if time.time() > t_end:
                 raise RobotError(why)
-            time.sleep(0.005)
+            self._sleep(0.005)
         return fut.result()
 
     def close(self) -> None:
-        """Stop spinning before anything is destroyed (a thread left in the executor crashes the exit)."""
+        """Under the node: destroy this action's entities (the engine's node lives on). Standalone: stop spinning before
+        anything is destroyed (a thread left in the executor crashes the exit)."""
+        if self._scope is not None:
+            self._scope.close()
+            return
         import rclpy
         try:
             self._executor.shutdown(timeout_sec=2.0)

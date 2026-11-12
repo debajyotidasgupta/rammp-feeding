@@ -105,10 +105,13 @@ If the setup was calibrated elsewhere, write the two files instead of running th
 ## 7. Verify, then feed
 1. `rammp detect`, `rammp perceive`, then `rammp acquire --stop-after hover10`: the tips should stop about 10 mm above
    the piece's centre. If not, re-measure `glass_to_tip_m` and run `calibrate-wrist` again. Then `rammp rise`.
-2. `rammp detect`, `rammp perceive`, `rammp acquire`. Open `acquire/plunge_end.jpg` and look from the side: the tines
-   should be well into the piece. If they only touch it, lower `punch_floor_margin_m`.
+2. `rammp detect`, `rammp perceive`, `rammp acquire`. Open `acquire/plunge_end.jpg` (the run record: `record:
+   {enabled: true}` in `local.yaml` while you set up) and look from the side: the tines should be well into the piece.
+   If they only touch it, lower `punch_floor_margin_m`.
 3. `rammp deliver`, seated facing the delivery look.
-4. `rammp feed --bites N`, or add `feeding` to the sheppy profile, which runs `rammp feed`.
+4. `rammp feed --bites N` by hand. Then add `feeding` to the sheppy profile: the orchestrator starts its actions
+   (standalone, `ros2 action send_goal /feeding/execute_action rammp_orchestrator_interfaces/action/ExecuteAction
+   '{engine_id: feeding, action_id: start_meal}'`, then `feed`).
 
 ## When the setup changes
 

@@ -197,7 +197,7 @@ class Robot:
         from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
         from rammp_arm_interfaces.action import ExecuteJointTrajectory
         from rammp_common_interfaces.msg import ControlStatus
-        from rammp_curobo_interfaces.action import PlanToJoints
+        from rammp_curobo_interfaces.action import PlanToJoints, PlanToPose
         from rammp_curobo_interfaces.srv import SetWorld
         from rammp_perception_interfaces.srv import Detect
         from sensor_msgs.msg import CameraInfo, Image, JointState
@@ -258,10 +258,12 @@ class Robot:
                     qos_profile_sensor_data)
         self._exec = action(ExecuteJointTrajectory, str(R.execute_action))
         self._plan = action(PlanToJoints, str(R.plan_action))
+        self._plan_pose = action(PlanToPose, str(R.plan_pose_action))
         self._world = client(SetWorld, str(R.set_world_service))
         self._reset = reset or pub(Empty, str(R.planner_reset), 1)
         self._detect = client(Detect, str(R.detect_service))
-        self._types = dict(Execute=ExecuteJointTrajectory, Plan=PlanToJoints, SetWorld=SetWorld, Detect=Detect, Empty=Empty)
+        self._types = dict(Execute=ExecuteJointTrajectory, Plan=PlanToJoints, PlanPose=PlanToPose, SetWorld=SetWorld,
+                           Detect=Detect, Empty=Empty)
         if node is None:
             from rclpy.executors import MultiThreadedExecutor
             self._executor = MultiThreadedExecutor(num_threads=4)
@@ -402,9 +404,25 @@ class Robot:
         g = self._types["Plan"].Goal()
         g.start_joints = [math.radians(float(v)) for v in start_deg]
         g.target_joints = [math.radians(float(s) + float(fold(float(e) - float(s)))) for s, e in zip(start_deg, goal_deg)]
-        if not self._plan.wait_for_server(timeout_sec=3.0):
-            raise RobotError("the planner (%s) is not up" % cfg.ros.plan_action)
-        handle = self._wait(self._plan.send_goal_async(g), 5.0, "the planner did not answer")
+        return self._planned(self._plan, cfg.ros.plan_action, g, timeout_s)
+
+    def plan_pose(self, start_deg, T, R, timeout_s: float, hold: int = 1) -> tuple[np.ndarray, np.ndarray]:
+        """A collision-free path (cuRobo) to the tool pose (T, R) in the base frame, the tool's orientation held on the
+        way as `hold` says (PlanToPose: 1 HOLD_LEVEL, its tilt kept and its spin about the vertical free; 2 HOLD_FIXED):
+        (positions N x 7 deg, unwrapped from start; times s). The planner verifies the hold and refuses a path that
+        breaks it."""
+        from rammp_feeding.geometry import matrix_quat
+        g = self._types["PlanPose"].Goal()
+        g.start_joints = [math.radians(float(v)) for v in start_deg]
+        g.target.position.x, g.target.position.y, g.target.position.z = (float(v) for v in T)
+        g.target.orientation.x, g.target.orientation.y, g.target.orientation.z, g.target.orientation.w = matrix_quat(R)
+        g.hold = int(hold)
+        return self._planned(self._plan_pose, cfg.ros.plan_pose_action, g, timeout_s)
+
+    def _planned(self, client, name, g, timeout_s: float) -> tuple[np.ndarray, np.ndarray]:
+        if not client.wait_for_server(timeout_sec=3.0):
+            raise RobotError("the planner (%s) is not up" % name)
+        handle = self._wait(client.send_goal_async(g), 5.0, "the planner did not answer")
         if not handle.accepted:
             raise RobotError("the planner rejected the goal")
         try:

@@ -3,7 +3,8 @@ here, executed by the driver (/execute_joint_trajectory, position or impedance),
 
   CONTACT   a joint-torque step against recent history (TorqueGuard; limits per move, guards.torque_step_nm)
   TILT      the utensil further off straight down than motion.max_tilt_deg (a move's own cap where it has one), or
-            than 5 deg past the move's own start or end where either is further (a move that turns it on purpose)
+            than 5 deg past the move's own start or end where either is further (a move that turns it on purpose);
+            anything else the gripper holds (Held), its own axis against its own reference and limit
   CHECKS    a move's own (the plunge's depth zone, the scoop's food path)
   DRIVER    its path tolerance (the arm diverging from the path) and its own refusals
 Any of them cancels the goal (the driver halts the arm) and raises MoveError. Free-space moves are cuRobo's paths
@@ -125,22 +126,62 @@ def smooth_timing(path: Sequence[Sequence[float]], vmax: float, amax: float,
     return list(Q), [dt] * n
 
 
+class Held:
+    """What the gripper holds, as the arm's checks take it. An arm without one holds this module's fork: its tip from the
+    wrist camera's calibration, and the scene's floor, boxes and world. A module built on this one subclasses it for
+    anything else (Arm(robot, held=...), Arm.hold): its tilt is the angle between R @ tilt_axis_in_tool and tilt_ref."""
+    name = "the utensil"                                   # in the checks' messages
+    camera = True                                          # the arm takes the wrist camera's model
+    tip_in_tool = np.zeros(3)                              # the point that leads, tool frame (the tines, a drink's rim)
+    tilt_axis_in_tool = np.array([0.0, 0.0, 1.0])          # its tilt: this tool axis ...
+    tilt_ref = np.array([0.0, 0.0, -1.0])                  # ... against this base-frame direction (the fork: straight down)
+    max_tilt_deg = 25.0                                    # the most it may tilt on a move (a move's own cap aside)
+
+    def spheres(self, arm, carrying: bool) -> list[list[float]]:
+        """Its shape as spheres [x, y, z, r] in the tool frame, kept clear of boxes() along a planned path."""
+        return []
+
+    def boxes(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str]]:
+        """What it is kept clear of: (centres, rotations base <- box, half extents, names), as scene.utensil_boxes."""
+        return np.zeros((0, 3)), np.zeros((0, 3, 3)), np.zeros((0, 3)), []
+
+    def floor(self, x: float, y: float) -> float:
+        """The lowest its tip may pass at (x, y) on a planned move, as scene.tip_floor."""
+        return -math.inf
+
+    def push_world(self, robot) -> None:
+        """Its collision world into the shared planner, before each planned move, as scene.push_world."""
+
+
 def joint_cap(dps: float) -> float:
     """A cruise speed held under the cap every joint runs under (motion.joint_speed_cap_dps)."""
     return min(float(dps), float(M.joint_speed_cap_dps))
 
 
 class Arm:
-    def __init__(self, robot, kin: Chain | None = None, measured: bool = True):
+    def __init__(self, robot, kin: Chain | None = None, measured: bool = True, held: Held | None = None):
         """measured=False: without the utensil's tip model, and so without the wrist camera (rammp state, capture,
-        home --direct, calibrate-wrist)."""
-        if measured and unmeasured():
+        home --direct, calibrate-wrist). held: what the gripper holds when not the fork (Held), with its own tip and
+        checks: none of the fork's measurements is needed."""
+        if held is None and measured and unmeasured():
             raise RuntimeError("not measured on this robot yet: %s (docs/porting.md)" % ", ".join(unmeasured()))
         from rammp_feeding.scene import tip_in_tool       # (the tip model: the wrist camera's intrinsics and mount)
-        self.robot, self.kin = robot, kin or chain(robot)
-        self.cam = robot.camera_model("camera") if measured else None
-        self.tip_tool = tip_in_tool(self.cam) if measured else None
+        self.robot, self.kin, self.held = robot, kin or chain(robot), held
+        if held is None:
+            self.cam = robot.camera_model("camera") if measured else None
+            self.tip_tool = tip_in_tool(self.cam) if measured else None
+        else:
+            self.cam = robot.camera_model("camera") if held.camera else None
+            self.tip_tool = np.asarray(held.tip_in_tool, float)
         self.limits = {i: min(-lo, hi) for i, (lo, hi) in self.kin.limits.items()}   # J2 / J4 / J6, the model's
+
+    def hold(self, held: Held) -> None:
+        """What the gripper holds from here on (a grasp, a release): its tip and checks."""
+        self.held, self.tip_tool = held, np.asarray(held.tip_in_tool, float)
+
+    @property
+    def held_name(self) -> str:
+        return "the utensil" if self.held is None else self.held.name
 
     # ------------------------------------------------------------------ state
     def q(self) -> Joints:
@@ -161,11 +202,20 @@ class Arm:
         q = self.kin.ik(T, R, seed)
         return None if q is None or self.margin(q) < 0 else q
 
+    def tilt(self, R) -> float:
+        """How far the held object is tilted at tool orientation R (deg): the fork's angle off straight down, or a Held's
+        axis against its reference."""
+        if self.held is None:
+            return tilt_deg(R)
+        a, b = R @ np.asarray(self.held.tilt_axis_in_tool, float), np.asarray(self.held.tilt_ref, float)
+        return math.degrees(math.acos(max(-1.0, min(1.0, float(a @ b) / (np.linalg.norm(a) * np.linalg.norm(b))))))
+
     def tilt_limit(self, path, cap: float | None = None) -> float:
-        """How far off straight down a move may hold the utensil: cap (motion.max_tilt_deg), or 5 deg past its own
-        start or end where either is further."""
-        return max(float(M.max_tilt_deg if cap is None else cap),
-                   tilt_deg(self.tool(path[0])[1]) + 5.0, tilt_deg(self.tool(path[-1])[1]) + 5.0)
+        """How far a move may tilt what it holds: cap (motion.max_tilt_deg, or the Held's max_tilt_deg), or 5 deg past
+        its own start or end where either is further."""
+        if cap is None:
+            cap = M.max_tilt_deg if self.held is None else self.held.max_tilt_deg
+        return max(float(cap), self.tilt(self.tool(path[0])[1]) + 5.0, self.tilt(self.tool(path[-1])[1]) + 5.0)
 
     def steered(self, prev: Sequence[float]) -> list[float]:
         """An IK seed from prev with J2 / J4 / J6 nudged off a limit they are within steer_within_deg of."""
@@ -242,11 +292,11 @@ class Arm:
                 q = [float(v) for v in fold(np.degrees(raw_q))]
                 tel["t"].append(ts - t0); tel["q"].append(q); tel["tau"].append(list(tau))
                 hit = guard.update(tau)
-                tilt = tilt_deg(self.kin.fk(q)[1])
+                tilt = self.tilt(self.kin.fk(q)[1])
                 if hit and torque_stop:
                     why = "joint %d torque stepped %.2f -> %.2f N.m -- something is in contact" % (hit[0] + 1, hit[2], hit[1])
                 elif tilt > max_tilt:
-                    why = "the utensil %.0f deg off vertical (limit %.0f)" % (tilt, max_tilt)
+                    why = "%s %.0f deg off vertical (limit %.0f)" % (self.held_name, tilt, max_tilt)
                 elif self.robot.estopped:
                     why = "the e-stop is engaged"
                 elif check is not None:
@@ -322,16 +372,16 @@ class Arm:
                             % (-self.margin(near), np.round(near, 1).tolist()))
         poses = [self.tool(q) for q in qs]
         tips = [T + R @ self.tip_tool for T, R in poses]
-        max_tilt, worst = self.tilt_limit(path, tilt_cap), max(tilt_deg(R) for _, R in poses)
+        max_tilt, worst = self.tilt_limit(path, tilt_cap), max(self.tilt(R) for _, R in poses)
         if worst > max_tilt + 1e-6:
-            raise MoveError("the path tilts the utensil %.1f deg off vertical (limit %.0f)" % (worst, max_tilt))
+            raise MoveError("the path tilts %s %.1f deg off vertical (limit %.0f)" % (self.held_name, worst, max_tilt))
         for t in tips:
             if t[2] < floor(t[0], t[1]) - 1e-6:
-                raise MoveError("the path takes the utensil tip to z %.3f at (%.3f, %.3f), under the floor there (%.3f)"
-                                % (t[2], t[0], t[1], floor(t[0], t[1])))
+                raise MoveError("the path takes %s tip to z %.3f at (%.3f, %.3f), under the floor there (%.3f)"
+                                % (self.held_name, t[2], t[0], t[1], floor(t[0], t[1])))
             if max_reach_m is not None and math.hypot(t[0], t[1]) > max_reach_m + 1e-6:
-                raise MoveError("the path swings the utensil tip %.0f mm out from the arm's base (at most %.0f)"
-                                % (1000 * math.hypot(t[0], t[1]), 1000 * max_reach_m))
+                raise MoveError("the path swings %s tip %.0f mm out from the arm's base (at most %.0f)"
+                                % (self.held_name, 1000 * math.hypot(t[0], t[1]), 1000 * max_reach_m))
         if spheres is not None and boxes is not None and len(boxes[0]):
             sp = np.asarray(spheres, float)
             centres = np.array([T + sp[:, :3] @ R.T for T, R in poses])                 # (samples, spheres, 3)
@@ -340,16 +390,19 @@ class Arm:
             short = gap - need + 1e-6
             k, s, b = np.unravel_index(int(np.argmin(short)), short.shape)
             if short[k, s, b] < 0:
-                raise MoveError("the path takes the utensil within %.0f mm of %s (at least %.0f here): its sphere %d at "
-                                "(%.3f, %.3f, %.3f)" % (1000 * gap[k, s, b], boxes[3][b], 1000 * need[s, b], s, *centres[k, s]))
+                raise MoveError("the path takes %s within %.0f mm of %s (at least %.0f here): its sphere %d at "
+                                "(%.3f, %.3f, %.3f)" % (self.held_name, 1000 * gap[k, s, b], boxes[3][b], 1000 * need[s, b],
+                                                        s, *centres[k, s]))
         return min(t[2] for t in tips), max(t[2] for t in tips)
 
     def travel(self, goal: Sequence[float], label: str, dps: float | None = None, go: bool = True,
-               max_reach_m: float | None = None, carrying: bool = False, **kw) -> list[Joints]:
+               max_reach_m: float | None = None, carrying: bool = False, level: bool = False, **kw) -> list[Joints]:
         """A collision-free path from the shared planner, from here to goal (go=False: plan only), with our world pushed
         to it first; thinned, checked as it will run against our tip floor, the utensil's tilt (tilt_limit) and, for
         the utensil (and, carrying, the piece), against our boxes -- re-planned when it fails any -- run, and settled
-        exactly onto goal."""
+        exactly onto goal. level: planned to goal's tool pose with its tilt held all the way (the planner's HOLD_LEVEL:
+        something that must stay upright, a cup), and not settled onto goal's joints (the plan may reach the pose in
+        others)."""
         from rammp_feeding.scene import push_world, tip_floor, utensil_boxes, utensil_spheres
         FS = M.free_space
         q = self.q()
@@ -357,11 +410,15 @@ class Arm:
             if go:
                 self.goto(goal, "settle " + label)
             return [q, list(goal)]
-        push_world(self.robot)                        # another client may have changed the planner's world since
-        spheres, boxes = utensil_spheres(self, carrying), utensil_boxes()
+        H = self.held                                 # (none: the fork, and the scene's floor, boxes and world)
+        (push_world if H is None else H.push_world)(self.robot)   # another client may have changed the planner's world
+        spheres, boxes = (utensil_spheres(self, carrying), utensil_boxes()) if H is None else (H.spheres(self, carrying),
+                                                                                                H.boxes())
+        floor = tip_floor if H is None else H.floor
         for k in range(int(FS.replans) + 1):
-            try:
-                pos, _ = self.robot.plan_joints(q, goal, float(FS.timeout_s))
+            try:                                      # level: to goal's tool pose, its tilt held on the way (a cup)
+                pos, _ = (self.robot.plan_pose(q, *self.tool(goal), float(FS.timeout_s)) if level else
+                          self.robot.plan_joints(q, goal, float(FS.timeout_s)))
             except RuntimeError as e:
                 raise MoveError("%s: %s" % (label, e))
             pos[0] = q
@@ -371,20 +428,21 @@ class Arm:
                     keep.append(i)
             path = [list(map(float, pos[i])) for i in keep + [len(pos) - 1]]
             try:
-                lo, hi = self.check_path(path, tip_floor, max_reach_m, spheres, boxes, kw.get("tilt_cap"))
+                lo, hi = self.check_path(path, floor, max_reach_m, spheres, boxes, kw.get("tilt_cap"))
                 break
             except MoveError as e:
                 if k == int(FS.replans):
                     raise MoveError("%s: %s -- not moving" % (label, e))
                 log.info("    %-28s re-planning (%d/%d): %s", label, k + 1, int(FS.replans), e)
-        log.info("    %-28s planned: %d waypoints, utensil tip z %.3f .. %.3f%s", label, len(path), lo, hi,
-                 "" if go else "  (plan only)")
+        log.info("    %-28s planned: %d waypoints, %s tip z %.3f .. %.3f%s", label, len(path),
+                 self.held_name.replace("the ", ""), lo, hi, "" if go else "  (plan only)")
         if go:
             timed, durations = smooth_timing(path, joint_cap(dps or float(FS.dps)), float(M.joint_accel_dps2),
                                              float(M.trajectory_sample_s))
             self.run(timed, label, durations=durations,
                      torque_limit=kw.pop("torque_limit", float(cfg.guards.torque_step_nm.free_space)), **kw)
-            self.goto(goal, "settle " + label)
+            if not level:                             # (a level plan ends at goal's pose, maybe in other joints: kept)
+                self.goto(goal, "settle " + label)
         return path
 
     # ------------------------------------------------------------------ the tool's force, from the joint torques

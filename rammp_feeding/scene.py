@@ -60,13 +60,16 @@ def camera_pose(arm, q=None) -> tuple[np.ndarray, np.ndarray]:
 def workspace() -> dict:
     """The bowl and the table: bowl_xy, table_z, bowl_top_z, bowl_radius, when; error_m, how far the bowl's place and
     the table's height may be off (the scene camera's error_m, the wrist camera's once rammp detect has read them),
-    and scene_error_m, the scene camera's (the bowl's top is always its reading)."""
+    and scene_error_m, the scene camera's (the bowl's top is always its reading). table_z is the site's
+    workspace.table_height_m where it is set (one table, every module on the robot), else the reading."""
     f = state_dir() / "scene_state.json"
     if not f.exists():
         raise FileNotFoundError("no scene camera reading (%s) -- rammp locate-scene" % f)
     st = read_json(f)
     scene_e = float(cfg.scene_camera.error_m)
-    return dict(bowl_xy=[float(v) for v in st["bowl_xy"]], table_z=float(st["table_z"]), bowl_top_z=float(st["bowl_top_z"]),
+    th = cfg.workspace.get("table_height_m", None)
+    return dict(bowl_xy=[float(v) for v in st["bowl_xy"]], table_z=float(st["table_z"] if th is None else th),
+                bowl_top_z=float(st["bowl_top_z"]),
                 bowl_radius=float(st["rim_radius_m"]), scene_error_m=scene_e,
                 error_m=float(cfg.perception.wrist_bowl_error_m) if st.get("refined_by") else scene_e,
                 when=time.strftime("%Y-%m-%d %H:%M", time.localtime(st["t"])))
@@ -151,6 +154,12 @@ def at_food_detect_start(arm, q=None) -> None:
 
 
 # ------------------------------------------------------------------ the planner's world
+def user_obstacles(m) -> list[dict]:
+    """The user's head and torso round their measured mouth m, as the planner's world takes them."""
+    return [dict(name="user_head", position=[m[0] - 0.09, m[1], m[2] + 0.05], dims=[0.20, 0.18, 0.26]),
+            dict(name="user_torso", position=[m[0] - 0.12, m[1], m[2] - 0.30], dims=[0.28, 0.42, 0.45])]
+
+
 def world() -> dict:
     """RAMMP-CuRobo's world (arm.base_frame): the table raised to our tip floor, a hollow bowl (a floor up to
     bowl.floor_above_table_m and 12 wall boxes: a solid box would put the utensil over its opening inside it), the
@@ -172,8 +181,7 @@ def world() -> dict:
            dict(name="table", position=[sum(tx) / 2, sum(ty) / 2, tz + floor - 0.025], dims=[tx[1] - tx[0], ty[1] - ty[0], 0.05]),
            dict(name="bowl_floor", position=[bx, by, tz + f / 2], dims=[2 * (r + e), 2 * (r + e), f])]
     if m is not None:
-        obs += [dict(name="user_head", position=[m[0] - 0.09, m[1], m[2] + 0.05], dims=[0.20, 0.18, 0.26]),
-                dict(name="user_torso", position=[m[0] - 0.12, m[1], m[2] - 0.30], dims=[0.28, 0.42, 0.45])]
+        obs += user_obstacles(m)
     for k in range(12):
         a = 2 * math.pi * k / 12
         obs.append(dict(name="bowl_wall_%d" % k, position=[bx + r * math.cos(a), by + r * math.sin(a), (tz + top) / 2],

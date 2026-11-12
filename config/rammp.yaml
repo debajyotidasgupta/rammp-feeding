@@ -25,6 +25,7 @@ ros:                            # the RAMMP stack's interfaces this module uses 
   control_status: /control_status
   execute_action: /execute_joint_trajectory
   plan_action: /rammp_curobo/plan_to_joints          # RAMMP-CuRobo (plan only)
+  plan_pose_action: /rammp_curobo/plan_to_pose       # ... to a tool pose, its tilt held on the way (carrying a cup)
   set_world_service: /rammp_curobo/set_world
   planner_reset: /reset                              # RAMMP-CuRobo: its own world back, after us
   detect_service: /perception/sam3/detect            # rammp-perception's SAM3: every detection (bowl, food)
@@ -54,6 +55,8 @@ workspace:                      # arm base frame, m (where the bowl and the tabl
   bowl_centre_m: null           # SITE [x, y]: where the operator lays the bowl -- the scene camera's bowl nearest it is taken
   table_extent_m: null          # SITE {x: [near, far], y: [right, left]}: the table's edges (the planner's table, where our
                                 # tip floor applies)
+  table_height_m: null          # SITE: the table's top, z (a tape from the arm's base): the one table every module on this
+                                # robot uses (feeding, drinking); null: each meal's scene camera reading
   overlook_camera_height_m: 0.45   # food_detect_start: the wrist camera this high above the table, over the bowl
 
 motion:

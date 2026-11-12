@@ -21,6 +21,8 @@ bowl:
 
 workspace:
   table_extent_m: null                # REQUIRED: the table's edges, {x: [near, far], y: [right, left]}
+  table_height_m: null                # the table's top, z (a tape from the arm's base), shared with rammp_drinking; null:
+                                      # each meal's scene camera reading
   bowl_centre_m: null                 # REQUIRED: where the operator lays the bowl's centre, [x, y]
 
 perception:

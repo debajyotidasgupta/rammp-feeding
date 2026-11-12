@@ -41,6 +41,9 @@ class SimArmRobot(FakeRobot):
     def plan_joints(self, start_deg, goal_deg, timeout_s):
         return self.ros.plan_joints(start_deg, goal_deg, timeout_s)
 
+    def plan_pose(self, start_deg, T, R, timeout_s, hold=1):
+        return self.ros.plan_pose(start_deg, T, R, timeout_s, hold)
+
     def set_world(self, path):
         self.worlds.append(path)
         self.ros.set_world(path)

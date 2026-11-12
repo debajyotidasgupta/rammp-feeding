@@ -5,7 +5,8 @@
     cfg.get("guards.torque_step_nm.approach")
     cfg.utensil.camera_to_tip_m             # the selected profiles: cfg.camera / .scene_camera / .utensil / .bowl / .food
 
-Layers, later wins: config/rammp.yaml < the selected profiles (config/<kind>/<name>.yaml) < the machine's own file
+Layers, later wins: config/rammp.yaml < RAMMP_DEFAULTS="a.yaml,b.yaml" (a module built on this one: its own defaults for
+these settings, in order) < the selected profiles (config/<kind>/<name>.yaml) < the machine's own file
 (<state_dir>/local.yaml: /config/local.yaml in the container) < the wrist camera's measured mount and the utensil's
 pixels (<state_dir>/wrist_mount.json: rammp calibrate-wrist) < RAMMP_SET="a.b=1,c=[1, 2]" (one run, the tests; the
 node's ROS parameters arrive this way, rammp_feeding/engine.py). A `profiles.<kind>` override selects that profile.
@@ -118,6 +119,8 @@ def load() -> Cfg:
     global UNREADABLE
     UNREADABLE = []                     # an unreadable local.yaml or wrist_mount.json: loaded as missing, named here
     c = yaml.safe_load((CONFIG / "rammp.yaml").read_text())
+    for f in filter(None, (v.strip() for v in os.environ.get("RAMMP_DEFAULTS", "").split(","))):
+        _merge(c, yaml.safe_load(Path(os.path.expanduser(f)).read_text()) or {})   # a module's own defaults, in order
     state = Path(os.path.expanduser(os.environ.get("RAMMP_STATE_DIR", c["deployment"]["state_dir"])))
     local_path = state / "local.yaml"
     local = {}

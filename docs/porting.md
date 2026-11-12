@@ -37,7 +37,7 @@ From a new Jetson to `rammp feed`, in order.
 ```bash
 uv tool install "sheppy @ git+https://github.com/rammp-org/sheppy@dev"
 git clone https://github.com/rammp-org/rammp-deployments.git
-docker pull debajyotidasgupta/rammp-feeding:0.4.2
+docker pull debajyotidasgupta/rammp-feeding:0.5.0
 sudo mkdir -p /srv/rammp_feeding/config /srv/rammp_feeding/runs && sudo chown -R 1000:1000 /srv/rammp_feeding
 ```
 - SAM3's weights are gated: accept the `facebook/sam3` licence on Hugging Face and download the snapshot to the Jetson.
@@ -47,7 +47,7 @@ sudo mkdir -p /srv/rammp_feeding/config /srv/rammp_feeding/runs && sudo chown -R
   tty=-i; [ -t 0 ] && tty=-it
   exec docker run --rm $tty --network host --ipc host --user 1000:1000 -e ROS_DOMAIN_ID=0 -e HOME=/tmp \
     -v /srv/rammp_feeding/config:/config -v /srv/rammp_feeding/runs:/runs \
-    debajyotidasgupta/rammp-feeding:0.4.2 ros2 run rammp_feeding rammp "$@"
+    debajyotidasgupta/rammp-feeding:0.5.0 ros2 run rammp_feeding rammp "$@"
   ```
 
 ## 4. The deployment manifest
@@ -73,6 +73,7 @@ Copy `config/machines/template.yaml` to `/srv/rammp_feeding/config/local.yaml` a
 | `profiles.camera`, `profiles.scene_camera` | Your camera models |
 | `utensil.glass_to_tip_m` | Ruler from the wrist camera's glass to the fork tips, **along the camera's axis** |
 | `workspace.table_extent_m` | Tape from the arm's base: `{x: [near, far], y: [right, left]}` |
+| `workspace.table_height_m` | Optional: tape from the arm's base to the table's top (z). Set, it is the table for every module on the robot (rammp-drinking too); unset, each meal's scene camera reading |
 | `workspace.bowl_centre_m` | Where the bowl is laid, `[x, y]`. `rammp setup` can write it from the wrist camera. |
 | `perception.wrist_calibration.square_m` | The printed board's square, measured across all of them |
 

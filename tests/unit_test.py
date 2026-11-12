@@ -15,7 +15,7 @@ import numpy as np  # noqa: E402
 
 from fake_robot import FakeRobot, Scene  # noqa: E402
 from rammp_feeding import geometry as g, scene  # noqa: E402
-from rammp_feeding.arm import Arm, MoveError, TorqueGuard, chain, smooth_timing, time_scale  # noqa: E402
+from rammp_feeding.arm import Arm, Held, MoveError, TorqueGuard, chain, smooth_timing, time_scale  # noqa: E402
 from rammp_feeding.config import cfg, state_dir  # noqa: E402
 from rammp_feeding.ros import Detection  # noqa: E402
 
@@ -530,6 +530,21 @@ class World(unittest.TestCase):
         self.assertAlmostEqual(near, float(cfg.workspace.table_extent_m.x[0]) + float(cfg.scene_camera.error_m))
         self.assertGreater(near - 0.02, 0.075 + 0.005)            # clear of its base sphere (r 0.075 + 0.005 buffer)
 
+    def test_the_sites_table_height_over_the_reading(self):
+        """workspace.table_height_m, where set, is the table's top for every use (the floor, the planner's table);
+        unset, the scene camera's reading."""
+        sc = Scene()
+        site(sc)
+        self.assertAlmostEqual(scene.workspace()["table_z"], sc.table_z)
+        cfg["workspace"]["table_height_m"] = sc.table_z + 0.02
+        try:
+            self.assertAlmostEqual(scene.workspace()["table_z"], sc.table_z + 0.02)
+            table = next(o for o in scene.world()["obstacles"] if o["name"] == "table")
+            self.assertAlmostEqual(table["position"][2] + table["dims"][2] / 2, sc.table_z + 0.02 + float(
+                cfg.scene_camera.error_m) + float(cfg.motion.free_space.min_tip_above_table_m))
+        finally:
+            cfg["workspace"]["table_height_m"] = None
+
     def test_each_planned_move_pushes_our_world_and_the_command_restores_the_planners(self):
         sc = Scene()
         site(sc)
@@ -653,6 +668,112 @@ class World(unittest.TestCase):
         self.assertAlmostEqual(scene.tip_floor(*sc.bowl_xy), sc.table_z + 0.06 + float(cfg.motion.free_space.min_tip_above_bowl_m) + e)
         self.assertAlmostEqual(scene.tip_floor(0.5, 0.5), sc.table_z + float(cfg.motion.free_space.min_tip_above_table_m) + e)
         self.assertEqual(scene.tip_floor(-0.5, 0.0), -np.inf)
+
+
+class Mug(Held):
+    """A mug held by its handle, as a drinking module built on this one holds it: upright when the tool's +y is up."""
+    name, camera = "the drink", False
+    tip_in_tool = np.array([0.07, 0.10, 0.18])
+    tilt_axis_in_tool, tilt_ref, max_tilt_deg = np.array([0.0, 1.0, 0.0]), np.array([0.0, 0.0, 1.0]), 15.0
+
+    def __init__(self):
+        self.floor_z, self.box, self.pushed = -np.inf, None, 0
+
+    def spheres(self, arm, carrying):
+        return [[0.0, 0.05, 0.12, 0.04]]
+
+    def boxes(self):
+        if self.box is None:
+            return super().boxes()
+        return np.array([self.box]), np.array([np.eye(3)]), np.array([[0.02, 0.02, 0.02]]), ["probe"]
+
+    def floor(self, x, y):
+        return self.floor_z
+
+    def push_world(self, robot):
+        self.pushed += 1
+
+
+class HeldObject(unittest.TestCase):
+    """An arm holding something other than the fork: its own tip, tilt and limit, spheres, boxes, floor and world, and
+    none of the fork's measurements."""
+
+    def setUp(self):
+        self.robot = FakeRobot(Scene(), scene.captured("home"))
+        self.mug = Mug()
+        self.arm = Arm(self.robot, held=self.mug)
+
+    def upright(self):
+        """Joints holding the mug upright near feeding_start (the tool's +y straight up)."""
+        home = scene.captured("home")
+        T0, _ = self.arm.tool(home)
+        for yaw in range(0, 360, 15):
+            q = self.arm.ik(T0, g.rot("z", yaw) @ g.rot("x", 90.0), home)
+            if q is not None:
+                return q
+        self.fail("no upright pose near feeding_start")
+
+    def test_none_of_the_forks_measurements_is_needed(self):
+        from unittest import mock
+        with mock.patch.dict(cfg["utensil"], {"glass_to_tip_m": None}):
+            arm = Arm(self.robot, held=Mug())
+        np.testing.assert_allclose(arm.tip_tool, Mug.tip_in_tool)
+        self.assertIsNone(arm.cam)
+        other = Mug()
+        other.tip_in_tool = np.array([0.0, 0.0, 0.05])
+        arm.hold(other)
+        self.assertIs(arm.held, other)
+        np.testing.assert_allclose(arm.tip(arm.q()), arm.tool()[0] + arm.tool()[1] @ other.tip_in_tool)
+
+    def test_its_tilt_is_its_own_axis_against_its_reference(self):
+        R = self.arm.tool(self.upright())[1]
+        self.assertAlmostEqual(self.arm.tilt(R), 0.0, delta=0.05)       # (the IK's own tolerance)
+        self.assertAlmostEqual(g.tilt_deg(R), 90.0, delta=0.05)         # (the fork's measure: level)
+        for deg in (10.0, 25.0):                                         # turned about the tool's axis
+            self.assertAlmostEqual(self.arm.tilt(R @ g.rot("z", deg)), deg, delta=0.05)
+        self.assertEqual(Arm(self.robot).tilt(R), g.tilt_deg(R))        # (the fork's, as before)
+
+    def test_its_limit_is_its_own(self):
+        q = self.upright()
+        self.assertAlmostEqual(self.arm.tilt_limit([q, q]), 15.0)
+        self.assertEqual(self.arm.tilt_limit([q, q], cap=40.0), 40.0)
+        self.assertAlmostEqual(Arm(self.robot).tilt_limit([q, q]), 95.0, delta=0.05)   # (the fork's: 5 past level)
+
+    def test_a_path_that_tips_it_past_its_limit_is_refused_and_a_move_that_does_is_stopped(self):
+        q = self.upright()
+        tipped = list(q)
+        tipped[6] += 30.0                                                # joint 7: about the tool's axis
+        path = [q, tipped, q]
+        with self.assertRaisesRegex(MoveError, "tilts the drink"):
+            self.arm.check_path(path, lambda x, y: -np.inf)
+        worst = max(self.arm.tilt(self.arm.tool(p)[1]) for p in g.densify(path, 0.5))
+        self.arm.check_path(path, lambda x, y: -np.inf, tilt_cap=worst + 0.5)
+        self.assertEqual(self.robot.moves, [])
+        self.robot.raw = np.radians(q)
+        with self.assertRaisesRegex(MoveError, "STOPPED: the drink .* off vertical"):
+            self.arm.run(path, "tip it", dps=20.0)
+
+    def test_a_planned_move_takes_its_world_spheres_boxes_and_floor(self):
+        q = self.upright()
+        self.robot.raw = np.radians(q)
+        goal = list(q)
+        goal[0] += 20.0
+        self.arm.travel(goal, "carry", carrying=True)
+        self.assertEqual((self.mug.pushed, self.robot.worlds), (1, []))  # its world pushed, never the scene's
+        self.assertLess(g.max_step(self.arm.q(), goal), 1.0)
+        T, R = self.arm.tool(goal)
+        self.mug.floor_z = (T + R @ self.mug.tip_in_tool)[2] + 0.05
+        with self.assertRaisesRegex(MoveError, "carry back: .*the drink tip .*under the floor.*not moving"):
+            self.arm.travel(q, "carry back")
+        self.mug.floor_z = -np.inf
+        mid = [a + float(g.fold(b - a)) / 2 for a, b in zip(goal, q)]
+        Tm, Rm = self.arm.tool(mid)
+        self.mug.box = Tm + Rm @ np.array(self.mug.spheres(self.arm, True)[0][:3])
+        with self.assertRaisesRegex(MoveError, "carry back: .*the drink within .* of probe.*not moving"):
+            self.arm.travel(q, "carry back")
+        self.mug.box = None
+        self.arm.travel(q, "carry back")
+        self.assertLess(g.max_step(self.arm.q(), q), 1.0)
 
 
 class Refine(unittest.TestCase):
@@ -851,6 +972,32 @@ class Profiles(unittest.TestCase):
         with mock.patch.object(sc_, "state_dir", lambda: d):
             with self.assertRaises(FileNotFoundError):                                     # (start_meal: not_set_up)
                 sc_.extrinsic()
+
+
+class Defaults(unittest.TestCase):
+    def test_a_modules_defaults_sit_under_the_sites_own_file(self):
+        """RAMMP_DEFAULTS: a module built on this one sets its own values for these settings; a site's local.yaml (and
+        a profile) still wins."""
+        from rammp_feeding import config as C
+        d = Path(tempfile.mkdtemp(dir=WORK))
+        f = d / "defaults.yaml"
+        f.write_text("delivery: {stop_m: 0.123, max_turn_deg: 7.0}\n")
+        env = dict(os.environ)
+        try:
+            os.environ.pop("RAMMP_NO_LOCAL")
+            os.environ["RAMMP_STATE_DIR"] = str(d)
+            os.environ["RAMMP_DEFAULTS"] = str(f)
+            c = C.load()
+            self.assertEqual((c.delivery.stop_m, c.delivery.max_turn_deg), (0.123, 7.0))
+            (d / "local.yaml").write_text("delivery: {stop_m: 0.15}\n")
+            c = C.load()
+            self.assertEqual((c.delivery.stop_m, c.delivery.max_turn_deg), (0.15, 7.0))
+            os.environ.pop("RAMMP_DEFAULTS")
+            self.assertEqual(C.load().delivery.max_turn_deg, cfg.delivery.max_turn_deg)
+        finally:
+            os.environ.clear()
+            os.environ.update(env)
+            C.load()
 
 
 class WristCalibration(unittest.TestCase):

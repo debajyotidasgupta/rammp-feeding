@@ -20,14 +20,13 @@ follow from them (base frame, m).
 
 from __future__ import annotations
 
-import json
 import math
 import time
 
 import numpy as np
 import yaml
 
-from rammp_feeding.config import calibration, cfg, state_dir
+from rammp_feeding.config import calibration, cfg, read_json, state_dir
 from rammp_feeding.geometry import quat_matrix, rpy_matrix
 
 # ------------------------------------------------------------------ the wrist camera on the arm
@@ -65,7 +64,7 @@ def workspace() -> dict:
     f = state_dir() / "scene_state.json"
     if not f.exists():
         raise FileNotFoundError("no scene camera reading (%s) -- rammp locate-scene" % f)
-    st = json.loads(f.read_text())
+    st = read_json(f)
     scene_e = float(cfg.scene_camera.error_m)
     return dict(bowl_xy=[float(v) for v in st["bowl_xy"]], table_z=float(st["table_z"]), bowl_top_z=float(st["bowl_top_z"]),
                 bowl_radius=float(st["rim_radius_m"]), scene_error_m=scene_e,

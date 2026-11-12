@@ -4,7 +4,7 @@ from setuptools import setup
 
 setup(
     name="rammp_feeding",
-    version="0.4.1",
+    version="0.4.2",
     packages=["rammp_feeding"],
     data_files=[
         ("share/ament_index/resource_index/packages", ["resource/rammp_feeding"]),

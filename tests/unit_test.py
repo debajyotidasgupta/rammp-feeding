@@ -361,7 +361,9 @@ class Perception(unittest.TestCase):
                 box(0.4, [320, 120, 560, 380])]                 # bowl-sized
         self.assertEqual([d.box for d in food(rgb, dets, bowl)], [[400, 200, 440, 240]])
 
-    def test_no_bowl_in_view_is_refused(self):
+    def test_no_bowl_found_is_the_meal_reading(self):
+        """SAM3 finds the food but no bowl: the bowl's rim from this meal's reading is its mask, and the piece is found;
+        a bowl seen elsewhere (it has moved) is refused."""
         from rammp_feeding.perception import perceive
         sc = Scene()
         site(sc)
@@ -370,7 +372,13 @@ class Perception(unittest.TestCase):
         robot.raw = np.radians(scene.overlook_joints(arm))
         found = robot.detect
         robot.detect = lambda role, prompts, t: [d for d in found(role, prompts, t) if d.label == cfg.food.prompt]
-        with self.assertRaisesRegex(MoveError, "no SAM3 bowl mask"):
+        tgt = perceive(robot, arm, Path(tempfile.mkdtemp(dir=WORK)))
+        self.assertLess(math.hypot(tgt["piece"]["xy"][0] - sc.piece_xy[0], tgt["piece"]["xy"][1] - sc.piece_xy[1]), 0.005)
+        moved = (sc.bowl_xy[0] + 0.2, sc.bowl_xy[1])
+        robot.detect = lambda role, prompts, t: (
+            [d for d in found(role, prompts, t) if d.label == cfg.food.prompt]
+            + [Detection(cfg.perception.bowl_prompts[0], 0.9, [0, 0, 1, 1], robot._disc(moved, sc.bowl_radius, sc.table_z + 0.06))])
+        with self.assertRaisesRegex(MoveError, "seen elsewhere"):
             perceive(robot, arm, Path(tempfile.mkdtemp(dir=WORK)))
 
     def test_the_bowl_is_the_mask_round_the_measured_centre(self):
@@ -805,6 +813,44 @@ class Profiles(unittest.TestCase):
             T, _ = sc_.extrinsic()
         np.testing.assert_allclose(T[:3, 3], pose["xyz"])
         np.testing.assert_allclose(T[:3, :3], g.rot("z", 90.0), atol=1e-6)
+
+    def test_an_unreadable_state_file_is_a_missing_one(self):
+        """A state file that cannot be parsed loads as missing and is named (the node starts, its log says so, and the
+        actions answer not_set_up); never a crash."""
+        import logging
+        from unittest import mock
+        from rammp_feeding import config as C, scene_camera as sc_
+        d = Path(tempfile.mkdtemp(dir=WORK))
+        (d / "local.yaml").write_text("utensil: {glass_to_tip_m: 0.205\n")                   # (an unclosed mapping)
+        (d / "wrist_mount.json").write_text('{"camera": "realsense_d405", "camera_in_tool_m": [0.02')
+        (d / "home.json").write_text("not json")
+        (d / "scene_extrinsic.json").write_text(json.dumps(dict(xyz=[0.6, -0.5, 0.12])))   # (no quat_xyzw)
+        env = dict(os.environ)
+        try:
+            os.environ.pop("RAMMP_NO_LOCAL")
+            os.environ["RAMMP_STATE_DIR"] = str(d)
+            c = C.load()
+            self.assertEqual([u.split(":")[0] for u in C.UNREADABLE],
+                             [str(d / "local.yaml"), str(d / "wrist_mount.json")])
+            self.assertIn("camera.mount.camera_in_tool_m", C.unmeasured(c))   # (the mount: as if never measured)
+            with mock.patch.dict(cfg["deployment"], {"state_dir": str(d)}):
+                report = C.state_report()
+            self.assertEqual([lv for lv, _ in report], [logging.INFO, logging.WARNING, logging.WARNING])
+            self.assertIn("home.json", report[0][1])
+            (d / "wrist_mount.json").write_text(json.dumps(dict(camera="realsense_d405", camera_in_tool_m="here")))
+            C.load()
+            self.assertEqual(len(C.UNREADABLE), 2, "a mount of the wrong shape taken")
+        finally:
+            os.environ.clear()
+            os.environ.update(env)
+            C.load()                                  # (UNREADABLE back to the test site's)
+        self.assertEqual(C.UNREADABLE, [])
+        with mock.patch.object(C, "state_dir", lambda: d):
+            with self.assertRaisesRegex(C.Unreadable, "unreadable .*home.json"):
+                C.calibration("home")
+        with mock.patch.object(sc_, "state_dir", lambda: d):
+            with self.assertRaises(FileNotFoundError):                                     # (start_meal: not_set_up)
+                sc_.extrinsic()
 
 
 class WristCalibration(unittest.TestCase):

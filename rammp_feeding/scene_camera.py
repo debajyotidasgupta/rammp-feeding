@@ -29,7 +29,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from rammp_feeding import record
-from rammp_feeding.config import cfg, state_dir
+from rammp_feeding.config import Unreadable, cfg, read_json, state_dir
 from rammp_feeding.geometry import matrix_quat, quat_matrix
 from rammp_feeding.perception import _in
 
@@ -51,9 +51,12 @@ def extrinsic(robot=None) -> tuple[np.ndarray, str]:
     if not f.exists():
         raise RuntimeError("the scene camera is not calibrated (%s): rammp calibrate-scene, the ChArUco board where it "
                            "sees it" % f)
-    d = json.loads(f.read_text())
+    d = read_json(f)
     T = np.eye(4)
-    T[:3, :3], T[:3, 3] = quat_matrix(d["quat_xyzw"]), d["xyz"]
+    try:
+        T[:3, :3], T[:3, 3] = quat_matrix(d["quat_xyzw"]), d["xyz"]
+    except (KeyError, TypeError, ValueError, IndexError) as e:
+        raise Unreadable("unreadable %s (%r) -- rammp calibrate-scene" % (f, e))
     return T, str(f)
 
 
@@ -164,7 +167,7 @@ def refine(robot, arm) -> dict:
     uv = np.round(np.stack(model.pixel(pc.T), 1)).astype(int)
     dets = robot.detect("camera", list(cfg.perception.bowl_prompts), float(cfg.perception.bowl_score_threshold))
     f = state_dir() / "scene_state.json"
-    st = json.loads(f.read_text())
+    st = read_json(f)
     fits = [bowl_at(d.mask, d.box, uv, pc @ Rc.T + o) for d in dets]
     bowls = [m for m in fits if "bowl_xy" in m]
     if not bowls:

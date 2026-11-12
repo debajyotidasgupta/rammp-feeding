@@ -4,13 +4,15 @@ goal accepted, then cancelled: tests/sim_arm.py), its description node and the 2
 face and the bite are tests/fake_robot.py's; the scene camera's reading is the fake scene's.
 
   start_meal                    the bowl found, the arm over it
-  feed                          one bite taken
+  feed                          one bite taken, SAM3 not finding the bowl (its rim from the meal's reading)
   feed, cancelled mid-plunge    (the moves at their own pace) ends as cancelled within a few seconds, the move stopped
   feed                          recovers (straight up out of the bowl), then a whole bite
   feed, cancelled at the mouth  (no bite) the food stays on the fork
   feed                          backs away to the delivery look and presents it again
   feed, cancelled at the mouth
   finish_meal                   recovers (back from the user), then home
+  feed                          a new meal's first bite: the bowl found first (the scene camera read again), then a bite
+  finish_meal                   home
 
 Each action: its result, /feeding/status, the planner's own world back (/reset) as it ends, and none of its
 subscriptions left once it has ended."""
@@ -42,9 +44,13 @@ from sim_arm import SimArmRobot  # noqa: E402
 SC = Scene()
 
 
+LOCATED: list[float] = []
+
+
 def fake_locate(robot, out):
     """The scene camera's reading of the fake scene (tests/fake_robot.py has no scene camera)."""
     from rammp_feeding.config import state_dir
+    LOCATED.append(time.time())
     st = dict(bowl_xy=list(SC.bowl_xy), table_z=SC.table_z, bowl_top_z=SC.table_z + 0.06, rim_radius_m=SC.bowl_radius,
               t=time.time())
     (state_dir() / "scene_state.json").write_text(json.dumps(st))
@@ -149,11 +155,19 @@ def main() -> int:
     assert r.status == S.STATUS_SUCCESS, r
     assert n_reset == 1, "start_meal did not put the planner's own world back"
     bite_at["on"] = True
+    from rammp_feeding.config import cfg
+    real_detect = engine.sim.detect                     # SAM3 finds the food but not the bowl, this bite
+    engine.sim.detect = lambda role, prompts, thr: [d for d in real_detect(role, prompts, thr)
+                                                    if d.label not in cfg.perception.bowl_prompts]
     r, n_reset, _ = run("feed")
+    engine.sim.detect = real_detect
     assert r.status == S.STATUS_SUCCESS and json.loads(r.payload_json) == {"bite_taken": True}, r
     assert n_reset == 1 and not engine._holding
+    assert len(LOCATED) == 1, "a feed after start_meal read the scene camera again"
     from rammp_feeding import record
     meal = record._dir["session"]                       # (the meal's record: finish_meal closes it)
+    kinds = [json.loads(e)["kind"] for e in (meal / "events.jsonl").read_text().splitlines()]
+    assert "bowl_from_reading" in kinds, "the bite without SAM3's bowl did not use the meal's reading"
 
     def moves_since(k: int) -> list[str]:
         """The labels of the moves logged since the k-th (the run record's events)."""
@@ -197,6 +211,16 @@ def main() -> int:
     assert r.status == S.STATUS_SUCCESS, r
     assert n_reset == 1
     assert moves_since(k)[:2] == ["back to the delivery look", "back to food_detect_start"], moves_since(k)
+    assert max(abs(a - b) for a, b in zip(engine.sim.joints(), scene.captured("home"))) < 1.0, "not home"
+    bite_at["on"] = True                                # a new meal, begun by feed: its bowl found first
+    r, _, _ = run("feed")
+    assert r.status == S.STATUS_SUCCESS and json.loads(r.payload_json) == {"bite_taken": True}, r
+    assert len(LOCATED) == 2, "the new meal's first feed did not read the scene camera"
+    lines = (record._dir["session"] / "events.jsonl").read_text().splitlines()
+    labels = [e["label"] for e in map(json.loads, lines) if e["kind"] == "move"]
+    assert labels[0] == "to look at the bowl", labels[:4]
+    r, _, _ = run("finish_meal")
+    assert r.status == S.STATUS_SUCCESS, r
     assert max(abs(a - b) for a, b in zip(engine.sim.joints(), scene.captured("home"))) < 1.0, "not home"
     assert {s["state"] for s in status} >= {"idle", "executing"} and status[-1]["state"] == "idle", status[-3:]
     assert all(s["mode"] == "standalone" and not s["mock"] for s in status)

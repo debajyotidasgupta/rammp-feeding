@@ -7,7 +7,7 @@ It runs as a capability engine (rammp-kitchen-capability-engines' `CapabilityEng
 orchestrator starts its actions, `start_meal`, `feed` (one bite) and `finish_meal`, and nothing moves otherwise
 ([interface](docs/interface.md)). The `rammp` command runs the same steps by hand, for setting up a site.
 
-**Release 0.4.1:** `debajyotidasgupta/rammp-feeding:0.4.1` (Docker Hub, arm64), for the arm stack's 2.0 generation
+**Release 0.4.2:** `debajyotidasgupta/rammp-feeding:0.4.2` (Docker Hub, arm64), for the arm stack's 2.0 generation
 (kinova-gen3-ros2 2.0.0, rammp-curobo 2.0.1); 0.2.5 is for the 1.1.0 stack. It is the `feeding` node of
 rammp-deployments' `december_2026/sheppy-manifest.yaml`, copied from `rammp-alternative.yaml`.
 

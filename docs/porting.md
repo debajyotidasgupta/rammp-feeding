@@ -79,6 +79,10 @@ Copy `config/machines/template.yaml` to `/srv/rammp_feeding/config/local.yaml` a
 `bowl.floor_above_table_m` (5 mm) and `utensil.punch_floor_margin_m` (5 mm) are defaults. Change them only if the
 plunge stops short (section 7).
 
+A state file the node cannot read (a YAML typo in `local.yaml`, a damaged JSON) counts as missing: the node still
+starts, its log names the file at startup, `rammp check` fails on it, and every action answers `not_set_up` until it
+is fixed or redone.
+
 ## 6. Calibrate and capture
 `sheppy up <robot> --manifest december_2026/sheppy-manifest.yaml`, without `feeding`.
 

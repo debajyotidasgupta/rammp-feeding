@@ -15,6 +15,7 @@ Units are in the key names (_m, _mps, _dps, _nm, _n, _s, _px).
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from pathlib import Path
@@ -33,6 +34,21 @@ def _root() -> Path:
 
 ROOT = _root()
 CONFIG = ROOT / "config"
+
+
+class Unreadable(FileNotFoundError):
+    """A state file that cannot be parsed: the same as a missing one (the site redoes what wrote it)."""
+
+
+def read_json(p: Path) -> dict:
+    """A state file's JSON (FileNotFoundError when it is missing; Unreadable when it cannot be parsed)."""
+    try:
+        return json.loads(Path(p).read_text())
+    except (ValueError, UnicodeDecodeError) as e:      # (json.JSONDecodeError is a ValueError)
+        raise Unreadable("unreadable %s (%s) -- redo what wrote it, or delete it (docs/porting.md)" % (p, e))
+
+
+UNREADABLE: list[str] = []      # the state files the latest load() ignored as unreadable, "path: reason"
 
 
 class Cfg(dict):
@@ -89,11 +105,30 @@ def overrides(text: str) -> list[tuple[str, object]]:
     return out
 
 
+def _numbers(m: dict, key: str, n: int) -> list:
+    """m[key], once it is a list of n numbers (ValueError otherwise)."""
+    v = m.get(key)
+    if not (isinstance(v, list) and len(v) == n
+            and all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in v)):
+        raise ValueError("%s is %r, not %d numbers" % (key, v, n))
+    return v
+
+
 def load() -> Cfg:
+    global UNREADABLE
+    UNREADABLE = []                     # an unreadable local.yaml or wrist_mount.json: loaded as missing, named here
     c = yaml.safe_load((CONFIG / "rammp.yaml").read_text())
     state = Path(os.path.expanduser(os.environ.get("RAMMP_STATE_DIR", c["deployment"]["state_dir"])))
     local_path = state / "local.yaml"
-    local = {} if os.environ.get("RAMMP_NO_LOCAL") or not local_path.exists() else (yaml.safe_load(local_path.read_text()) or {})
+    local = {}
+    if not os.environ.get("RAMMP_NO_LOCAL") and local_path.exists():
+        try:
+            local = yaml.safe_load(local_path.read_text()) or {}
+            if not isinstance(local, dict):
+                raise ValueError("not a mapping of settings")
+        except (yaml.YAMLError, ValueError, UnicodeDecodeError) as e:
+            UNREADABLE.append("%s: %s" % (local_path, str(e).replace("\n", " ")))
+            local = {}
     sets = overrides(os.environ.get("RAMMP_SET", ""))
     _merge(c["profiles"], local.get("profiles") or {})
     for k, v in sets:                   # a profile selected for this run loads in place of the machine's
@@ -105,11 +140,20 @@ def load() -> Cfg:
     _merge(c, local)
     wm = state / "wrist_mount.json"     # rammp calibrate-wrist's measurement of this wrist camera's mount
     if wm.exists():
-        m = json.loads(wm.read_text())
-        if m.get("camera") == c["profiles"]["camera"]:
-            c["camera"]["mount"].update(camera_in_tool_m=m["camera_in_tool_m"], rotation_quat_xyzw=m["rotation_quat_xyzw"])
-            if m.get("utensil") == c["profiles"]["utensil"]:                     # the utensil's pixels, the same run
-                c["utensil"].update(tip_px=m["tip_px"], image_region_px=m["image_region_px"])
+        try:
+            m = read_json(wm)
+            mine = m.get("camera") == c["profiles"]["camera"]                    # (this camera's, else not taken)
+            mount = mine and dict(camera_in_tool_m=_numbers(m, "camera_in_tool_m", 3),
+                                  rotation_quat_xyzw=_numbers(m, "rotation_quat_xyzw", 4))
+            pixels = mine and m.get("utensil") == c["profiles"]["utensil"] and dict(   # the utensil's pixels, the same run
+                tip_px=_numbers(m, "tip_px", 2), image_region_px=_numbers(m, "image_region_px", 4))
+        except (Unreadable, ValueError, AttributeError) as e:
+            UNREADABLE.append("%s: %s" % (wm, e))
+        else:
+            if mount:
+                c["camera"]["mount"].update(mount)
+            if pixels:
+                c["utensil"].update(pixels)
     for k, v in sets:
         _set(c, k, v)
     u = c["utensil"]                    # a ruler reading from the camera's glass + the camera's own glass-to-optical
@@ -187,7 +231,23 @@ def calibration(name: str) -> dict:
     p = state_dir() / (name + ".json")
     if not p.exists():
         raise FileNotFoundError("no %s -- pose the arm and rammp capture %s (docs/porting.md)" % (p, name))
-    return json.loads(p.read_text())
+    return read_json(p)
+
+
+STATE_FILES = ("local.yaml", *(n + ".json" for n in CAPTURES), "wrist_mount.json", "scene_extrinsic.json")
+
+
+def state_report() -> list[tuple[int, str]]:
+    """The node's start in its log, as (level, line): the state folder and what it holds, then each file load()
+    ignored."""
+    d = Path(cfg.deployment.state_dir)
+    files = ", ".join(n for n in STATE_FILES if (d / n).exists()) or "none"
+    line = "state %s: cameras %s (wrist), %s (scene); files: %s" % (d, cfg.profiles.camera, cfg.profiles.scene_camera,
+                                                                    files)
+    if unmeasured():
+        line += "; not yet measured: " + ", ".join(unmeasured())
+    return [(logging.INFO, line)] + [(logging.WARNING, "ignored, as if missing: %s; the actions answer not_set_up "
+                                      "until it is fixed" % u) for u in UNREADABLE]
 
 
 def dump() -> str:

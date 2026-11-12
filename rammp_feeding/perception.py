@@ -6,8 +6,9 @@ perceive: one colour frame and a depth median from frames after the arm stopped;
 food (boxes and masks); the bowl the mask round the bowl's centre as rammp detect measured it (the smallest such);
 the food filtered (slivers, the utensil's own pixels, outside or too big for the bowl, overlaps); the piece nearest
 the bowl's centre (the most rim clearance), aimed at the centroid of its points; the tool's goal the level slide that
-puts the utensil tip right above it. Refused when no bowl mask covers that centre. Exit 3: the
-bowl is empty; 5: food is left but no piece is pickable.
+puts the utensil tip right above it. When SAM3 finds no bowl at all, the bowl's rim from this meal's reading is its
+mask; refused when a bowl is seen but none covers that centre (it has moved). Exit 3: the bowl is empty; 5: food is
+left but no piece is pickable.
 """
 
 from __future__ import annotations
@@ -111,13 +112,19 @@ def perceive(robot, arm, out: Path | None) -> dict:
     o, Rc = scene.camera_pose(arm, q)                            # measured (the smallest such: not the table round it)
     c = Rc.T @ (np.array([*ws["bowl_xy"], ws["table_z"] + float(cfg.bowl.floor_above_table_m)]) - o)
     u, v = (int(round(float(x))) for x in arm.cam.pixel(c))
-    hits = [m for m in (binary_fill_holes(d.mask) for d in dets if d.label in P.bowl_prompts)
-            if 0 <= v < m.shape[0] and 0 <= u < m.shape[1] and m[v, u]]
-    if not hits:
+    bowls = [binary_fill_holes(d.mask) for d in dets if d.label in P.bowl_prompts]
+    hits = [m for m in bowls if 0 <= v < m.shape[0] and 0 <= u < m.shape[1] and m[v, u]]
+    if hits:
+        bowl = min(hits, key=lambda m: int(m.sum()))
+    elif not bowls and 0 <= v < rgb.shape[0] and 0 <= u < rgb.shape[1]:   # not seen at all: this meal's reading of it
+        bowl = rim_mask(arm, q, ws, rgb.shape[:2])
+        log.info("  SAM3 found no bowl: its rim from this meal's reading, (%.3f, %.3f) r %.3f",
+                 *ws["bowl_xy"], ws["bowl_radius"])
+        record.event("bowl_from_reading", bowl_xy=ws["bowl_xy"], bowl_radius=ws["bowl_radius"])
+    else:                                    # a bowl seen elsewhere (it has moved), or this meal's reading out of view
         _draw(rgb, None, [], out)
-        raise MoveError("no SAM3 bowl mask covers the bowl's centre, (%.3f, %.3f) at pixel (%d, %d)"
-                        % (*ws["bowl_xy"], u, v))
-    bowl = min(hits, key=lambda m: int(m.sum()))
+        raise MoveError("no SAM3 bowl mask covers the bowl's centre, (%.3f, %.3f) at pixel (%d, %d)%s"
+                        % (*ws["bowl_xy"], u, v, " -- a bowl is seen elsewhere: find the bowl again" if bowls else ""))
     pieces = food(rgb, [d for d in dets if d.label == str(cfg.food.prompt) and d.score >= float(P.score_threshold)], bowl)
     log.info("  SAM3 %.2f s: the bowl, %d piece(s) of %d detections", time.time() - t0, len(pieces), len(dets))
     W, uv, _ = world_points(arm.cam, arm, D, q)
@@ -141,6 +148,19 @@ def perceive(robot, arm, out: Path | None) -> dict:
              1000 * (goal[0] - T[0]), 1000 * (goal[1] - T[1]))
     record.event("perceived", target=tgt, pieces=len(geo))
     return tgt
+
+
+def rim_mask(arm, q, ws: dict, shape: tuple[int, int]) -> np.ndarray:
+    """The bowl's rim from this meal's reading (its centre, rim radius and top), projected into the wrist camera's image
+    at q and filled: the bowl's mask when SAM3 does not find it."""
+    o, Rc = scene.camera_pose(arm, q)
+    a = np.linspace(0.0, 2 * np.pi, 72, endpoint=False)
+    rim = np.stack([ws["bowl_xy"][0] + ws["bowl_radius"] * np.cos(a), ws["bowl_xy"][1] + ws["bowl_radius"] * np.sin(a),
+                    np.full_like(a, ws["bowl_top_z"])])
+    u, v = arm.cam.pixel(Rc.T @ (rim - o[:, None]))
+    im = Image.new("1", (shape[1], shape[0]), 0)
+    ImageDraw.Draw(im).polygon([(float(x), float(y)) for x, y in zip(u, v)], fill=1)
+    return np.asarray(im, dtype=bool)
 
 
 def _draw(rgb, bowl: np.ndarray | None, pieces, out: Path | None) -> None:

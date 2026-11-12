@@ -218,5 +218,6 @@ delivery:
 
 node:                           # the node's feed action (rammp_feeding/engine.py), one bite in at most ~105 s: the
   open_mouth_timeout_s: 25.0    # orchestrator cancels an action at 120 s. No open mouth by then: the user declined
+  open_mouth_min_s: 10.0        # that wait in the meal's first feed, less the time it took to find the bowl, at least
   bite_timeout_s: 25.0          # no bite felt by then: back to the bowl, the food still on the fork
   bite_settle_s: 5.0            # after the bite: at most this long for the force to settle

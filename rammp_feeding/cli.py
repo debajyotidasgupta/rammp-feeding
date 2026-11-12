@@ -146,6 +146,7 @@ def feed(robot, arm, face, bites: int) -> int:
 def check(robot, arm) -> int:
     """What the module needs from the stack, each as it is served, and from the site (its measurements, poses and the
     scene camera's pose). Never moves."""
+    from rammp_feeding import config
     from rammp_feeding.config import unmeasured
     from rammp_feeding.scene import tip_in_tool
     bad = 0
@@ -181,6 +182,8 @@ def check(robot, arm) -> int:
         % ", ".join(poses))
     row((state_dir() / "scene_extrinsic.json").exists(), "scene pose", "measured (state_dir/scene_extrinsic.json)"
         if (state_dir() / "scene_extrinsic.json").exists() else "not measured (rammp calibrate-scene)")
+    for u in config.UNREADABLE:                        # loaded as if missing
+        row(False, "state file", "unreadable, ignored: %s" % u)
     for role, cam in robot.cameras.items():
         try:
             cam.frame(wait_s=5.0)                  # (the first frames after discovery can take a few seconds)

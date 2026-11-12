@@ -3,7 +3,8 @@ orchestrator, it runs an action only when the orchestrator starts one -- nothing
 
   start_meal   the scene camera finds the bowl; the arm goes to look at it and centres over it (food_detect_start)
   feed         one bite: SAM3 finds the pieces, the fork plunges and scoops one, swings to the user, waits for an open
-               mouth, stops 80 mm short, feels the bite, and goes back over the bowl. A piece still on the fork (the
+               mouth, stops 80 mm short, feels the bite, and goes back over the bowl. The meal's first feed finds the
+               bowl first when start_meal has not; every later bite uses that reading. A piece still on the fork (the
                user did not take it) is presented again by the next feed, not scooped anew; an empty bowl ends it
   finish_meal  the arm back to feeding_start
 
@@ -22,6 +23,7 @@ importing anything that reads it.
 from __future__ import annotations
 
 import logging
+import time
 
 from capability_engine import Action, Cancelled, CapabilityEngine, EngineError, run
 from rammp_orchestrator_interfaces.msg import ActionAvailability
@@ -48,6 +50,8 @@ class Feeding(CapabilityEngine):
         apply_parameters(values)
         from rammp_feeding import record
         record.setup_logging()
+        for level, line in config.state_report():           # what the state folder holds; an unreadable file, ignored
+            log.log(level, "  %s", line)
         from std_msgs.msg import Empty
         from tf2_ros import StaticTransformBroadcaster
         self._static = StaticTransformBroadcaster(self)      # (publishers for the node's life: what it publishes)
@@ -56,7 +60,7 @@ class Feeding(CapabilityEngine):
         self._token = [0] * 16                               # the orchestrator's execution token: on every arm goal
         self.create_service(AcquireControl, "~/acquire_control", self._on_acquire_control, callback_group=self._group)
         self.create_service(ReleaseControl, "~/release_control", self._on_release_control, callback_group=self._group)
-        self._meal = False                                   # start_meal has found the bowl, this selection
+        self._meal = False                                   # this meal's bowl found (start_meal, or its first feed)
         self._holding = False                                # a piece on the fork, not yet taken
         self._face = None                                    # MediaPipe, loaded by the first feed and kept
         if not self.mock:
@@ -64,11 +68,8 @@ class Feeding(CapabilityEngine):
 
     # ------------------------------------------------------------------ the engine contract
     def availability(self, instance_id, world_state):
-        """Fast, no side effects: feed only once the bowl was found this selection."""
-        return [ActionAvailability(action_id="start_meal", available=True),
-                ActionAvailability(action_id="feed", available=self._meal,
-                                   reason="" if self._meal else "find the bowl first (start_meal)"),
-                ActionAvailability(action_id="finish_meal", available=True)]
+        """Fast, no side effects: every action, always (the meal's first feed finds the bowl itself)."""
+        return [ActionAvailability(action_id=a.action_id, available=True) for a in self.actions]
 
     def hibernate(self):
         self._meal = False
@@ -95,6 +96,8 @@ class Feeding(CapabilityEngine):
         from rammp_feeding import record, scene
         from rammp_feeding.arm import Arm, MoveError
         from rammp_feeding.ros import RobotError
+        if config.UNREADABLE:                                # a state file that cannot be read: as if it were missing
+            raise EngineError("not_set_up", "unreadable: %s" % "; ".join(config.UNREADABLE), recoverable=False)
 
         def check():                                         # polled by every wait and every move in flight
             if ctx.cancelled():
@@ -106,7 +109,8 @@ class Feeding(CapabilityEngine):
             ctx.checkpoint()                                 # pause and cancel between steps
             ctx.progress(name, pct, message, pausable=False)
             log.info("  [%s] %s", action_id, message)
-        roles = ("camera", "scene_camera") if action_id == "start_meal" else ("camera",)
+        find_bowl = action_id == "start_meal" or (action_id == "feed" and not self._meal)
+        roles = ("camera", "scene_camera") if find_bowl else ("camera",)
         robot = None
         try:
             robot = self._robot(roles, check)
@@ -145,16 +149,22 @@ class Feeding(CapabilityEngine):
 
     # ------------------------------------------------------------------ the actions
     def _start_meal(self, robot, arm, step) -> dict:
+        st = self._find_bowl(robot, arm, step, (0.1, 0.4))
+        return {"bowl_xy_m": [float(v) for v in st["bowl_xy"]]}
+
+    def _find_bowl(self, robot, arm, step, pct: tuple[float, float]) -> dict:
+        """This meal's bowl: the scene camera's reading, then the wrist camera's from over it (scene_state.json), the arm
+        left at food_detect_start. Once a meal (start_meal, or the meal's first feed); every bite after it uses it."""
         from rammp_feeding import record
         from rammp_feeding.cli import detect
         from rammp_feeding.scene_camera import locate
         record.end_session()
-        step("locate", 0.1, "Finding the bowl")
+        step("locate", pct[0], "Finding the bowl")
         st = locate(robot, record.session("meal"))
-        step("detect", 0.4, "Looking at the bowl")
+        step("detect", pct[1], "Looking at the bowl")
         detect(robot, arm)
         self._meal = True
-        return {"bowl_xy_m": [float(v) for v in st["bowl_xy"]]}
+        return st
 
     def _feed(self, robot, arm, step) -> dict:
         from rammp_feeding import scene
@@ -165,6 +175,12 @@ class Feeding(CapabilityEngine):
         from rammp_feeding import record
         from rammp_feeding.geometry import max_step
         N = cfg.node
+        found_s = 0.0
+        if not self._meal:                                  # the meal's first bite: its bowl found first (never the
+            t0 = time.time()                                # reading a past meal left in scene_state.json)
+            self._recover(robot, arm, to_bowl=False)
+            self._find_bowl(robot, arm, step, (0.01, 0.03))
+            found_s = time.time() - t0                      # (taken off the wait for an open mouth: within ~105 s still)
         if self._holding:                                   # the food still on the fork: present it again
             self._recover(robot, arm, to_bowl=False)
         else:
@@ -187,7 +203,8 @@ class Feeding(CapabilityEngine):
         stages = {"swing": (0.5, "Bringing the food over"), "present": (0.6, "Waiting for an open mouth"),
                   "bite": (0.8, "Waiting for the bite"), "retract": (0.9, "Going back to the bowl")}
         stage_dir = record.stage("deliver")
-        rc = deliver(robot, arm, self._face, stage_dir, open_timeout_s=float(N.open_mouth_timeout_s),
+        rc = deliver(robot, arm, self._face, stage_dir, open_timeout_s=max(float(N.open_mouth_timeout_s) - found_s,
+                                                                          float(N.open_mouth_min_s)),
                      bite_timeout_s=float(N.bite_timeout_s), settle_s=float(N.bite_settle_s),
                      step=lambda name: step("deliver", *stages[name]))
         if rc == 0:
@@ -207,6 +224,7 @@ class Feeding(CapabilityEngine):
             self._meal = True
             return {"bowl_xy_m": [0.45, 0.0]}
         if action_id == "feed":
+            self._meal = True
             return {"bite_taken": True}
         self._meal = False
         return {"home": True}
@@ -250,8 +268,13 @@ class Feeding(CapabilityEngine):
         from rammp_feeding.ros import transform_msg
         from rammp_feeding.scene_camera import SC, extrinsic, from_platform
         if not from_platform() and (state_dir() / "scene_extrinsic.json").exists():
+            try:
+                T = extrinsic()[0]
+            except config.Unreadable as e:                   # as if not measured: start_meal answers not_set_up
+                log.warning("  ignored, as if missing: %s", e)
+                return
             self._static.sendTransform(transform_msg(self.get_clock().now().to_msg(), str(cfg.arm.base_frame),
-                                                     str(SC.link_frame), extrinsic()[0]))
+                                                     str(SC.link_frame), T))
 
 
 def main():

@@ -52,7 +52,7 @@ Served under `/feeding/`, types from `rammp_orchestrator_interfaces`: `activate`
 | `feed` | Feed a bite | — | `bite_taken`; `bowl_empty` when nothing is left; `declined` and `food_on_fork` when the user did not open their mouth |
 | `finish_meal` | Done eating | — | `home` |
 
-`feed` is available only after `start_meal`. It takes about 50 s and at most about 105 s (the waits at the mouth are
+The bowl is measured once a meal, by `start_meal` or, when it has not run, by the meal's first `feed`; every bite after it uses that reading (its rim, when SAM3 does not find the bowl in a bite's image). A meal ends with `finish_meal` or the object's deselection. `feed` takes about 50 s and at most about 105 s (the waits at the mouth are
 bounded: `node.*` in `config/rammp.yaml`). A piece the user did not take stays on the fork, and the next `feed`
 presents it again rather than scooping another. Error codes: `bowl_not_found`, `perception_failed`,
 `no_pickable_piece`, `pickup_failed`, `delivery_failed`, `no_bite`, `presentation_refused`, `move_failed`,

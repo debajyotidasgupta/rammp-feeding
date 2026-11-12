@@ -77,7 +77,7 @@ def main() -> int:
 
         def _robot(self, roles, check):
             ros = Robot(node=self, group=self._group, roles=(), check=check, static_tf=self._static.sendTransform,
-                        reset=self._reset)
+                        reset=self._reset, token=self._token)
             if TestFeeding.sim is None:                 # one fake arm across actions: it stays where it stopped
                 TestFeeding.sim = SimArmRobot(SC, ros, scene.captured("home"))
                 self._face = FakeFace(TestFeeding.sim)
@@ -130,8 +130,22 @@ def main() -> int:
               "" if t_cancel is None else ", %.1f s after the cancel" % (t_done - t_cancel)), flush=True)
         return r, len(resets) - n_reset, None if t_cancel is None else t_done - t_cancel
 
+    from rammp_common_interfaces.srv import AcquireControl, ReleaseControl
+    token = list(range(1, 17))                          # the orchestrator hands its token over before an action
+    acq = client.create_client(AcquireControl, "/feeding/acquire_control")
+    rel = client.create_client(ReleaseControl, "/feeding/release_control")
+    assert acq.wait_for_service(timeout_sec=10.0) and rel.wait_for_service(timeout_sec=10.0), "no ~/acquire_control"
+    f = acq.call_async(AcquireControl.Request(owner_id="feeding", token=token))
+    while not f.done():
+        time.sleep(0.05)
+    assert f.result().accepted and list(f.result().token) == token, f.result()
     S = Result
     r, n_reset, _ = run("start_meal")
+    assert engine.sim.ros.token == token, "the action's arm goals do not carry the orchestrator's token"
+    f = rel.call_async(ReleaseControl.Request(token=token))
+    while not f.done():
+        time.sleep(0.05)
+    assert f.result().released and engine._token == [0] * 16, f.result()
     assert r.status == S.STATUS_SUCCESS, r
     assert n_reset == 1, "start_meal did not put the planner's own world back"
     bite_at["on"] = True

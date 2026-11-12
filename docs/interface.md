@@ -42,7 +42,8 @@ Only while an action runs (each action's subscriptions are destroyed as it ends)
 ## Orchestrator interface
 
 Served under `/feeding/`, types from `rammp_orchestrator_interfaces`: `activate`, `execute_action`, `control`,
-`hibernate`. It registers through `/rammp_orchestrator/register_engine`. Activated by the perception classes
+`hibernate`; and `acquire_control`, `release_control` (`rammp_common_interfaces/srv/AcquireControl`,
+`ReleaseControl`). It registers through `/rammp_orchestrator/register_engine`. Activated by the perception classes
 `food container` and `food`. Locks the `arm`.
 
 | Action | Label | Params | Result payload |
@@ -72,8 +73,10 @@ presents it again rather than scooping another. Error codes: `bowl_not_found`, `
 
 ## Arbitration
 
-Goals carry the engine's sender id. The orchestrator's token does not reach engines yet; on an arm that enforces
-arbitration, no goals are sent.
+The orchestrator hands its execution token to `/feeding/acquire_control` before it starts an action and takes it
+back through `/feeding/release_control` once the action ends. Every arm goal of the action carries that token and the
+engine's id (`feeding`) as its sender. On an arm that enforces arbitration, an action started without a token sends no
+goals.
 
 ## Files (in the container)
 

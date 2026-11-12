@@ -187,10 +187,10 @@ class Trajectory:
 
 class Robot:
     def __init__(self, name: str = "rammp_feeding", *, node=None, group=None, roles=("camera", "scene_camera"),
-                 check=None, static_tf=None, reset=None):
+                 check=None, static_tf=None, reset=None, token=None):
         """Standalone (node None): its own node and executor. Under the node: `node` and `group` the engine's, `roles`
         the cameras this action uses, `check()` raising once the action is cancelled, `static_tf(msg)` the engine's
-        static broadcaster, `reset` its planner-reset publisher."""
+        static broadcaster, `reset` its planner-reset publisher, `token` the orchestrator's execution token."""
         import rclpy
         from rclpy.action import ActionClient
         from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
@@ -235,7 +235,7 @@ class Robot:
             self.tf = scope.create_tf_buffer()
             self._static_tf = static_tf
             joints_group = None
-            self.token = [0] * 16          # (the orchestrator's token does not reach engines yet: self.arm sends none)
+            self.token = list(token) if token else [0] * 16   # the orchestrator's, pushed to the engine
 
         def status(m):
             self.estopped, self.arbitration = bool(m.estopped), bool(m.arbitration_enabled)

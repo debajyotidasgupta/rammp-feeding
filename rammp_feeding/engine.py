@@ -52,6 +52,10 @@ class Feeding(CapabilityEngine):
         from tf2_ros import StaticTransformBroadcaster
         self._static = StaticTransformBroadcaster(self)      # (publishers for the node's life: what it publishes)
         self._reset = self.create_publisher(Empty, str(config.cfg.ros.planner_reset), 1)
+        from rammp_common_interfaces.srv import AcquireControl, ReleaseControl
+        self._token = [0] * 16                               # the orchestrator's execution token: on every arm goal
+        self.create_service(AcquireControl, "~/acquire_control", self._on_acquire_control, callback_group=self._group)
+        self.create_service(ReleaseControl, "~/release_control", self._on_release_control, callback_group=self._group)
         self._meal = False                                   # start_meal has found the bowl, this selection
         self._holding = False                                # a piece on the fork, not yet taken
         self._face = None                                    # MediaPipe, loaded by the first feed and kept
@@ -68,6 +72,22 @@ class Feeding(CapabilityEngine):
 
     def hibernate(self):
         self._meal = False
+
+    def _on_acquire_control(self, request, response):
+        """The orchestrator hands the execution token over before it starts an action: it goes on every arm goal of
+        that action, with this engine's id as the sender."""
+        self._token = [int(b) for b in request.token]
+        response.accepted, response.token, response.message = True, list(self._token), "ok"
+        return response
+
+    def _on_release_control(self, request, response):
+        """...and takes it back once the action has ended."""
+        if [int(b) for b in request.token] == self._token:
+            self._token = [0] * 16
+            response.released, response.message = True, "released"
+        else:
+            response.released, response.message = False, "not the token this engine holds"
+        return response
 
     def execute(self, action_id, params, ctx):
         if self.mock:                                        # (no hardware: the actions' results, nothing moves)
@@ -221,7 +241,7 @@ class Feeding(CapabilityEngine):
     def _robot(self, roles, check):
         from rammp_feeding.ros import Robot
         return Robot(node=self, group=self._group, roles=roles, check=check, static_tf=self._static.sendTransform,
-                     reset=self._reset)
+                     reset=self._reset, token=self._token)
 
     def _publish_scene_pose(self) -> None:
         """Our measured pose of the scene camera, latched on /tf_static for the node's life (not when the robot's own

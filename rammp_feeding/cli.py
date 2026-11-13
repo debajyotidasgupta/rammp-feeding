@@ -16,8 +16,8 @@
     rammp feed [--bites N]         the loop: bite after bite until the bowl is empty or the user declines
     rammp locate-scene             the bowl and the table from the scene camera (state_dir/scene_state.json). Never moves.
     rammp calibrate-wrist [--plan | --board]   the wrist camera's mount and the utensil's pixels, from a printed
-                                   ChArUco board laid under the utensil (from feeding_start, a few poses over it and
-                                   back; --plan: the route, nothing moves; --board: the sheet to print,
+                                   ChArUco board laid under the utensil or standing in front of it (from
+                                   feeding_start, a few poses round it and back; --plan: the route, nothing moves; --board: the sheet to print,
                                    runs_dir/charuco_board.pdf)
     rammp calibrate-scene          the scene camera's pose through the same board, where both cameras see it (from
                                    feeding_start, the wrist camera's route over it and back; after calibrate-wrist)

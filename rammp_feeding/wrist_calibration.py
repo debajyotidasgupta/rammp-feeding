@@ -2,13 +2,14 @@
 
 board      the sheet to print (rammp calibrate-wrist --board -> runs_dir/charuco_board.pdf, US Letter, at 100 %); its
            square side as printed is perception.wrist_calibration.square_m (measure it: printers scale)
-calibrate  from feeding_start the arm rises and moves out from its base, then holds the board in view from a few poses
-           pivoting on one point under the tool; at each, OpenCV finds the board in the colour image (its pose from the
+calibrate  the board laid flat under the utensil or standing in front of it. From feeding_start the arm rises and moves
+           out from its base (out_m; 0 for a standing board), then holds the board in view from a few poses pivoting on
+           one point along the tool's axis; at each, OpenCV finds the board in the colour image (its pose from the
            camera's camera_info), and the hand-eye solve (cv2.calibrateHandEye) gives the camera on the tool. At the
            first pose the board's distance by the camera's own depth must match its distance by the image (a print
-           scaled from square_m puts the camera that much further or nearer). Then the fork pass: the utensil hung over
-           the board's centre (where the solve places the board) and shifted level each way, so the board slides behind
-           the still utensil -- its tips and box in the image. Accepted only when the board's place agrees across the
+           scaled from square_m puts the camera that much further or nearer). Then the fork pass: the utensil's tips held
+           off the board's centre (where the solve places the board) and shifted along the board each way, so the board
+           slides behind the still utensil -- its tips and box in the image. Accepted only when the board's place agrees across the
            poses and the utensil is told apart against the board: state_dir/wrist_mount.json, which the camera
            profile's mount and the utensil profile's pixels take (config.load); then back to feeding_start
 views      the same route, shared (board_views): rammp calibrate-scene places the board in the base frame from it,
@@ -202,25 +203,27 @@ def _move(arm, Tg, Rg, label: str) -> None:
         arm.run(_path(arm, arm.q(), Tg, Rg, label), label, dps=float(WC.speed_dps), torque_limit=guard)
 
 
-def fork_poses(B: np.ndarray, X: np.ndarray, R: np.ndarray) -> list[np.ndarray]:
+def fork_poses(B: np.ndarray, X: np.ndarray, R: np.ndarray, T0: np.ndarray) -> list[np.ndarray]:
     """The fork pass's tool positions, in orientation R: the utensil's approximate tip -- on the tool's axis, as deep
-    along it as the ruler puts the tips past the camera -- fork_height_m above the board's centre (B: base <- board),
-    then fork_shift_m each way along the base's x and y."""
+    along it as the ruler puts the tips past the camera -- fork_height_m off the board's centre (B: base <- board) on
+    the side of the tool point T0 (above a board laid flat, in front of one standing), then fork_shift_m each way along
+    the board, so the tips stay that far off it."""
     nx, ny = (int(n) for n in WC.squares)
     sq = float(WC.square_m)
     centre = B[:3, :3] @ np.array([nx * sq / 2, ny * sq / 2, 0.0]) + B[:3, 3]
+    normal = B[:3, 2] if B[:3, 2] @ (np.asarray(T0) - centre) > 0 else -B[:3, 2]
     tip = np.array([0.0, 0.0, float((X[:3, :3] @ np.array([0.0, 0.0, float(cfg.utensil.camera_to_tip_m)]) + X[:3, 3])[2])])
-    T = centre + np.array([0.0, 0.0, float(WC.fork_height_m)]) - R @ tip
+    T = centre + normal * float(WC.fork_height_m) - R @ tip
     s = float(WC.fork_shift_m)
-    return [T] + [T + np.array(dv) for dv in ([s, 0.0, 0.0], [-s, 0.0, 0.0], [0.0, s, 0.0], [0.0, -s, 0.0])]
+    return [T] + [T + B[:3, i] * k * s for i in (0, 1) for k in (1, -1)]
 
 
 def fork_views(robot, arm, X: np.ndarray, B: np.ndarray) -> list[np.ndarray]:
-    """The fork pass, from feeding_start and back: up, the utensil over the board's centre, a frame there and at each
-    level shift (fork_poses)."""
+    """The fork pass, from feeding_start and back: up, the utensil's tips off the board's centre, a frame there and at
+    each shift along the board (fork_poses)."""
     T0, R = arm.tool(arm.q())
     up = T0 + np.array([0.0, 0.0, float(WC.rise_m)])
-    pts = fork_poses(B, X, R)
+    pts = fork_poses(B, X, R, T0)
     out, frames = record.here(), []
     _move(arm, up, R, "up")
     for k, Tk in enumerate(pts):
@@ -267,7 +270,7 @@ def plan_route(arm) -> None:
 def board_views(robot, arm) -> list | None:
     """The route round the board and back to feeding_start: the wrist camera's view of it at each pose that saw it
     (R tool, T tool, camera <- board), or None (why logged; the arm back at feeding_start). At the first pose it waits
-    for the board to be laid under the camera, and checks the print's scale by the camera's depth."""
+    for the board in front of the camera, and checks the print's scale by the camera's depth."""
     legs, back = _route(arm)
     cam, out = robot.camera_model("camera"), record.here()
     move = functools.partial(_move, arm)
@@ -284,13 +287,13 @@ def board_views(robot, arm) -> list | None:
             if C is not None or time.time() > t_end:
                 break
             if label == "pose 0" and t_end - time.time() > float(WC.wait_board_s) - 2 * float(WC.settle_s):
-                log.info("    no board under the camera (%d corners): lay it under the utensil (waiting %.0f s)", n,
+                log.info("    no board in front of the camera (%d corners): put it in front of the utensil (waiting %.0f s)", n,
                          float(WC.wait_board_s))
         record.save_image(out, "wrist_%s.jpg" % label.replace(" ", ""), rgb)
         log.info("    %-22s %s", label, "the board, %d corners" % n if C is not None else "no board (%d corners)" % n)
         why = None
         if C is None and label == "pose 0":
-            why = "no board under the camera in %.0f s" % float(WC.wait_board_s)
+            why = "no board in front of the camera in %.0f s" % float(WC.wait_board_s)
         elif label == "pose 0":
             D = robot.cameras["camera"].depth_median(10, time.time(), wait_s=5.0)
             k = depth_scale(cam, D, rgb, C)
@@ -320,7 +323,7 @@ def board_views(robot, arm) -> list | None:
 
 def calibrate(robot, arm, plan: bool = False) -> dict | None:
     """The wrist camera's mount and the utensil's pixels in its image: the route round the board (laid under the
-    utensil), the hand-eye solve, the still part of the frames; plan=True: the route, nothing moves."""
+    utensil or standing in front of it), the hand-eye solve, the still part of the frames; plan=True: the route, nothing moves."""
     if plan:
         plan_route(arm)
         return None
@@ -337,11 +340,11 @@ def calibrate(robot, arm, plan: bool = False) -> dict | None:
         log.info("  NOT accepted (<= %.1f mm, <= %.2f deg)", 1000 * float(WC.max_spread_m), float(WC.max_spread_deg))
         return None
     B = board_in_base(caps, X)[0]
-    log.info("  the fork pass: the utensil %.2f m over the board", float(WC.fork_height_m))
+    log.info("  the fork pass: the utensil's tips %.2f m off the board", float(WC.fork_height_m))
     fork = fork_in_image(fork_views(robot, arm, X, B), X, robot.camera_model("camera"))
     if fork is None:
-        log.info("  NOT accepted: the utensil not told apart against the board (wrist_fork*.jpg): the board under the "
-                 "fork pass, the utensil over it")
+        log.info("  NOT accepted: the utensil not told apart against the board (wrist_fork*.jpg): the board behind "
+                 "the utensil in the fork pass")
         return None
     log.info("  the utensil in the image: its tips at (%.1f, %.1f) px, its region %s", *fork[0], fork[1])
     res = dict(camera=str(cfg.profiles.camera), utensil=str(cfg.profiles.utensil), tip_px=fork[0], image_region_px=fork[1],

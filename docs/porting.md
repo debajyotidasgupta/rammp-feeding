@@ -37,7 +37,7 @@ From a new Jetson to `rammp feed`, in order.
 ```bash
 uv tool install "sheppy @ git+https://github.com/rammp-org/sheppy@dev"
 git clone https://github.com/rammp-org/rammp-deployments.git
-docker pull debajyotidasgupta/rammp-feeding:0.5.0
+docker pull debajyotidasgupta/rammp-feeding:0.5.1
 sudo mkdir -p /srv/rammp_feeding/config /srv/rammp_feeding/runs && sudo chown -R 1000:1000 /srv/rammp_feeding
 ```
 - SAM3's weights are gated: accept the `facebook/sam3` licence on Hugging Face and download the snapshot to the Jetson.
@@ -47,7 +47,7 @@ sudo mkdir -p /srv/rammp_feeding/config /srv/rammp_feeding/runs && sudo chown -R
   tty=-i; [ -t 0 ] && tty=-it
   exec docker run --rm $tty --network host --ipc host --user 1000:1000 -e ROS_DOMAIN_ID=0 -e HOME=/tmp \
     -v /srv/rammp_feeding/config:/config -v /srv/rammp_feeding/runs:/runs \
-    debajyotidasgupta/rammp-feeding:0.5.0 ros2 run rammp_feeding rammp "$@"
+    debajyotidasgupta/rammp-feeding:0.5.1 ros2 run rammp_feeding rammp "$@"
   ```
 
 ## 4. The deployment manifest
@@ -92,7 +92,9 @@ To pose the arm by hand: stop the arm node, move the arm with the Kinova Web App
 1. `rammp capture home`: feeding_start, with the fork straight down and the arm parked beside the table, clear of the
    user.
 2. `rammp calibrate-wrist --board` writes the sheet to print. Then run `rammp calibrate-wrist`: lay the board under the
-   arm's first pose and keep it still. It measures the wrist camera's mount and the fork's pixels.
+   arm's first pose, or stand it facing the fork (then `perception.wrist_calibration.out_m: 0` in `local.yaml`, and
+   capture home with the fork pointing at it), and keep it still. It measures the wrist camera's mount and the fork's
+   pixels.
 3. `rammp setup`. It walks through the rest, each step asking first:
    - **site:** the site values, to confirm;
    - **home:** recapture feeding_start;

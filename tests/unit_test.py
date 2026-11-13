@@ -1056,13 +1056,35 @@ class WristCalibration(unittest.TestCase):
         B = np.eye(4)
         B[:3, :3], B[:3, 3] = g.rodrigues([0.0, 0.0, 0.5]), [0.05, -0.35, -0.02]
         R = g.rot("x", 180.0)                                     # the utensil straight down
-        pts = wc.fork_poses(B, X, R)
+        pts = wc.fork_poses(B, X, R, B[:3, 3] + [0.0, 0.0, 0.4])
         nx, ny = (int(n) for n in WC.squares)
         centre = B[:3, :3] @ [nx * float(WC.square_m) / 2, ny * float(WC.square_m) / 2, 0.0] + B[:3, 3]
         depth = -0.10 + float(cfg.utensil.camera_to_tip_m)          # how far along the tool axis the tips hang
         np.testing.assert_allclose(pts[0] + R @ [0, 0, depth], centre + [0, 0, float(WC.fork_height_m)], atol=1e-9)
         shifts = sorted(np.round(np.linalg.norm(p - pts[0]), 6) for p in pts[1:])
         self.assertEqual(shifts, [float(WC.fork_shift_m)] * 4)
+        np.testing.assert_allclose([p[2] for p in pts], pts[0][2], atol=1e-9)    # shifted level
+
+    def test_the_fork_pass_holds_the_tips_in_front_of_a_standing_board(self):
+        """The board standing on the table facing the arm (its face either way out), the utensil level and pointing at
+        it: the tips fork_height_m in front of its centre, on the arm's side, and every shift keeps them that far off."""
+        from rammp_feeding import wrist_calibration as wc
+        WC = cfg.perception.wrist_calibration
+        X = np.eye(4)
+        X[:3, :3], X[:3, 3] = g.rodrigues([0.0, 0.0, math.pi]), [0.02, 0.05, -0.10]
+        R = g.rot("y", 90.0)                                      # the utensil level, pointing along the base's +x
+        depth = -0.10 + float(cfg.utensil.camera_to_tip_m)
+        nx, ny = (int(n) for n in WC.squares)
+        for face in (1.0, -1.0):
+            B = np.eye(4)
+            B[:3, :3] = g.rot("y", -90.0 * face)                  # its z along the base's -x or +x
+            B[:3, 3] = [0.95, 0.0, 0.25]
+            centre = B[:3, :3] @ [nx * float(WC.square_m) / 2, ny * float(WC.square_m) / 2, 0.0] + B[:3, 3]
+            pts = wc.fork_poses(B, X, R, np.array([0.6, 0.0, 0.4]))
+            tips = [p + R @ [0, 0, depth] for p in pts]
+            np.testing.assert_allclose(tips[0], centre - [float(WC.fork_height_m), 0, 0], atol=1e-9)
+            np.testing.assert_allclose([t[0] for t in tips], centre[0] - float(WC.fork_height_m), atol=1e-9)
+            self.assertEqual(sorted(np.round(np.linalg.norm(p - pts[0]), 6) for p in pts[1:]), [float(WC.fork_shift_m)] * 4)
 
     def test_no_board_beyond_the_tips_is_refused(self):
         """The fork drawn the same in every frame, the background changing except just beyond its tips (white table

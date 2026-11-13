@@ -166,21 +166,21 @@ perception:
     dictionary: DICT_5X5_100
     legacy_pattern: false       # OpenCV's ChArUco layout before 4.6 (boards from calib.io and older OpenCV)
     rise_m: 0.10                # from feeding_start: up this much, then this far out from the base's axis, over the board
-    out_m: 0.15
-    pivot_m: 0.30               # the poses pivot on the point this far along the tool axis (the board, under the tool)
+    out_m: 0.15                 # SITE: 0 with the board standing in front of the utensil (this leg would take it toward it)
+    pivot_m: 0.30               # the poses pivot on the point this far along the tool axis (on the board)
     tilt_deg: 10.0              # turned this much about the tool's x and y, each way ...
     turn_deg: 20.0              # ... and this much about its axis
     speed_dps: 10.0
     settle_s: 0.5               # after each move, before the image
-    wait_board_s: 60.0          # at the first pose: how long to wait for the board to be laid under the camera
+    wait_board_s: 60.0          # at the first pose: how long to wait for the board in front of the camera
     min_corners: 12
     max_scale_error: 0.02       # at the first pose the board's distance by the camera's depth and by its image
                                 # (square_m) agree this well, or it refuses: a scaled print moves the camera as much
     min_poses: 5                # of the 7
     max_spread_m: 0.005         # accepted when the board's place in the base frame agrees across the poses this well
     max_spread_deg: 1.0
-    fork_height_m: 0.10         # the fork pass: the utensil's tips this high over the board's centre ...
-    fork_shift_m: 0.03          # ... and shifted this much each way, the board sliding behind them
+    fork_height_m: 0.10         # the fork pass: the utensil's tips this far off the board's centre ...
+    fork_shift_m: 0.03          # ... and shifted this much each way along it, the board sliding behind them
     fork_still_std: 8.0         # the utensil: pixels whose grey level varies less than this across the fork pass ...
     fork_corridor_px: 60        # ... within this of the tool's axis as the camera sees it
     tip_band_px: 6              # its tips: its pixels within this of its far end along that axis

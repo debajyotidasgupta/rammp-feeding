@@ -263,8 +263,8 @@ def plan_route(arm) -> None:
         qk = captured("home") if Tg is None else _path(arm, qk, Tg, Rg, label)[-1]
         Tk, Rk = arm.tool(qk)
         log.info("    %-22s tool (%.3f, %.3f, %.3f), %.1f deg off vertical", label, *Tk, tilt_deg(Rk))
-    log.info("    then the fork pass: the utensil %.2f m over the board's centre and %.2f m each way (placed once the "
-             "mount is measured)", float(WC.fork_height_m), float(WC.fork_shift_m))
+    log.info("    then the fork pass: the utensil's tips %.2f m off the board's centre and %.2f m each way along it "
+             "(placed once the mount is measured)", float(WC.fork_height_m), float(WC.fork_shift_m))
 
 
 def board_views(robot, arm) -> list | None:

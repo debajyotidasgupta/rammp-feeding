@@ -18,6 +18,8 @@ bowl:
   floor_above_table_m: 0.005          # the bowl's inner floor above the table: 5 mm for a bowl standing flat on it; a ruler
                                       # for a bowl on a raised base (the plunge's lowest point and the planner's bowl
                                       # floor both use it)
+  # rim_radius_m: null                # with no scene camera (perception.scene.use false, below): REQUIRED, by ruler --
+  # height_m: null                    # the rim's radius and its height over the table
 
 workspace:
   table_extent_m: null                # REQUIRED: the table's edges, {x: [near, far], y: [right, left]}
@@ -25,7 +27,13 @@ workspace:
                                       # each meal's scene camera reading
   bowl_centre_m: null                 # REQUIRED: where the operator lays the bowl's centre, [x, y]
 
+# With the user to the arm's right (-y), the scoop turns the other way:
+# acquisition:
+#   scoop: {turn_deg: -90.0}
+
 perception:
+  # scene: {use: false}               # no scene camera: the wrist camera alone finds the bowl, from over bowl_centre_m
+                                      # (workspace.table_height_m and the bowl's rim_radius_m and height_m REQUIRED then)
   wrist_calibration:                  # the printed ChArUco board (rammp calibrate-wrist --board prints this one)
     square_m: 0.025                   # REQUIRED: a square's side as printed -- measure across all of them
     # For a board printed elsewhere, also its layout:

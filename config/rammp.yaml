@@ -53,6 +53,8 @@ face:
 
 workspace:                      # arm base frame, m (where the bowl and the table are: the scene camera's reading)
   bowl_centre_m: null           # SITE [x, y]: where the operator lays the bowl -- the scene camera's bowl nearest it is taken
+  bowl_centre_error_m: 0.03     # with no scene camera (perception.scene.use false): how far from bowl_centre_m the bowl
+                                # may be laid -- the first look's bowl grows by it, until the wrist camera measures it
   table_extent_m: null          # SITE {x: [near, far], y: [right, left]}: the table's edges (the planner's table, where our
                                 # tip floor applies)
   table_height_m: null          # SITE: the table's top, z (a tape from the arm's base): the one table every module on this
@@ -118,7 +120,10 @@ acquisition:
     food_height_range_m: [0.010, 0.060]
   scoop:
     speed_dps: 55.0             # fast on purpose: food slides off a slowly tilting utensil
-    rot_exp: 0.8                # turn angle = 90 * s**rot_exp: <1 starts turning the moment the food lifts
+    turn_deg: 90.0              # the turn about the base's x axis, from straight down to level: +90 ends with the tines
+                                # pointing +y (the user to the arm's left), -90 pointing -y (the user to its right)
+    rot_exp: 0.8                # turn angle = turn_deg * s**rot_exp: <1 starts turning the moment the food lifts; >1
+                                # turns late, near the rim (a narrow, deep bowl)
     waypoints: 40
     backoff_from: 0.2           # fraction of the scoop before moving across to over the bowl's centre
     lift_m: 0.04                # the scoop ends with the piece this far over the free-space tip floor above the bowl's
@@ -154,6 +159,9 @@ perception:
   food_left_inner_frac: 0.6     # stands this far above its floor -- else "food left, none pickable" (exit 5). An empty
                                 # dark bowl: 3.6 % (its walls and inner ring, depth noise); a 20-30 mm piece counts
   scene:                        # the fixed scene camera (rammp locate-scene)
+    use: true                   # false: no scene camera -- each meal's first look is over workspace.bowl_centre_m, the
+                                # bowl's size from its profile (bowl.rim_radius_m, bowl.height_m) on the site's table
+                                # (workspace.table_height_m), and the wrist camera measures it from there
     bowl_prompts: [dish, bowl, bowl with a glass jar]   # SAM3's words for the bowl (from the side a bowl reads as a
                                 # dish or a plate with a jar; "bowl" alone boxed a lidded box)
     score_threshold: 0.3
@@ -185,6 +193,13 @@ perception:
     fork_corridor_px: 60        # ... within this of the tool's axis as the camera sees it
     tip_band_px: 6              # its tips: its pixels within this of its far end along that axis
     fork_margin_px: 10          # image_region_px: its box, grown by this
+    fork_window_px: 60          # seen end-on (the board standing in front of it): searched this far round where the
+                                # ruler puts the tips ...
+    fork_still_frac: 0.15       # ... still: varying less than this share of the window's median variation ...
+    fork_bridge_px: 2           # ... gaps this wide joined (a shiny utensil reads still only in patches) ...
+    fork_end_px: 30             # ... its direction from its last this far along the tool's axis ...
+    fork_end_band_px: 12        # ... its tips: the middle of its pixels within this of its far end along it
+    fork_max_area_frac: 0.25    # refused when the still region fills more of the window: a still background
 
 delivery:
   swing_max_tilt_deg: 105.0     # carrying the piece, the utensil's tines at most this far off straight down (90: level):

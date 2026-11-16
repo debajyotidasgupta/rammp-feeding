@@ -74,6 +74,7 @@ def _fresh_joints(robot, since: float, wait_s: float = 120.0) -> None:
 
 def run(robot, arm, steps=STEPS, ask: Callable[[str], str] = input, face=None) -> int:
     from rammp_feeding.cli import check, detect, home
+    from rammp_feeding.scene_camera import in_use
 
     def go(step: str, what: str) -> bool:
         a = ask("\n[%s] %s\n  Enter: go   s: skip   q: stop > " % (step, what)).strip().lower()
@@ -104,6 +105,8 @@ def run(robot, arm, steps=STEPS, ask: Callable[[str], str] = input, face=None) -
                 seen = face.find(robot.cameras["camera"], float(cfg.delivery.face_find_s))
                 log.info("  the wrist camera %s from the delivery look", "sees a face" if seen else
                          "sees NO face -- pose it again with the user seated (rammp setup deliver)")
+        elif step == "scene" and not in_use():
+            log.info("  [scene] no scene camera (perception.scene.use false): nothing to calibrate")
         elif step == "scene":
             if go("scene", "Lay the ChArUco board on the table where the scene camera sees it and the arm can reach "
                            "over it. The arm must be at feeding_start. Enter: rammp calibrate-scene"):
@@ -111,8 +114,9 @@ def run(robot, arm, steps=STEPS, ask: Callable[[str], str] = input, face=None) -
                 if not calibrate(robot, arm):
                     return 1
         elif step == "bowl":
-            if go("bowl", "Lay the bowl where it goes. Enter: the scene camera reads it, then the arm goes over it "
-                          "and the wrist camera measures it (rammp detect)"):
+            if go("bowl", "Lay the bowl where it goes. Enter: the scene camera reads it (with none, it is taken where "
+                          "workspace.bowl_centre_m says), then the arm goes over it and the wrist camera measures it "
+                          "(rammp detect)"):
                 from rammp_feeding.scene_camera import locate
                 locate(robot, record.session("scene"))
                 detect(robot, arm)

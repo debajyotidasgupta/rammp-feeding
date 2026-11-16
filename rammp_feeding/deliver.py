@@ -1,7 +1,8 @@
 """Food delivery, from where acquisition ends: the piece level, at food_detect_start's height over the bowl.
 
   swing    one cuRobo path carrying the piece to the delivery look: a fixed pose (rammp capture deliver), the utensil
-           level toward the user, the camera on the user's face, the food out of its view of the mouth
+           level toward the user, the camera on the user's face, the food out of its view of the mouth; planned to that
+           pose in the arm shape the planner picks (the captured joints may sit inside its joint-limit margin)
   present  open loop: the mouth measured once, as it opens (the wrist camera, MediaPipe, its lips' depth), from the
            delivery look -- or, with no face or no usable mouth there, from the second look, delivery.second_look_m
            further -- then one straight move (the utensil turned toward the mouth by at most max_turn_deg) to
@@ -39,9 +40,10 @@ DL, G = cfg.delivery, cfg.guards.torque_step_nm
 
 
 def swing(arm: Arm) -> None:
-    """One planned path to the delivery look, carrying: the utensil at most swing_max_tilt_deg off vertical (or 5 deg
-    past where it starts)."""
-    arm.travel(scene.captured("deliver"), "swing to the user", tilt_cap=float(DL.swing_max_tilt_deg), carrying=True)
+    """One planned path to the delivery look's pose, carrying: the utensil at most swing_max_tilt_deg off vertical (or
+    5 deg past where it starts)."""
+    arm.travel(scene.captured("deliver"), "swing to the user", tilt_cap=float(DL.swing_max_tilt_deg), carrying=True,
+               pose=True)
 
 
 def measure_mouth(robot, arm: Arm, face, t_frame: float, rgb, out: Path | None, look: int) -> np.ndarray | None:

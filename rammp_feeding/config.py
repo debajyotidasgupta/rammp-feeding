@@ -207,10 +207,15 @@ MEASURED = ("camera.mount.camera_in_tool_m", "camera.mount.rotation_quat_xyzw", 
             "utensil.tip_px", "utensil.image_region_px", "workspace.table_extent_m", "workspace.bowl_centre_m")
 
 
+# ... and with no scene camera (perception.scene.use false), what places the bowl for the first look instead.
+MEASURED_NO_SCENE_CAMERA = ("workspace.table_height_m", "bowl.rim_radius_m", "bowl.height_m")
+
+
 def unmeasured(c: Cfg | None = None) -> list[str]:
     """The MEASURED settings still null in this machine's config."""
     c = cfg if c is None else c
-    return [k for k in MEASURED if c.get(k, None) is None]
+    need = MEASURED + (() if c.get("perception.scene.use", True) else MEASURED_NO_SCENE_CAMERA)
+    return [k for k in need if c.get(k, None) is None]
 
 
 def state_dir() -> Path:

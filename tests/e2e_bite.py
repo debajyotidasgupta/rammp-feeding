@@ -21,7 +21,7 @@ os.environ["RAMMP_SET"] += (",planner.world_file=/share/planner_world.yaml,"
 import numpy as np  # noqa: E402
 
 from fake_robot import FakeFace, Scene  # noqa: E402
-from rammp_feeding import record, scene  # noqa: E402
+from rammp_feeding import record, scene, scene_camera  # noqa: E402
 from rammp_feeding.acquire import acquire  # noqa: E402
 from rammp_feeding.arm import Arm  # noqa: E402
 from rammp_feeding.cli import _target, detect, home, perceive  # noqa: E402
@@ -37,10 +37,13 @@ def main() -> int:
     while not ros._plan.wait_for_server(timeout_sec=5.0):
         assert time.time() < t_end, "the planner did not come up"
     sc = Scene()
-    (state_dir() / "scene_state.json").write_text(json.dumps(dict(
-        bowl_xy=list(sc.bowl_xy), table_z=sc.table_z, bowl_top_z=sc.table_z + 0.06, rim_radius_m=sc.bowl_radius,
-        t=time.time())))
     robot = SimArmRobot(sc, ros, scene.captured("home"))
+    if scene_camera.in_use():                           # the scene camera's reading: the fake scene's
+        (state_dir() / "scene_state.json").write_text(json.dumps(dict(
+            bowl_xy=list(sc.bowl_xy), table_z=sc.table_z, bowl_top_z=sc.table_z + sc.rim_height,
+            rim_radius_m=sc.bowl_radius, t=time.time())))
+    else:                                               # no scene camera: the site's own bowl, then the wrist camera's
+        scene_camera.locate(robot, None)
     arm = Arm(robot)
     assert arm.kin.base == "arm_mount", arm.kin.base
     assert robot.planner_listens(), "the planner does not listen on /reset"
@@ -52,7 +55,8 @@ def main() -> int:
     assert perceive(robot, arm) == 0
     acquire(robot, arm, _target(), record.stage("acquire"))   # OVER, the depth under the tip, plunge, scoop, lift
     T, R = arm.tool()
-    assert abs(R[2, 2]) < 0.2 and R[:, 2][1] > 0.95, "the scoop did not end level, pointing at the user: %s" % R[:, 2]
+    side = 1.0 if float(scene.cfg.acquisition.scoop.turn_deg) > 0 else -1.0      # the user's side: +y, or -y
+    assert abs(R[2, 2]) < 0.2 and side * R[:, 2][1] > 0.95, "the scoop did not end level, pointing at the user: %s" % R[:, 2]
     top = scene.overlook_goal(arm)[0][2]
     assert abs(T[2] - top) < 0.005, "the lift ended at tool z %.3f, not %.3f" % (T[2], top)
     food = json.loads((record.stage("acquire") / "food.json").read_text())

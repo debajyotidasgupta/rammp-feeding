@@ -96,6 +96,7 @@ class Feeding(CapabilityEngine):
         from rammp_feeding import record, scene
         from rammp_feeding.arm import Arm, MoveError
         from rammp_feeding.ros import RobotError
+        from rammp_feeding.scene_camera import in_use
         if config.UNREADABLE:                                # a state file that cannot be read: as if it were missing
             raise EngineError("not_set_up", "unreadable: %s" % "; ".join(config.UNREADABLE), recoverable=False)
 
@@ -110,7 +111,7 @@ class Feeding(CapabilityEngine):
             ctx.progress(name, pct, message, pausable=False)
             log.info("  [%s] %s", action_id, message)
         find_bowl = action_id == "start_meal" or (action_id == "feed" and not self._meal)
-        roles = ("camera", "scene_camera") if find_bowl else ("camera",)
+        roles = ("camera", "scene_camera") if find_bowl and in_use() else ("camera",)
         robot = None
         try:
             robot = self._robot(roles, check)
@@ -168,7 +169,7 @@ class Feeding(CapabilityEngine):
 
     def _feed(self, robot, arm, step) -> dict:
         from rammp_feeding import scene
-        from rammp_feeding.acquire import acquire
+        from rammp_feeding.acquire import acquire, back_over
         from rammp_feeding.cli import perceive_target
         from rammp_feeding.config import cfg
         from rammp_feeding.deliver import deliver
@@ -185,9 +186,10 @@ class Feeding(CapabilityEngine):
             self._recover(robot, arm, to_bowl=False)
         else:
             if max_step(arm.q(), scene.overlook_joints(arm)) > float(cfg.motion.near_pose_deg):
-                step("detect", 0.05, "Moving over the bowl")
+                step("over", 0.05, "Moving over the bowl")
                 self._recover(robot, arm)
-                arm.travel(scene.overlook_joints(arm), "to food_detect_start")
+                back_over(arm)                              # (out of the bowl: straight back across, no planner)
+                arm.travel(scene.overlook_joints(arm), "to food_detect_start")   # (a settle when it got there)
             step("perceive", 0.1, "Finding the food")
             rc, target = perceive_target(robot, arm)
             if rc == 3:

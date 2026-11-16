@@ -146,16 +146,22 @@ def solve(caps) -> tuple[np.ndarray, float, float]:
 
 def fork_in_image(frames, X: np.ndarray, cam) -> tuple[list[float], list[int]] | None:
     """The utensil in the wrist image, from the route's frames (X: tool <- camera, cam: the camera's model): it stays put
-    while the board behind it moves. The still pixels near the tool's axis as the camera sees it (to 0.25 m out of the
-    tool point), the region of them from the image's edge; the middle of its far end along its own direction (the tines'
-    tips: tip_px) and its box (image_region_px). None when that region runs to the end, or nothing moves just beyond
-    the tips: no board behind them to tell them by."""
-    from scipy import ndimage
+    while the board behind it moves. Seen from the side (a board laid flat under it), the still pixels near the tool's
+    axis as the camera sees it (to 0.25 m out of the tool point), the region of them from the image's edge; the middle of
+    its far end along its own direction (the tines' tips: tip_px) and its box (image_region_px). None when that region
+    runs to the end, or nothing moves just beyond the tips: no board behind them to tell them by. Where that finds
+    none, the utensil seen end-on (a board standing in front of it): fork_end_on."""
     g = np.stack([f.mean(2) for f in frames])
     Xi = np.linalg.inv(X)
     a, b = (np.array(cam.pixel(Xi[:3, :3] @ np.array([0.0, 0.0, z]) + Xi[:3, 3])) for z in (0.0, 0.25))
     L = float(np.linalg.norm(b - a))
     d = (b - a) / L                                     # the tool's axis in the image, from the tool point outward
+    side = _fork_side_on(g, a, d, L)
+    return side if side is not None else fork_end_on(g, X, cam, a, d)
+
+
+def _fork_side_on(g: np.ndarray, a: np.ndarray, d: np.ndarray, L: float) -> tuple[list[float], list[int]] | None:
+    from scipy import ndimage
     vv, uu = np.mgrid[0:g.shape[1], 0:g.shape[2]]
     along = (uu - a[0]) * d[0] + (vv - a[1]) * d[1]
     near = (np.abs((uu - a[0]) * d[1] - (vv - a[1]) * d[0]) < float(WC.fork_corridor_px)) & (along <= L)
@@ -179,6 +185,65 @@ def fork_in_image(frames, X: np.ndarray, cam) -> tuple[list[float], list[int]] |
     m, H, W = int(WC.fork_margin_px), g.shape[1], g.shape[2]
     box = [max(0, int(u.min()) - m), max(0, int(v.min()) - m), min(W, int(u.max()) + m), min(H, int(v.max()) + m)]
     return [round(float(u[tips].mean()), 1), round(float(v[tips].mean()), 1)], box
+
+
+def fork_end_on(g: np.ndarray, X: np.ndarray, cam, a: np.ndarray, d: np.ndarray) -> tuple[list[float], list[int]] | None:
+    """The utensil seen along its length (g: the fork pass's grey frames; a, d: the tool point and the tool's axis in the
+    image): short in the image and shiny, so still only in patches, its gripper's finger the larger still region at the
+    edge. Searched within fork_window_px of where the ruler puts the tips (the tool's axis camera_to_tip_m past the
+    camera): still is varying less than fork_still_frac of the window's median variation (not under fork_still_std),
+    gaps up to fork_bridge_px joined; of that, the region entering the window from the tool point's side. Its tips:
+    the middle of its far end (fork_end_band_px) along its own direction over its last fork_end_px along the tool's
+    axis. None when the region reaches the window's far side, fills more than fork_max_area_frac of the window (a
+    still background, not a utensil), or nothing moves just beyond the tips. Its box runs on to the image's edge on the
+    tool point's side, where the gripper's fingers are."""
+    from scipy import ndimage
+    H, W = g.shape[1], g.shape[2]
+    Xi = np.linalg.inv(X)
+    tz = float((X[:3, :3] @ np.array([0.0, 0.0, float(cfg.utensil.camera_to_tip_m)]) + X[:3, 3])[2])
+    p0 = np.array(cam.pixel(Xi[:3, :3] @ np.array([0.0, 0.0, tz]) + Xi[:3, 3]))
+    h = int(WC.fork_window_px)
+    x1, y1 = max(0, int(round(p0[0])) - h), max(0, int(round(p0[1])) - h)
+    x2, y2 = min(W, int(round(p0[0])) + h), min(H, int(round(p0[1])) + h)
+    if x2 - x1 < h or y2 - y1 < h:
+        return None                                     # the tips out of the image
+    s = g.std(0)
+    win = s[y1:y2, x1:x2]
+    th = max(float(WC.fork_still_std), float(WC.fork_still_frac) * float(np.median(win)))
+    bridged = ndimage.minimum_filter(win, size=2 * int(WC.fork_bridge_px) + 1) < th
+    lab, _ = ndimage.label(bridged, structure=np.ones((3, 3)))
+    vv, uu = np.mgrid[y1:y2, x1:x2]
+    rim = np.zeros(win.shape, bool)
+    rim[0, :] = rim[-1, :] = rim[:, 0] = rim[:, -1] = True
+    toward = (uu - p0[0]) * (a[0] - p0[0]) + (vv - p0[1]) * (a[1] - p0[1]) > 0
+    entering = set(lab[rim & toward].tolist()) - {0}
+    if not entering:
+        return None
+    k = max(entering, key=lambda k: int((lab == k).sum()))
+    region = lab == k
+    if (region & rim & ~toward).any() or region.sum() > float(WC.fork_max_area_frac) * region.size:
+        return None                                     # still across the window: no board behind the tips to tell them by
+    v, u = np.nonzero(region)
+    u, v = u + x1, v + y1
+    along = (u - a[0]) * d[0] + (v - a[1]) * d[1]
+    end = along >= along.max() - float(WC.fork_end_px)
+    pts = np.c_[u[end], v[end]].astype(float)
+    e = np.linalg.eigh(np.cov((pts - pts.mean(0)).T))[1][:, -1]      # the utensil's own direction at its end ...
+    out = e if e @ (pts.mean(0) - np.array([u.mean(), v.mean()])) > 0 else -e    # ... away from the rest of it
+    sp = pts @ out
+    tip = pts[sp >= sp.max() - float(WC.fork_end_band_px)].mean(0)
+    bu, bv = tip + out * 3 * float(WC.tip_band_px)
+    gv, gu = np.mgrid[0:H, 0:W]
+    beyond = (gu - bu) ** 2 + (gv - bv) ** 2 <= float(WC.tip_band_px) ** 2
+    if beyond.sum() < 10 or (s[beyond] >= th).mean() < 0.5:
+        return None                                     # nothing moving just beyond the tips: no board behind them
+    m = int(WC.fork_margin_px)
+    box = [max(0, int(u.min()) - m), max(0, int(v.min()) - m), min(W, int(u.max()) + m), min(H, int(v.max()) + m)]
+    if a[0] < 0 or a[0] >= W:                           # the gripper's fingers between the region and the tool point
+        box[0 if a[0] < 0 else 2] = 0 if a[0] < 0 else W
+    if a[1] < 0 or a[1] >= H:
+        box[1 if a[1] < 0 else 3] = 0 if a[1] < 0 else H
+    return [round(float(tip[0]), 1), round(float(tip[1]), 1)], box
 
 
 def _path(arm, q0, T, R, label: str):

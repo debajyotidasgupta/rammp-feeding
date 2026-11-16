@@ -1,0 +1,12 @@
+{
+ "joints_deg": [
+  5.095,
+  49.332,
+  -33.436,
+  -84.981,
+  -177.888,
+  83.754,
+  -120.494
+ ],
+ "captured": "computed for the test site: the fork level 0.35 m in front of the mouth point, aimed at it (the planner refuses a look from the far side: the occupant)"
+}

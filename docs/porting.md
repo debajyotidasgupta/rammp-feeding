@@ -37,7 +37,7 @@ From a new Jetson to `rammp feed`, in order.
 ```bash
 uv tool install "sheppy @ git+https://github.com/rammp-org/sheppy@dev"
 git clone https://github.com/rammp-org/rammp-deployments.git
-docker pull debajyotidasgupta/rammp-feeding:0.5.1
+docker pull debajyotidasgupta/rammp-feeding:0.5.2
 sudo mkdir -p /srv/rammp_feeding/config /srv/rammp_feeding/runs && sudo chown -R 1000:1000 /srv/rammp_feeding
 ```
 - SAM3's weights are gated: accept the `facebook/sam3` licence on Hugging Face and download the snapshot to the Jetson.
@@ -47,7 +47,7 @@ sudo mkdir -p /srv/rammp_feeding/config /srv/rammp_feeding/runs && sudo chown -R
   tty=-i; [ -t 0 ] && tty=-it
   exec docker run --rm $tty --network host --ipc host --user 1000:1000 -e ROS_DOMAIN_ID=0 -e HOME=/tmp \
     -v /srv/rammp_feeding/config:/config -v /srv/rammp_feeding/runs:/runs \
-    debajyotidasgupta/rammp-feeding:0.5.1 ros2 run rammp_feeding rammp "$@"
+    debajyotidasgupta/rammp-feeding:0.5.2 ros2 run rammp_feeding rammp "$@"
   ```
 
 ## 4. The deployment manifest
@@ -77,6 +77,15 @@ Copy `config/machines/template.yaml` to `/srv/rammp_feeding/config/local.yaml` a
 | `workspace.bowl_centre_m` | Where the bowl is laid, `[x, y]`. `rammp setup` can write it from the wrist camera. |
 | `perception.wrist_calibration.square_m` | The printed board's square, measured across all of them |
 
+Where the robot differs:
+
+| Key | When |
+| --- | --- |
+| `perception.scene.use: false` | No scene camera, or none that sees the bowl: each meal's first look is over `bowl_centre_m`. Then `workspace.table_height_m` and the bowl's `bowl.rim_radius_m` and `bowl.height_m` (ruler) are required |
+| `acquisition.scoop.turn_deg: -90` | The user sits to the arm's right (-y): the scoop ends with the tines pointing at them |
+| `acquisition.scoop.rot_exp: 3` | A narrow, deep bowl: the fork turns late, near the rim |
+| `workspace.overlook_camera_height_m` | Lower it (0.40, 0.35) where the arm cannot hold the fork straight down 0.45 m over the bowl (a tilted mount, a long fork): `rammp detect` refuses and says why |
+
 `bowl.floor_above_table_m` (5 mm) and `utensil.punch_floor_margin_m` (5 mm) are defaults. Change them only if the
 plunge stops short (section 7).
 
@@ -90,7 +99,7 @@ is fixed or redone.
 To pose the arm by hand: stop the arm node, move the arm with the Kinova Web App, then restart the node.
 
 1. `rammp capture home`: feeding_start, with the fork straight down and the arm parked beside the table, clear of the
-   user.
+   user. A home with the fork level makes the first planned move tip it past its limit, and the move is refused.
 2. `rammp calibrate-wrist --board` writes the sheet to print. Then run `rammp calibrate-wrist`: lay the board under the
    arm's first pose, or stand it facing the fork (then `perception.wrist_calibration.out_m: 0` in `local.yaml`, and
    capture home with the fork pointing at it), and keep it still. It measures the wrist camera's mount and the fork's
@@ -100,9 +109,11 @@ To pose the arm by hand: stop the arm node, move the arm with the Kinova Web App
    - **home:** recapture feeding_start;
    - **scene:** the scene camera's pose, through the board;
    - **overlook:** pose the arm over the bowl, the fork straight down;
-   - **bowl:** the scene camera, then the wrist camera, find the bowl, and its centre can be written to `local.yaml`;
+   - **bowl:** the scene camera (with none, `bowl_centre_m`), then the wrist camera, find the bowl, and its centre can
+     be written to `local.yaml`;
    - **deliver:** pose the arm facing the seated user, the fork level and the camera on their face. It checks that a
-     face is in view.
+     face is in view. Pose it in front of them: the planner has no path to a look that reaches over the robot's model
+     of its occupant (the user's far side).
 
    Then it goes home and runs `rammp check`.
 4. `rammp check`: every row OK.

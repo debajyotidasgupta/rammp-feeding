@@ -5,7 +5,8 @@ title: Robot-assisted feeding
 # Robot-assisted feeding
 
 `rammp_feeding` feeds a seated user from a bowl, with a fork in the Kinova Gen3's gripper. Each bite:
-1. **The bowl:** the scene camera gives a first look, and the wrist camera finds the bowl and centres over it.
+1. **The bowl:** the scene camera gives a first look (with none, where the bowl is laid), and the wrist camera finds
+   the bowl and centres over it.
 2. **The pick:** the wrist camera picks a piece. The fork plunges, scoops and lifts it.
 3. **The delivery:** the arm swings to the delivery look, waits for an open mouth, measures it, presents the piece,
    waits for the bite and returns.
@@ -26,7 +27,7 @@ actions (`start_meal`, `feed` for one bite, `finish_meal`) and nothing moves oth
 | `state` | Where the arm is. Never moves. |
 | `home [--direct]` | To feeding_start: a planned path, or one joint move with `--direct` (clear workspace only). |
 | `setup [step ...]` | After the arm, the bowl or the user moved: guided captures and calibrations (site, home, scene, overlook, bowl, deliver). |
-| `locate-scene` | The bowl and the table from the scene camera. Never moves. |
+| `locate-scene` | The bowl and the table from the scene camera (with none, where the bowl is laid). Never moves. |
 | `detect` | Over the bowl, centred by the wrist camera. |
 | `perceive` | The target piece (a new bite). Never moves. |
 | `acquire [--stop-after over\|hover30\|hover10\|plunge] [--start-at over\|scoop]` | Over the piece, plunge, scoop, lift. |

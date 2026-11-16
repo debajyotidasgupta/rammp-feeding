@@ -18,8 +18,8 @@ find the bowl, feed one bite, and go home. Nothing moves when it starts, and not
 
 ## Subscribes
 
-Only while an action runs (each action's subscriptions are destroyed as it ends); the scene camera only in
-`start_meal`.
+Only while an action runs (each action's subscriptions are destroyed as it ends); the scene camera only as a meal
+finds its bowl (`start_meal`, or the meal's first `feed`), and never with `perception.scene.use` false.
 
 | Topic | Type | Required | Meaning |
 | --- | --- | --- | --- |

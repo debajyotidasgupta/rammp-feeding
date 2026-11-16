@@ -8,9 +8,11 @@ driver's (camera_info, /tf_static); where its link frame sits on the robot is ou
 locate     the bowl: SAM3 with perception.scene.bowl_prompts (boxes and masks); its points in the base frame; the
            table round it (a plane fit to the dominant flat surface), its centre and radius (a circle through its rim)
            and its top -> state_dir/scene_state.json, the bowl nearest workspace.bowl_centre_m (where the operator
-           lays it)
-refine     the same fit on the wrist camera's view from food_detect_start (rammp detect): the bowl it finds nearest
-           this one's, however far from it, replaces its centre, radius and the table's height
+           lays it). With no scene camera (perception.scene.use false): the site's own bowl instead -- at
+           bowl_centre_m, its profile's size, on the site's table, to workspace.bowl_centre_error_m
+refine     the same fit on the wrist camera's view from food_detect_start (rammp detect), the utensil's own pixels
+           (utensil.image_region_px) left out: the bowl it finds nearest this one's, however far from it, replaces its
+           centre, radius and the table's height
 calibrate  through the ChArUco board on the table (perception.wrist_calibration's, as rammp calibrate-wrist uses it):
            this camera sees it from where it is; the wrist camera, through its measured mount, sees it from the route
            over it and so places it in the base frame; this camera's pose follows. Neither the arm nor a guess needs to
@@ -35,6 +37,11 @@ from rammp_feeding.perception import _in
 
 log = logging.getLogger("rammp")
 SC, PS = cfg.scene_camera, cfg.perception.scene
+
+
+def in_use() -> bool:
+    """Whether there is a scene camera to read the bowl at each meal's start (perception.scene.use)."""
+    return bool(cfg.get("perception.scene.use", True))
 
 
 def from_platform() -> bool:
@@ -89,12 +96,14 @@ def table_height(p: np.ndarray, at_xy) -> float:
     return float(c[0] * at_xy[0] + c[1] * at_xy[1] + c[2])
 
 
-def bowl_at(mask: np.ndarray, box, uv: np.ndarray, p: np.ndarray) -> dict:
-    """One candidate -> the bowl it is (centre, top, the table round it), or why not."""
-    inside = _in(mask, uv)
+def bowl_at(mask: np.ndarray, box, uv: np.ndarray, p: np.ndarray, leave_out: np.ndarray | None = None) -> dict:
+    """One candidate -> the bowl it is (centre, top, the table round it), or why not; the points flagged in leave_out
+    (the utensil's own, in the wrist camera's view) are neither bowl nor table."""
+    keep = np.ones(len(uv), bool) if leave_out is None else ~leave_out
+    inside = _in(mask, uv) & keep
     w, h = box[2] - box[0], box[3] - box[1]
     ring = ((uv[:, 0] >= box[0] - 0.6 * w) & (uv[:, 0] <= box[2] + 0.6 * w) & (uv[:, 1] >= box[1] - 0.3 * h)
-            & (uv[:, 1] <= box[3] + 0.6 * h) & ~inside)
+            & (uv[:, 1] <= box[3] + 0.6 * h) & ~_in(mask, uv) & keep)
     res = dict(box=[round(float(v), 1) for v in box])
     if inside.sum() < 50 or ring.sum() < 50:
         return dict(res, rejected="too little depth at or round it")
@@ -115,7 +124,29 @@ def bowl_at(mask: np.ndarray, box, uv: np.ndarray, p: np.ndarray) -> dict:
     return dict(res, bowl_xy=[float(cx), float(cy)], table_z=tz, bowl_top_z=top, rim_radius_m=round(radius, 3))
 
 
+def site_bowl(out: Path | None) -> dict:
+    """The first look's bowl with no scene camera: where the operator lays it (workspace.bowl_centre_m), the size its
+    profile gives (bowl.rim_radius_m, bowl.height_m: a ruler), on the site's table (workspace.table_height_m) ->
+    state_dir/scene_state.json, trusted to workspace.bowl_centre_error_m until the wrist camera measures it."""
+    from rammp_feeding.config import unmeasured
+    missing = [k for k in unmeasured() if k.startswith(("bowl.", "workspace."))]
+    if missing:
+        raise RuntimeError("no scene camera (perception.scene.use false): set %s in local.yaml" % ", ".join(missing))
+    tz = float(cfg.workspace.table_height_m)
+    st = dict(bowl_xy=[float(v) for v in cfg.workspace.bowl_centre_m], table_z=tz, bowl_top_z=tz + float(cfg.bowl.height_m),
+              rim_radius_m=float(cfg.bowl.rim_radius_m), t=time.time(), extrinsic="the site (no scene camera)",
+              source="site", record=str(out) if out is not None else None)
+    (state_dir() / "scene_state.json").write_text(json.dumps(st, indent=1))
+    log.info("  the bowl where it is laid (no scene camera): (%.3f, %.3f) (+-%.2f m), rim radius %.3f m, table z %.3f, "
+             "top z %.3f", *st["bowl_xy"], float(cfg.workspace.bowl_centre_error_m), st["rim_radius_m"], tz,
+             st["bowl_top_z"])
+    record.event("located", **st)
+    return st
+
+
 def locate(robot, out: Path | None) -> dict:
+    if not in_use():
+        return site_bowl(out)
     T, source = extrinsic(robot)
     cam = robot.cameras["scene_camera"]
     since = time.time()
@@ -152,10 +183,11 @@ def locate(robot, out: Path | None) -> dict:
 
 def refine(robot, arm) -> dict:
     """The bowl as the wrist camera sees it from food_detect_start (SAM3 with perception.bowl_prompts, its depth through
-    the measured mount, locate's own fit): of its bowls, the one nearest the latest reading, however far, gives
-    scene_state.json its centre, radius and the table's height round it (seen from above, the table reads to a few
-    mm; from the scene camera's low angle, not). The bowl's top stays the scene camera's: from above, the rim is too
-    thin to read it. Refused only when the wrist camera sees no bowl."""
+    the measured mount, locate's own fit, the utensil's own pixels left out): of its bowls, the one nearest the latest
+    reading, however far, gives scene_state.json its centre, radius and the table's height round it (seen from above,
+    the table reads to a few mm; from the scene camera's low angle, not). The bowl's top stays the first look's (the
+    scene camera's, or the site's ruler): from above, the rim is too thin to read it. Refused only when the wrist
+    camera sees no bowl."""
     from rammp_feeding.scene import camera_pose
     cam, model = robot.cameras["camera"], robot.camera_model("camera")
     since = time.time()
@@ -168,14 +200,17 @@ def refine(robot, arm) -> dict:
     dets = robot.detect("camera", list(cfg.perception.bowl_prompts), float(cfg.perception.bowl_score_threshold))
     f = state_dir() / "scene_state.json"
     st = read_json(f)
-    fits = [bowl_at(d.mask, d.box, uv, pc @ Rc.T + o) for d in dets]
+    ute = np.zeros(rgb.shape[:2], bool)                 # the utensil itself, always in view: neither bowl nor table
+    x1, y1, x2, y2 = (int(v) for v in cfg.utensil.image_region_px)
+    ute[y1:y2, x1:x2] = True
+    fits = [bowl_at(d.mask, d.box, uv, pc @ Rc.T + o, leave_out=_in(ute, uv)) for d in dets]
     bowls = [m for m in fits if "bowl_xy" in m]
     if not bowls:
         raise RuntimeError("the wrist camera sees no bowl (%d candidates: %s)" % (len(fits), ", ".join(
             m.get("rejected") for m in fits) or "none"))
     fit = min(bowls, key=lambda m: np.hypot(*np.subtract(m["bowl_xy"], st["bowl_xy"])))
-    scene_xy = st.get("scene_bowl_xy", st["bowl_xy"])     # the scene camera's own reading, kept through refinements
-    log.info("  the wrist camera: the bowl at (%.3f, %.3f), %.0f mm from the scene camera's, rim radius %.3f m; the table "
+    scene_xy = st.get("scene_bowl_xy", st["bowl_xy"])     # the first look's own reading, kept through refinements
+    log.info("  the wrist camera: the bowl at (%.3f, %.3f), %.0f mm from the first look's, rim radius %.3f m; the table "
              "z %.3f (%+.0f mm)", *fit["bowl_xy"], 1000 * float(np.hypot(*np.subtract(fit["bowl_xy"], scene_xy))),
              fit["rim_radius_m"], fit["table_z"], 1000 * (fit["table_z"] - st["table_z"]))
     st.update({k: fit[k] for k in ("bowl_xy", "rim_radius_m", "table_z")}, scene_bowl_xy=list(scene_xy),
@@ -197,6 +232,8 @@ def calibrate(robot, arm) -> dict | None:
     feeding_start and back; the board kept still); written and published."""
     from rammp_feeding import wrist_calibration as wc
     from rammp_feeding.scene import CAM_IN_TOOL, CAM_ROT
+    if not in_use():
+        raise RuntimeError("no scene camera in use (perception.scene.use false): nothing to calibrate")
     if from_platform():
         raise RuntimeError("the robot's own /tf_static places the scene camera (scene_camera.pose_from: platform): "
                            "nothing to calibrate")

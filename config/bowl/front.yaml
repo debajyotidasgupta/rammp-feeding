@@ -6,3 +6,5 @@ floor_above_table_m: 0.005      # the bowl's inner floor above the table: 5 mm, 
                                 # it only for a bowl on a raised base). Two places read it, and only these: the plunge
                                 # never goes under it (a clear bowl's floor is invisible to depth: it reads the table
                                 # beneath), and the planner's world builds the bowl's floor box up to it
+rim_radius_m: null              # SITE with no scene camera (perception.scene.use false): the rim's radius and its height
+height_m: null                  # over the table, by ruler -- the first look's bowl, before the wrist camera measures it

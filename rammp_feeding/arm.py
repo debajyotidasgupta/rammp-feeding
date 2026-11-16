@@ -24,7 +24,7 @@ import numpy as np
 
 from rammp_feeding import record
 from rammp_feeding.config import cfg, unmeasured
-from rammp_feeding.geometry import densify, fold, max_step, sphere_box_clearance, tilt_deg
+from rammp_feeding.geometry import densify, fold, max_step, rot_log, sphere_box_clearance, tilt_deg
 from rammp_feeding.kinematics import Chain
 
 log = logging.getLogger("rammp")
@@ -396,17 +396,22 @@ class Arm:
         return min(t[2] for t in tips), max(t[2] for t in tips)
 
     def travel(self, goal: Sequence[float], label: str, dps: float | None = None, go: bool = True,
-               max_reach_m: float | None = None, carrying: bool = False, level: bool = False, **kw) -> list[Joints]:
+               max_reach_m: float | None = None, carrying: bool = False, level: bool = False, pose: bool = False,
+               **kw) -> list[Joints]:
         """A collision-free path from the shared planner, from here to goal (go=False: plan only), with our world pushed
         to it first; thinned, checked as it will run against our tip floor, the utensil's tilt (tilt_limit) and, for
         the utensil (and, carrying, the piece), against our boxes -- re-planned when it fails any -- run, and settled
-        exactly onto goal. level: planned to goal's tool pose with its tilt held all the way (the planner's HOLD_LEVEL:
-        something that must stay upright, a cup), and not settled onto goal's joints (the plan may reach the pose in
-        others)."""
+        exactly onto goal. pose: planned to goal's tool pose in the arm shape the planner picks (goal's own joints may
+        sit inside its joint-limit margin), and not settled onto goal's joints; level: the same, its tilt held all the
+        way (the planner's HOLD_LEVEL: something that must stay upright, a cup)."""
         from rammp_feeding.scene import push_world, tip_floor, utensil_boxes, utensil_spheres
         FS = M.free_space
         q = self.q()
-        if max_step(q, goal) <= float(M.near_pose_deg):
+        if level or pose:                             # at goal's pose already, in whatever shape: nothing to do
+            (T, R), (Tg, Rg) = self.tool(q), self.tool(goal)
+            if np.linalg.norm(Tg - T) < float(M.arrived_m) and np.linalg.norm(rot_log(Rg @ R.T)) < 1e-3:
+                return [q]
+        elif max_step(q, goal) <= float(M.near_pose_deg):
             if go:
                 self.goto(goal, "settle " + label)
             return [q, list(goal)]
@@ -416,9 +421,9 @@ class Arm:
                                                                                                 H.boxes())
         floor = tip_floor if H is None else H.floor
         for k in range(int(FS.replans) + 1):
-            try:                                      # level: to goal's tool pose, its tilt held on the way (a cup)
-                pos, _ = (self.robot.plan_pose(q, *self.tool(goal), float(FS.timeout_s)) if level else
-                          self.robot.plan_joints(q, goal, float(FS.timeout_s)))
+            try:                                      # to goal's tool pose (level: its tilt held on the way, a cup)
+                pos, _ = (self.robot.plan_pose(q, *self.tool(goal), float(FS.timeout_s), hold=1 if level else 0)
+                          if level or pose else self.robot.plan_joints(q, goal, float(FS.timeout_s)))
             except RuntimeError as e:
                 raise MoveError("%s: %s" % (label, e))
             pos[0] = q
@@ -441,7 +446,7 @@ class Arm:
                                              float(M.trajectory_sample_s))
             self.run(timed, label, durations=durations,
                      torque_limit=kw.pop("torque_limit", float(cfg.guards.torque_step_nm.free_space)), **kw)
-            if not level:                             # (a level plan ends at goal's pose, maybe in other joints: kept)
+            if not (level or pose):                   # (a plan to the pose ends there, maybe in other joints: kept)
                 self.goto(goal, "settle " + label)
         return path
 

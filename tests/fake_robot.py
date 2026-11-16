@@ -1,8 +1,11 @@
 """rammp_feeding.ros.Robot without ROS, for the offline tests: a kinematic arm that plays the trajectories it is sent
 (sampled at 100 Hz), a straight-line "planner", and cameras rendering the scene from where the arm actually holds them.
 
-The scene: a table at table_z, a clear bowl (its depth reads the table through it) round bowl_xy, one food piece (a
-cylinder) at piece_xy, the user's mouth at mouth. SAM3's boxes are the bowl's and the piece's projections.
+The scene: a table at table_z, a clear bowl (its depth reads the table through it, its rim rim_height up) round
+bowl_xy, one food piece (a cylinder) at piece_xy, the user's mouth at mouth. SAM3's boxes are the bowl's and the piece's
+projections. The site (tests/fixture.py's RAMMP_TEST_SITE): level -- the arm level on its mount, a D405 on the wrist, the
+user to the arm's left; tilt30 -- the arm leaning 30 deg forward on its mount (that robot's own description render), an
+OAK-D Pro on the wrist, a narrow deep cup on a low table, the user to the arm's right.
 """
 
 from __future__ import annotations
@@ -20,22 +23,25 @@ from rammp_feeding.config import cfg
 from rammp_feeding.geometry import fold
 from rammp_feeding.ros import Detection
 
-# the site D405's camera_info (848x480, 2026-09-30): colour and depth one sensor
-D405 = Intrinsics(434.884, 434.330, 423.960, 237.798, 848, 480)
-CAM = CameraModel(D405, D405, np.eye(4))
-MODEL = open(os.path.join(os.path.dirname(__file__), "arm_level.urdf")).read()   # (RAMMP-CuRobo 2.0.1's render)
+TILT = os.environ.get("RAMMP_TEST_SITE", "level") == "tilt30"
+# the wrist camera's camera_info: an OAK-D Pro's 640x400 colour (tilt30), the D405's 848x480 (one sensor for both)
+INTR = (Intrinsics(398.443, 398.350, 337.992, 203.154, 640, 400) if TILT else
+        Intrinsics(434.884, 434.330, 423.960, 237.798, 848, 480))
+CAM = CameraModel(INTR, INTR, np.eye(4))
+MODEL = open(os.path.join(os.path.dirname(__file__), "arm_tilt30.urdf" if TILT else "arm_level.urdf")).read()
 
 
 @dataclass
 class Scene:
-    table_z: float = 0.0072                         # the test site's table, in the arm's base frame
-    bowl_xy: tuple = (0.290, 0.158)
-    bowl_radius: float = 0.07
-    piece_xy: tuple = (0.296, 0.152)
+    table_z: float = 0.095 if TILT else 0.0072      # the test site's table, in the arm's base frame
+    bowl_xy: tuple = (0.639, -0.223) if TILT else (0.290, 0.158)
+    bowl_radius: float = 0.045 if TILT else 0.07
+    rim_height: float = 0.08 if TILT else 0.06      # the rim over the table
+    piece_xy: tuple = (0.645, -0.217) if TILT else (0.296, 0.152)
     piece_radius: float = 0.013
     piece_height: float = 0.025
     floor_lift: float = 0.0                         # the surface the depth reads under the bowl, above the table
-    mouth: tuple = (-0.277, 0.306, 0.428)
+    mouth: tuple = (-0.27, -0.20, 0.60) if TILT else (-0.277, 0.306, 0.428)
 
 
 class FakeTrajectory:
@@ -72,7 +78,7 @@ class FakeCamera:
 
     def frame(self, after: float = 0.0, wait_s: float = 3.0):
         t = max(time.time(), after + 1e-3)
-        return t, np.full((D405.height, D405.width, 3), 120, np.uint8)
+        return t, np.full((INTR.height, INTR.width, 3), 120, np.uint8)
 
     def depth_median(self, frames, since, wait_s=3.0, min_frames=5):
         return self.robot.render_depth()
@@ -133,6 +139,21 @@ class FakeRobot:
         n = 60
         return np.array([s + (g - s) * k / n for k in range(n + 1)]), np.linspace(0, 3, n + 1)
 
+    def plan_pose(self, start_deg, T, R, timeout_s, hold=1):
+        """A path to the tool pose (T, R), as the planner picks an arm shape for a pose: a straight joint line onto the
+        IK solution nearest the start (from it, and from seeds round it)."""
+        s, rng, best = np.asarray(start_deg, float), np.random.default_rng(0), None
+        for seed in [s] + [s + rng.normal(0.0, 45.0, 7) for _ in range(40)]:
+            g = self.kin.ik(np.asarray(T, float), np.asarray(R, float), list(seed), iters=200)
+            if g is not None:
+                g = s + fold(np.asarray(g, float) - s)
+                if best is None or np.abs(g - s).max() < np.abs(best - s).max():
+                    best = g
+        if best is None:
+            raise RuntimeError("the fake planner: no IK at the goal")
+        n = 60
+        return np.array([s + (best - s) * k / n for k in range(n + 1)]), np.linspace(0, 3, n + 1)
+
     def set_world(self, path):
         self.worlds.append(yaml.safe_load(open(path)) if os.path.isfile(path) else path)
 
@@ -149,8 +170,8 @@ class FakeRobot:
 
     def _rays(self):
         o, Rc = self.camera_pose()
-        vv, uu = np.mgrid[0:D405.height, 0:D405.width]
-        return o, np.stack([(uu - D405.cx) / D405.fx, (vv - D405.cy) / D405.fy, np.ones_like(uu, float)], -1) @ Rc.T
+        vv, uu = np.mgrid[0:INTR.height, 0:INTR.width]
+        return o, np.stack([(uu - INTR.cx) / INTR.fx, (vv - INTR.cy) / INTR.fy, np.ones_like(uu, float)], -1) @ Rc.T
 
     def _disc(self, centre, r, z):
         """The pixels whose ray meets the horizontal disc (centre, r) at height z."""
@@ -161,11 +182,11 @@ class FakeRobot:
         return (np.hypot(p[..., 0] - centre[0], p[..., 1] - centre[1]) < r) & (t > 0)
 
     def render_depth(self) -> np.ndarray:
-        """mm along the optical axis: the bowl's rim (6 mm wide, 60 mm up), the piece's top where its disc is, else the
-        table (the bowl's walls and floor read as it)."""
+        """mm along the optical axis: the bowl's rim (6 mm wide, rim_height up), the piece's top where its disc is, else
+        the table (the bowl's walls and floor read as it)."""
         o, d = self._rays()
         sc = self.sc
-        floor, rim = sc.table_z + sc.floor_lift, sc.table_z + 0.06
+        floor, rim = sc.table_z + sc.floor_lift, sc.table_z + sc.rim_height
         with np.errstate(divide="ignore", invalid="ignore"):
             t_tab = (floor - o[2]) / d[..., 2]
             t_top = (floor + sc.piece_height - o[2]) / d[..., 2]
@@ -192,8 +213,9 @@ class FakeRobot:
         out = []
         if any(p in cfg.perception.bowl_prompts for p in prompts):          # its mask stops at the piece on it, as SAM3's
             piece = self._disc(sc.piece_xy, sc.piece_radius, sc.table_z + sc.piece_height)
-            out.append(Detection(cfg.perception.bowl_prompts[0], 0.9, self._box(sc.bowl_xy, sc.bowl_radius, sc.table_z + 0.06),
-                                 self._disc(sc.bowl_xy, sc.bowl_radius, sc.table_z + 0.06) & ~piece))
+            rim = sc.table_z + sc.rim_height
+            out.append(Detection(cfg.perception.bowl_prompts[0], 0.9, self._box(sc.bowl_xy, sc.bowl_radius, rim),
+                                 self._disc(sc.bowl_xy, sc.bowl_radius, rim) & ~piece))
         if cfg.food.prompt in prompts:
             top = sc.table_z + sc.piece_height
             out.append(Detection(cfg.food.prompt, 0.8, self._box(sc.piece_xy, sc.piece_radius, top),
@@ -221,6 +243,6 @@ class FakeFace:
         o, Rc = self.robot.camera_pose()
         c = Rc.T @ (np.asarray(self.robot.sc.mouth, float) - o)
         u, v = CAM.pixel(c) if c[2] > 0 else (-1.0, -1.0)
-        if not (0 <= u < D405.width and 0 <= v < D405.height):
+        if not (0 <= u < INTR.width and 0 <= v < INTR.height):
             return None
         return dict(cam_xyz=[float(v) for v in c], source="depth", open=0.4)

@@ -6,8 +6,9 @@
            under bowl.floor_above_table_m: a clear bowl reads the table through it), in one move: fast, easing to slow
            above the piece; the contact guard strict above the food, a firm piece's piercing allowed once the tines
            are in it; the wrist camera's view where it stops saved (acquire/plunge_end.jpg)
-  scoop    the piece rises while the utensil turns from vertical to level about it, to acquisition.scoop.lift_m over
-           the free-space floor above the bowl's centre; stopped if the food point leaves its path or drops
+  scoop    the piece rises while the utensil turns from vertical to level about it (acquisition.scoop.turn_deg about the
+           base's x axis: its sign is the user's side), to acquisition.scoop.lift_m over the free-space floor above the
+           bowl's centre; stopped if the food point leaves its path or drops
   lift     then straight up, the utensil level, to food_detect_start's height: the whole arm clear of the planner's
            world, where the swing starts
   pick     over -> a fresh depth reading from there -> plunge -> scoop, planned before the plunge starts (no pause);
@@ -15,6 +16,9 @@
            run on its own (--start-at scoop) starts from there
   descend / rise   the hover route for aim checks (tip_px): from OVER, down to a hover above the piece (never under
            the bowl's own floor), and straight back up
+  back_over        OVER reversed: from over the bowl at food_detect_start's height, the utensil near vertical (a rise
+           out of the bowl, after a cancelled plunge), straight across to food_detect_start -- no planned path, whose
+           start may sit inside the planner's joint-limit margin there
 """
 
 from __future__ import annotations
@@ -136,7 +140,7 @@ def plunge(arm: Arm, u: dict, out: Path | None, scoop_after: bool = True) -> Foo
 # ------------------------------------------------------------------ the scoop
 def plan_scoop(arm: Arm, q0, T0, R0, food: Food) -> dict:
     """From a given state (here, or where the plunge will end): the food point -- the piece's centre on the tines --
-    rises while the utensil turns 90 deg about it (the turn = 90 * s**rot_exp: it starts at once), to lift_m over the
+    rises while the utensil turns turn_deg about it (the turn = turn_deg * s**rot_exp), to lift_m over the
     free-space tip floor above the bowl's centre (scene.tip_floor: the bowl's top + min_tip_above_bowl_m + the scene
     camera's error_m), moving across to that centre once past steep (backoff_from); the arm's shape follows on from where it
     starts."""
@@ -157,14 +161,14 @@ def plan_scoop(arm: Arm, q0, T0, R0, food: Food) -> dict:
         return piv0 + np.array([0, 0, rise * s]) + x * x * (3 - 2 * x) * back
 
     def at(s):
-        R = rot("x", 90.0 * s ** float(S.rot_exp)) @ R0
+        R = rot("x", float(S.turn_deg) * s ** float(S.rot_exp)) @ R0
         return piv_at(s) - R @ o_piv, R
     path, why = arm.homotopy(q0, at, int(S.waypoints))
     if path is None:
         raise MoveError("no continuous scoop path from here (%s) -- nothing moved" % why)
-    log.info("    scoop: the food rises %.0f mm, %.0f mm across to over the bowl's centre, turning 90 deg; joint margin "
+    log.info("    scoop: the food rises %.0f mm, %.0f mm across to over the bowl's centre, turning %.0f deg; joint margin "
              ">= %.1f deg",
-             1000 * rise, 1000 * np.linalg.norm(back), min(arm.margin(q) for q in path))
+             1000 * rise, 1000 * np.linalg.norm(back), float(S.turn_deg), min(arm.margin(q) for q in path))
     return dict(path=path, o_piv=o_piv, plan=np.array([piv_at(k / 400) for k in range(401)]), piv0=piv0)
 
 
@@ -203,6 +207,21 @@ def descend(arm: Arm, u: dict, to_above: float) -> None:
         return
     T, R = arm.tool()
     arm.straight(T - np.array([0, 0, down]), R, float(S.descend_mps), "descend")
+
+
+def back_over(arm: Arm) -> bool:
+    """Straight across to food_detect_start, the utensil turned to its orientation, when the arm is over the bowl at
+    that height or above it with the utensil within motion.max_tilt_deg of vertical; False, nothing moved,
+    otherwise."""
+    T, R = arm.tool()
+    T1, R1 = scene.overlook_goal(arm)
+    ws, tip = scene.workspace(), arm.tip()
+    over = math.hypot(tip[0] - ws["bowl_xy"][0], tip[1] - ws["bowl_xy"][1]) < ws["bowl_radius"] + float(
+        cfg.motion.free_space.bowl_margin_m)
+    if not over or T[2] < T1[2] - float(cfg.motion.arrived_m) or arm.tilt(R) > float(cfg.motion.max_tilt_deg):
+        return False
+    arm.straight(T1, R1, float(A.over_speed_mps), "back to food_detect_start")
+    return True
 
 
 def rise(arm: Arm, label: str = "rise") -> None:

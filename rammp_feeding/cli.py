@@ -14,11 +14,12 @@
     rammp deliver [--stop-after swing|present|bite] [--start-at swing|present|bite|retract] [--no-wait-open]
     rammp retract                  from the user back to food_detect_start
     rammp feed [--bites N]         the loop: bite after bite until the bowl is empty or the user declines
-    rammp locate-scene             the bowl and the table from the scene camera (state_dir/scene_state.json). Never moves.
+    rammp locate-scene             the bowl and the table from the scene camera (state_dir/scene_state.json); with no
+                                   scene camera, the site's own bowl (perception.scene.use). Never moves.
     rammp calibrate-wrist [--plan | --board]   the wrist camera's mount and the utensil's pixels, from a printed
                                    ChArUco board laid under the utensil or standing in front of it (from
-                                   feeding_start, a few poses round it and back; --plan: the route, nothing moves; --board: the sheet to print,
-                                   runs_dir/charuco_board.pdf)
+                                   feeding_start, a few poses round it and back; --plan: the route, nothing moves;
+                                   --board: the sheet to print, runs_dir/charuco_board.pdf)
     rammp calibrate-scene          the scene camera's pose through the same board, where both cameras see it (from
                                    feeding_start, the wrist camera's route over it and back; after calibrate-wrist)
     rammp capture home|overlook|deliver   the arm's joints now as feeding_start / food_detect_start's arm shape / the
@@ -54,7 +55,8 @@ TIP_FREE = ("check", "state", "capture", "calibrate-wrist")     # (and home --di
 
 def _robot():
     from rammp_feeding.ros import Robot
-    return Robot()
+    from rammp_feeding.scene_camera import in_use
+    return Robot(roles=("camera", "scene_camera") if in_use() else ("camera",))
 
 
 def report(arm, what: str) -> None:
@@ -180,8 +182,18 @@ def check(robot, arm) -> int:
     poses = [n for n in CAPTURES if not (state_dir() / (n + ".json")).exists()]
     row(not poses, "poses", "captured: %s" % ", ".join(CAPTURES) if not poses else "not captured: %s (rammp capture)"
         % ", ".join(poses))
-    row((state_dir() / "scene_extrinsic.json").exists(), "scene pose", "measured (state_dir/scene_extrinsic.json)"
-        if (state_dir() / "scene_extrinsic.json").exists() else "not measured (rammp calibrate-scene)")
+    from rammp_feeding import scene_camera
+    if not scene_camera.in_use():
+        row(True, "scene camera", "not used (perception.scene.use false): each meal's first look is over "
+            "workspace.bowl_centre_m (%.3f, %.3f)" % tuple(cfg.workspace.bowl_centre_m or (float("nan"),) * 2))
+    else:
+        try:
+            scene_camera.extrinsic(robot)
+            row(True, "scene pose", "from the robot's /tf_static (pose_from: platform)" if scene_camera.from_platform()
+                else "measured (state_dir/scene_extrinsic.json)")
+        except Exception as e:  # noqa: BLE001
+            row(False, "scene pose", "not measured (rammp calibrate-scene)" if not scene_camera.from_platform()
+                else "not on /tf_static: %s" % e)
     for u in config.UNREADABLE:                        # loaded as if missing
         row(False, "state file", "unreadable, ignored: %s" % u)
     for role, cam in robot.cameras.items():

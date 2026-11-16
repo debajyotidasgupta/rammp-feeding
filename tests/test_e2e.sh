@@ -5,6 +5,7 @@
 # tests/e2e_engine.py (the feeding engine driven through its actions), the rendered scene tests/fake_robot.py's; then
 # the node as sheppy starts it, mock and real: /feeding/status up, and docker stop ends it within 5 s.
 #   ROBOT=<rammp-deployments config/robots/<robot> folder> tests/test_e2e.sh      (after: docker build -t rammp_feeding:dev .)
+#   RAMMP_TEST_SITE=tilt30 ROBOT=<a robot whose arm leans 30 deg on its mount> tests/test_e2e.sh   (tests/fixture.py)
 # A CUDA host (the planner); the first run compiles the planner's kernels (a few minutes, kept in curobo_kernel_cache).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -29,8 +30,8 @@ docker run -d --name rammp-e2e-planner --network container:rammp-e2e-arm $D --ru
 logs() { echo "--- the planner's log"; docker logs --tail 30 rammp-e2e-planner; echo "--- the arm's log";
          docker logs --tail 20 rammp-e2e-arm; exit 1; }
 for t in e2e_bite e2e_engine; do
-  docker run --rm --network container:rammp-e2e-arm $D -v "$PWD/tests:/tests:ro" -v rammp-e2e-share:/share $IMG \
-    python3 /tests/$t.py || logs
+  docker run --rm --network container:rammp-e2e-arm $D -e RAMMP_TEST_SITE="${RAMMP_TEST_SITE:-level}" \
+    -v "$PWD/tests:/tests:ro" -v rammp-e2e-share:/share $IMG python3 /tests/$t.py || logs
 done
 SRC=". /opt/ros/humble/setup.sh && . /ros2_ws/install/setup.sh && . /module_ws/install/setup.sh"
 for mode in mock real; do                        # (the image's STOPSIGNAL, SIGINT, as docker stop sends it)

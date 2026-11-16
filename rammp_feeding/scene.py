@@ -3,11 +3,12 @@ follow from them (base frame, m).
 
   the wrist camera   its driver's intrinsics; its mount in the tool frame (rammp calibrate-wrist), pixel mappings
   the utensil tip    camera + camera_to_tip along the axis + the tip's sideways offset read off the image (tip_px)
-  the workspace      the bowl and the table (state_dir/scene_state.json: rammp locate-scene, the scene camera's reading,
-                     once per rammp feed; the bowl's centre and radius and the table then the wrist camera's, rammp
-                     detect), trusted to the camera that read them (scene_camera.error_m, then
-                     perception.wrist_bowl_error_m; the bowl's top stays the scene camera's), which the planner's world
-                     and our tip floor keep as extra clearance
+  the workspace      the bowl and the table (state_dir/scene_state.json: rammp locate-scene, the scene camera's reading
+                     -- with no scene camera, the site's own bowl -- once per rammp feed; the bowl's centre and radius
+                     and the table then the wrist camera's, rammp detect), trusted to what read them
+                     (scene_camera.error_m or workspace.bowl_centre_error_m, then perception.wrist_bowl_error_m; the
+                     bowl's top stays the first look's), which the planner's world and our tip floor keep as extra
+                     clearance
   the user           where the wrist camera measures the mouth from the delivery look, on every delivery: in the
                      planner's world from then on (none before)
   food_detect_start  computed: the wrist camera overlook_camera_height_m above the table, the bowl's centre on its
@@ -59,19 +60,23 @@ def camera_pose(arm, q=None) -> tuple[np.ndarray, np.ndarray]:
 # ------------------------------------------------------------------ the workspace
 def workspace() -> dict:
     """The bowl and the table: bowl_xy, table_z, bowl_top_z, bowl_radius, when; error_m, how far the bowl's place and
-    the table's height may be off (the scene camera's error_m, the wrist camera's once rammp detect has read them),
-    and scene_error_m, the scene camera's (the bowl's top is always its reading). table_z is the site's
-    workspace.table_height_m where it is set (one table, every module on the robot), else the reading."""
+    the table's height may be off (the first look's, the wrist camera's once rammp detect has read them), and
+    scene_error_m, how far the bowl's top may be (always the first look's reading): the scene camera's error_m; with
+    no scene camera the top is the site's ruler, off as far as the bowl's place -- workspace.bowl_centre_error_m until
+    the wrist camera has placed it, its own error from then on. table_z is the site's workspace.table_height_m where
+    it is set (one table, every module on the robot), else the reading."""
     f = state_dir() / "scene_state.json"
     if not f.exists():
-        raise FileNotFoundError("no scene camera reading (%s) -- rammp locate-scene" % f)
+        raise FileNotFoundError("no reading of the bowl (%s) -- rammp locate-scene" % f)
     st = read_json(f)
-    scene_e = float(cfg.scene_camera.error_m)
+    wrist_e = float(cfg.perception.wrist_bowl_error_m)
+    scene_e = (float(cfg.scene_camera.error_m) if st.get("source") != "site" else
+               wrist_e if st.get("refined_by") else float(cfg.workspace.bowl_centre_error_m))
     th = cfg.workspace.get("table_height_m", None)
     return dict(bowl_xy=[float(v) for v in st["bowl_xy"]], table_z=float(st["table_z"] if th is None else th),
                 bowl_top_z=float(st["bowl_top_z"]),
                 bowl_radius=float(st["rim_radius_m"]), scene_error_m=scene_e,
-                error_m=float(cfg.perception.wrist_bowl_error_m) if st.get("refined_by") else scene_e,
+                error_m=wrist_e if st.get("refined_by") else scene_e,
                 when=time.strftime("%Y-%m-%d %H:%M", time.localtime(st["t"])))
 
 

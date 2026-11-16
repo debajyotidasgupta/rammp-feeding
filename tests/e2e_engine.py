@@ -6,7 +6,7 @@ face and the bite are tests/fake_robot.py's; the scene camera's reading is the f
   start_meal                    the bowl found, the arm over it
   feed                          one bite taken, SAM3 not finding the bowl (its rim from the meal's reading)
   feed, cancelled mid-plunge    (the moves at their own pace) ends as cancelled within a few seconds, the move stopped
-  feed                          recovers (straight up out of the bowl), then a whole bite
+  feed                          recovers (straight up out of the bowl, straight back across), then a whole bite
   feed, cancelled at the mouth  (no bite) the food stays on the fork
   feed                          backs away to the delivery look and presents it again
   feed, cancelled at the mouth
@@ -51,7 +51,7 @@ def fake_locate(robot, out):
     """The scene camera's reading of the fake scene (tests/fake_robot.py has no scene camera)."""
     from rammp_feeding.config import state_dir
     LOCATED.append(time.time())
-    st = dict(bowl_xy=list(SC.bowl_xy), table_z=SC.table_z, bowl_top_z=SC.table_z + 0.06, rim_radius_m=SC.bowl_radius,
+    st = dict(bowl_xy=list(SC.bowl_xy), table_z=SC.table_z, bowl_top_z=SC.table_z + SC.rim_height, rim_radius_m=SC.bowl_radius,
               t=time.time())
     (state_dir() / "scene_state.json").write_text(json.dumps(st))
     return st
@@ -63,7 +63,9 @@ def main() -> int:
     from rammp_feeding import deliver as deliver_mod, scene, scene_camera
     from rammp_feeding.engine import Feeding
     from rammp_feeding.ros import Robot
-    scene_camera.locate = fake_locate
+    real_locate = scene_camera.locate                   # (no scene camera: the site's own bowl, as deployed)
+    scene_camera.locate = (fake_locate if scene_camera.in_use() else
+                           lambda robot, out: LOCATED.append(time.time()) or real_locate(robot, out))
     bite_at = dict(on=False, started=0.0)              # the bite: 3 N at the tool, 1.5 s into the wait (when on)
     real_bite = deliver_mod.bite
 
@@ -193,9 +195,9 @@ def main() -> int:
     k = len(moves_since(0))
     r, _, _ = run("feed")
     assert r.status == S.STATUS_SUCCESS and json.loads(r.payload_json)["bite_taken"], r
-    assert moves_since(k)[:2] == ["out of the bowl", "to food_detect_start"], moves_since(k)[:3]
-    print("    (the cancelled plunge left the tip at z %.3f, in the bowl; the next feed rose out of it first)" % low,
-          flush=True)
+    assert moves_since(k)[:2] == ["out of the bowl", "back to food_detect_start"], moves_since(k)[:3]
+    print("    (the cancelled plunge left the tip at z %.3f, in the bowl; the next feed rose out of it, then straight back "
+          "across to food_detect_start)" % low, flush=True)
     bite_at["on"] = False                               # no bite this time: cancelled while it waits at the mouth
     at_mouth = lambda t0: bite_at["started"] > t0 and time.time() > bite_at["started"] + 2  # noqa: E731
     r, _, after_cancel = run("feed", cancel_when=at_mouth)

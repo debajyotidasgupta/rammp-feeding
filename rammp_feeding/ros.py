@@ -35,7 +35,7 @@ import numpy as np
 
 from rammp_feeding.camera import CameraModel, Intrinsics
 from rammp_feeding.config import cfg
-from rammp_feeding.geometry import fold, matrix_quat, quat_matrix
+from rammp_feeding.geometry import fold, joint_delta, matrix_quat, quat_matrix
 
 JOINTS = ["arm_joint_%d" % i for i in range(1, 8)]
 PROFILE_CUSTOM = 4                    # rammp_arm_interfaces/ImpedanceGains: the gains in `custom`
@@ -403,7 +403,8 @@ class Robot:
         """A collision-free path (cuRobo): (positions N x 7 deg, unwrapped from start; times s)."""
         g = self._types["Plan"].Goal()
         g.start_joints = [math.radians(float(v)) for v in start_deg]
-        g.target_joints = [math.radians(float(s) + float(fold(float(e) - float(s)))) for s, e in zip(start_deg, goal_deg)]
+        goal = np.asarray(start_deg, float) + joint_delta(start_deg, goal_deg)     # (2/4/6 never across +-180)
+        g.target_joints = [math.radians(float(v)) for v in goal]
         return self._planned(self._plan, cfg.ros.plan_action, g, timeout_s)
 
     def plan_pose(self, start_deg, T, R, timeout_s: float, hold: int = 1) -> tuple[np.ndarray, np.ndarray]:

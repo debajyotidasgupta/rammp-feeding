@@ -20,7 +20,7 @@ import yaml
 from rammp_feeding import scene
 from rammp_feeding.camera import CameraModel, Intrinsics
 from rammp_feeding.config import cfg
-from rammp_feeding.geometry import fold
+from rammp_feeding.geometry import fold, joint_delta
 from rammp_feeding.ros import Detection
 
 TILT = os.environ.get("RAMMP_TEST_SITE", "level") == "tilt30"
@@ -135,7 +135,7 @@ class FakeRobot:
     # --- the planner: a straight joint line
     def plan_joints(self, start_deg, goal_deg, timeout_s):
         s = np.asarray(start_deg, float)
-        g = s + fold(np.asarray(goal_deg, float) - s)
+        g = s + joint_delta(s, goal_deg)
         n = 60
         return np.array([s + (g - s) * k / n for k in range(n + 1)]), np.linspace(0, 3, n + 1)
 
@@ -146,7 +146,7 @@ class FakeRobot:
         for seed in [s] + [s + rng.normal(0.0, 45.0, 7) for _ in range(40)]:
             g = self.kin.ik(np.asarray(T, float), np.asarray(R, float), list(seed), iters=200)
             if g is not None:
-                g = s + fold(np.asarray(g, float) - s)
+                g = s + joint_delta(s, g)
                 if best is None or np.abs(g - s).max() < np.abs(best - s).max():
                     best = g
         if best is None:

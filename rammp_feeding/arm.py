@@ -24,7 +24,7 @@ import numpy as np
 
 from rammp_feeding import record
 from rammp_feeding.config import cfg, unmeasured
-from rammp_feeding.geometry import densify, fold, max_step, rot_log, sphere_box_clearance, tilt_deg
+from rammp_feeding.geometry import densify, fold, joint_delta, max_step, rot_log, sphere_box_clearance, tilt_deg
 from rammp_feeding.kinematics import Chain
 
 log = logging.getLogger("rammp")
@@ -72,7 +72,7 @@ class TorqueGuard:
 def time_scale(path: Sequence[Sequence[float]], vmax, amax: float) -> list[float]:
     """Segment durations keeping every joint under vmax (deg/s, per joint or one) and its speed changing by at most
     amax (deg/s^2), from rest and back to rest."""
-    D = np.array([fold(np.asarray(q) - np.asarray(p)) for p, q in zip(path, path[1:])])
+    D = np.array([joint_delta(p, q) for p, q in zip(path, path[1:])])
     vcap = np.broadcast_to(np.asarray(vmax, float), (7,))
     dt = np.maximum((np.abs(D) / vcap).max(1), 0.02)
     for _ in range(4000):
@@ -100,7 +100,7 @@ def smooth_timing(path: Sequence[Sequence[float]], vmax: float, amax: float,
     from scipy.interpolate import PchipInterpolator
     P = [np.asarray(path[0], float)]
     for q in path[1:]:                                     # unwrapped, repeated waypoints dropped
-        d = fold(np.asarray(q, float) - P[-1])
+        d = joint_delta(P[-1], q)
         if np.abs(d).max() > 1e-6:
             P.append(P[-1] + d)
     P = np.array(P)
@@ -233,7 +233,7 @@ class Arm:
         for k in range(1, n + 1):
             s = k / n
             T, R = at(s)
-            g = [a + float(fold(b - a)) * s for a, b in zip(q0, toward)] if toward is not None else self.steered(prev)
+            g = list(np.asarray(q0) + joint_delta(q0, toward) * s) if toward is not None else self.steered(prev)
             q = self.ik(T, R, g)
             if q is None:
                 return None, "IK fails at %d%%" % (100 * s)
@@ -260,9 +260,9 @@ class Arm:
             raise MoveError("%s: the arm is %.1f deg from the path's start -- not moving" % (label, max_step(q_now, path[0])))
         if durations is None:
             durations = time_scale(path, joint_cap(dps or float(M.free_space.dps)), float(M.joint_accel_dps2))
-        pos, cur = [raw.copy()], raw.copy()            # the arm's own (unwrapped) radians + the short-way deltas
+        pos, cur = [raw.copy()], raw.copy()            # the arm's own (unwrapped) radians + joint_delta's steps
         for p, q in zip(path, path[1:]):
-            cur = cur + np.radians(fold(np.asarray(q, float) - np.asarray(p, float)))
+            cur = cur + np.radians(joint_delta(p, q))
             pos.append(cur.copy())
         if impedance:                                  # the driver's compliant mode takes a continuous joint the long
             wrapped = fold(np.degrees(np.array(pos)))  # way round once its target crosses +-180 (it spun joint 1)
@@ -333,7 +333,7 @@ class Arm:
         if self.margin(goal) < 0:
             raise MoveError("%s REFUSED: the goal is %.1f deg past a joint limit" % (label, -self.margin(goal)))
         n = max(2, int(math.ceil(travel / 2.0)))
-        path = [list(np.asarray(q0) + fold(np.asarray(goal) - np.asarray(q0)) * k / n) for k in range(n + 1)]
+        path = [list(np.asarray(q0) + joint_delta(q0, goal) * k / n) for k in range(n + 1)]
         path, durations = smooth_timing(path, joint_cap(dps or float(M.settle_dps)), float(M.joint_accel_dps2),
                                         float(M.trajectory_sample_s))
         self.run(path, label, durations=durations, **kw)
@@ -400,10 +400,11 @@ class Arm:
                **kw) -> list[Joints]:
         """A collision-free path from the shared planner, from here to goal (go=False: plan only), with our world pushed
         to it first; thinned, checked as it will run against our tip floor, the utensil's tilt (tilt_limit) and, for
-        the utensil (and, carrying, the piece), against our boxes -- re-planned when it fails any -- run, and settled
-        exactly onto goal. pose: planned to goal's tool pose in the arm shape the planner picks (goal's own joints may
-        sit inside its joint-limit margin), and not settled onto goal's joints; level: the same, its tilt held all the
-        way (the planner's HOLD_LEVEL: something that must stay upright, a cup)."""
+        the utensil (and, carrying, the piece), against our boxes -- re-planned when it fails any, or when the planner
+        refuses its own path for bending the hold (CONSTRAINT_VIOLATED: a hold is a cost to cuRobo) -- run, and
+        settled exactly onto goal. pose: planned to goal's tool pose in the arm shape the planner picks (goal's own
+        joints may sit inside its joint-limit margin), and not settled onto goal's joints; level: the same, its tilt
+        held all the way (the planner's HOLD_LEVEL: something that must stay upright, a cup)."""
         from rammp_feeding.scene import push_world, tip_floor, utensil_boxes, utensil_spheres
         FS = M.free_space
         q = self.q()
@@ -425,7 +426,10 @@ class Arm:
                 pos, _ = (self.robot.plan_pose(q, *self.tool(goal), float(FS.timeout_s), hold=1 if level else 0)
                           if level or pose else self.robot.plan_joints(q, goal, float(FS.timeout_s)))
             except RuntimeError as e:
-                raise MoveError("%s: %s" % (label, e))
+                if "CONSTRAINT_VIOLATED" not in str(e) or k == int(FS.replans):
+                    raise MoveError("%s: %s" % (label, e))
+                log.info("    %-28s re-planning (%d/%d): %s", label, k + 1, int(FS.replans), e)
+                continue
             pos[0] = q
             keep = [0]
             for i in range(1, len(pos) - 1):

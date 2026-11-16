@@ -9,13 +9,23 @@ import numpy as np
 
 
 def fold(d):
-    """Joints 1/3/5/7 are continuous: compare and interpolate on (-180, 180]."""
+    """Angles (deg) on (-180, 180]."""
     return (np.asarray(d, float) + 180.0) % 360.0 - 180.0 if np.ndim(d) else (d + 180.0) % 360.0 - 180.0
 
 
+CONTINUOUS = np.array([True, False, True, False, True, False, True])   # the Gen3's 1/3/5/7; 2/4/6 have limits
+
+
+def joint_delta(a, b) -> np.ndarray:
+    """b - a, joint by joint, deg: the short way round on the continuous joints, the true difference on 2/4/6 (they
+    cannot pass +-180: the short way there would leave their limits)."""
+    d = np.asarray(b, float) - np.asarray(a, float)
+    return np.where(CONTINUOUS, fold(d), d)
+
+
 def max_step(a, b) -> float:
-    """The largest single-joint difference between two joint vectors, deg, the short way round."""
-    return float(np.max(np.abs(fold(np.asarray(a, float) - np.asarray(b, float)))))
+    """The largest single-joint difference between two joint vectors, deg (joint_delta)."""
+    return float(np.max(np.abs(joint_delta(b, a))))
 
 
 def rot(axis: str, deg: float) -> np.ndarray:
@@ -86,12 +96,12 @@ def rodrigues(w) -> np.ndarray:
 
 
 def densify(path, step_deg: float) -> list[np.ndarray]:
-    """A joint path as it runs (straight in joint space between its waypoints, the short way round), sampled so that no
-    joint moves more than step_deg between two samples."""
+    """A joint path as it runs (straight in joint space between its waypoints, joint_delta), sampled so that no joint
+    moves more than step_deg between two samples."""
     out = [np.asarray(path[0], float)]
     for a, b in zip(path[:-1], path[1:]):
         a = np.asarray(a, float)
-        d = fold(np.asarray(b, float) - a)
+        d = joint_delta(a, b)
         n = max(1, int(math.ceil(float(np.max(np.abs(d))) / step_deg)))
         out += [a + d * k / n for k in range(1, n + 1)]
     return out

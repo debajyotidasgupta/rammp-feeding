@@ -47,6 +47,18 @@ class Geometry(unittest.TestCase):
         self.assertAlmostEqual(g.fold(190.0), -170.0)
         self.assertAlmostEqual(g.max_step([179] + [0] * 6, [-179] + [0] * 6), 2.0)
 
+    def test_limited_joints_take_their_true_difference(self):
+        """Joints 2/4/6 more than 180 deg apart go the long way, through 0 -- the short way leaves their limits; the
+        continuous ones take the short way round."""
+        a, b = [170.0, 0, 0, -125.0, 0, 110.0, 0], [-170.0, 0, 0, 58.6, 0, -100.0, 0]
+        d = g.joint_delta(a, b)
+        self.assertTrue(np.allclose(d, [20.0, 0, 0, 183.6, 0, -210.0, 0]))
+        self.assertAlmostEqual(g.max_step(a, b), 210.0)
+        path = g.densify([a, b], 1.0)
+        for i in (1, 3, 5):
+            self.assertTrue(all(abs(q[i]) <= max(abs(a[i]), abs(b[i])) + 1e-9 for q in path))
+        self.assertTrue(np.allclose(path[-1][1:], b[1:]) and abs(g.fold(path[-1][0] - b[0])) < 1e-9)
+
 
 class Kinematics(unittest.TestCase):
     kin = chain(FakeRobot(Scene(), [0.0] * 7))
@@ -861,7 +873,7 @@ class HeldObject(unittest.TestCase):
         with self.assertRaisesRegex(MoveError, "carry back: .*the drink tip .*under the floor.*not moving"):
             self.arm.travel(q, "carry back")
         self.mug.floor_z = -np.inf
-        mid = [a + float(g.fold(b - a)) / 2 for a, b in zip(goal, q)]
+        mid = list(np.asarray(goal) + g.joint_delta(goal, q) / 2)
         Tm, Rm = self.arm.tool(mid)
         self.mug.box = Tm + Rm @ np.array(self.mug.spheres(self.arm, True)[0][:3])
         with self.assertRaisesRegex(MoveError, "carry back: .*the drink within .* of probe.*not moving"):
@@ -869,6 +881,38 @@ class HeldObject(unittest.TestCase):
         self.mug.box = None
         self.arm.travel(q, "carry back")
         self.assertLess(g.max_step(self.arm.q(), q), 1.0)
+
+    def test_a_level_path_the_planner_refuses_for_bending_its_hold_is_planned_again(self):
+        """The planner verifies its HOLD_LEVEL (a cost to cuRobo) and refuses a path that bent it: planned again, up to
+        free_space.replans; any other refusal ends the move."""
+        q = self.upright()
+        self.robot.raw = np.radians(q)
+        goal = list(q)
+        goal[0] += 20.0
+        plan, calls = self.robot.plan_pose, []
+
+        def refuse(n, why):
+            def f(*a, **k):
+                calls.append(why)
+                if len(calls) <= n:
+                    raise RuntimeError("cuRobo found no collision-free path: %s" % why)
+                return plan(*a, **k)
+            return f
+        self.robot.plan_pose = refuse(2, "CONSTRAINT_VIOLATED: the plan does not honour the 'level' hold")
+        self.arm.travel(goal, "carry", carrying=True, level=True)
+        self.assertEqual(len(calls), 3)
+        self.assertLess(np.linalg.norm(self.arm.tool()[0] - self.arm.tool(goal)[0]), 1e-3)
+        n = int(cfg.motion.free_space.replans) + 1
+        calls.clear()
+        self.robot.plan_pose = refuse(n, "CONSTRAINT_VIOLATED: the plan does not honour the 'level' hold")
+        with self.assertRaisesRegex(MoveError, "carry back: .*CONSTRAINT_VIOLATED"):
+            self.arm.travel(q, "carry back", carrying=True, level=True)
+        self.assertEqual(len(calls), n)
+        calls.clear()
+        self.robot.plan_pose = refuse(1, "IK_FAIL: no goal configuration")
+        with self.assertRaisesRegex(MoveError, "carry back: .*IK_FAIL"):
+            self.arm.travel(q, "carry back", carrying=True, level=True)
+        self.assertEqual(len(calls), 1)
 
 
 class Refine(unittest.TestCase):

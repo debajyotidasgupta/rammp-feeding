@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
-from rammp_feeding.geometry import fold, rot_log, rpy_matrix
+from rammp_feeding.geometry import fold, joint_delta, rot_log, rpy_matrix
 
 
 def _origin(el) -> np.ndarray:
@@ -116,7 +116,7 @@ class Chain:
             J = self.jacobian(q, pt)
             lam = 0.01
             Jp = J.T @ np.linalg.inv(J @ J.T + lam * lam * np.eye(6))
-            dq = Jp @ e + 0.1 * (np.eye(7) - Jp @ J) @ np.radians(fold(seed - q))
+            dq = Jp @ e + 0.1 * (np.eye(7) - Jp @ J) @ np.radians(joint_delta(q, seed))
             step = float(np.abs(dq).max())
             if step > 0.2:
                 dq *= 0.2 / step

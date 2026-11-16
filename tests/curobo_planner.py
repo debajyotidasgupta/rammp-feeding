@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from rammp_feeding.geometry import joint_delta
 from rammp_feeding.ros import RobotError
 
 
@@ -25,7 +26,7 @@ class CuroboPlanner:
 
     def plan_joints(self, start_deg, goal_deg, timeout_s):
         s = np.asarray(start_deg, float)
-        g = s + ((np.asarray(goal_deg, float) - s + 180.0) % 360.0 - 180.0)
+        g = s + joint_delta(s, goal_deg)
         r = self.p.plan_to_joints(list(np.radians(g)), start=list(np.radians(s)))
         self.calls.append(dict(start=list(s), goal=list(g), success=bool(r.success), status=str(r.status)))
         if not r.success:

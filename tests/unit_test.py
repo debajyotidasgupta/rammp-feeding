@@ -899,6 +899,51 @@ class Refine(unittest.TestCase):
                 sc_.refine(robot, arm)
 
 
+class LevelHome(unittest.TestCase):
+    """motion.home_max_tilt_deg: the two planned moves between feeding_start and the bowl may tilt the utensil that far
+    (a home holding it level); every other move the usual rule."""
+
+    def _caps(self, run):
+        from unittest import mock
+        sc = Scene()
+        site(sc)
+        robot = FakeRobot(sc, scene.captured("home"))
+        arm = Arm(robot)
+        caps = []
+        arm.travel = lambda goal, label, **kw: caps.append((label, kw.get("tilt_cap")))
+        with mock.patch.dict(cfg["motion"], {"home_max_tilt_deg": 135.0}):
+            run(robot, arm)
+        return caps
+
+    def test_from_home_to_the_bowl_and_back(self):
+        from unittest import mock
+        from rammp_feeding import scene_camera
+        from rammp_feeding.cli import detect, home
+        with mock.patch.object(scene_camera, "refine", lambda robot, arm: None):
+            caps = self._caps(lambda robot, arm: (detect(robot, arm), home(robot, arm)))
+        self.assertEqual(caps, [("to look at the bowl", 135.0), ("to food_detect_start", None), ("to feeding_start", 135.0)])
+
+    def test_not_from_elsewhere(self):
+        from unittest import mock
+        from rammp_feeding import scene_camera
+        from rammp_feeding.cli import detect
+
+        def run(robot, arm):
+            robot.raw = np.radians(scene.overlook_joints(arm))            # not at home: the usual rule
+            detect(robot, arm)
+        with mock.patch.object(scene_camera, "refine", lambda robot, arm: None):
+            caps = self._caps(run)
+        self.assertEqual([c for _, c in caps], [None, None])
+
+    def test_unset_it_is_the_usual_rule(self):
+        from unittest import mock
+        from rammp_feeding.cli import home_tilt_cap
+        self.assertIsNone(home_tilt_cap(scene.captured("home")))
+        with mock.patch.dict(cfg["motion"], {"home_max_tilt_deg": 135.0}):
+            self.assertEqual(home_tilt_cap(scene.captured("home")), 135.0)
+            self.assertIsNone(home_tilt_cap(scene.captured("overlook")))
+
+
 class NoSceneCamera(unittest.TestCase):
     """perception.scene.use false: the first look's bowl is the site's own (where it is laid, its profile's size, the
     site's table), trusted to workspace.bowl_centre_error_m until the wrist camera measures it."""

@@ -69,13 +69,23 @@ def report(arm, what: str) -> None:
     record.event("at", name=what, joints=q, tool=T)
 
 
+def home_tilt_cap(*ends) -> float | None:
+    """motion.home_max_tilt_deg for a planned move that starts or ends at feeding_start (a home holding the utensil
+    level: the planner's paths between it and the bowl turn it through tines-up), else None: the usual limit."""
+    from rammp_feeding.geometry import max_step
+    cap = cfg.motion.get("home_max_tilt_deg", None)
+    home = scene.captured("home")
+    return None if cap is None or not any(max_step(q, home) <= float(cfg.motion.near_pose_deg) for q in ends) else float(cap)
+
+
 def detect(robot, arm, plan: bool = False) -> None:
-    """To food_detect_start, the wrist camera centred on the bowl: on the scene camera's reading (coarse), then on the
-    bowl as the wrist camera measures it from there (fine)."""
+    """To food_detect_start, the wrist camera centred on the bowl: on the first look's reading (coarse), then on the
+    bowl as the wrist camera measures it from there (fine). Both moves end settled onto food_detect_start's joints: the
+    utensil as the captured overlook holds it, the camera looking down."""
     from rammp_feeding.scene_camera import refine
     ws = scene.workspace()
-    log.info("  the bowl at (%.3f, %.3f), table z %.3f (the scene camera, %s)", *ws["bowl_xy"], ws["table_z"], ws["when"])
-    arm.travel(scene.overlook_joints(arm), "to look at the bowl", go=not plan)
+    log.info("  the bowl at (%.3f, %.3f), table z %.3f (the first look, %s)", *ws["bowl_xy"], ws["table_z"], ws["when"])
+    arm.travel(scene.overlook_joints(arm), "to look at the bowl", go=not plan, tilt_cap=home_tilt_cap(arm.q()))
     if plan:
         return
     refine(robot, arm)
@@ -83,12 +93,14 @@ def detect(robot, arm, plan: bool = False) -> None:
 
 
 def home(robot, arm, direct: bool = False, dps: float | None = None) -> None:
-    """To feeding_start: a planned path; --direct: one joint move, no planner -- only for a workspace someone has
-    checked is clear (the line can pass close to the table). The utensil's tilt only falls along it."""
+    """To feeding_start: a planned path, ending settled onto its joints (the utensil tilted on the way as far as
+    motion.home_max_tilt_deg allows); --direct: one joint move, no planner -- only for a workspace someone has checked
+    is clear (the line can pass close to the table)."""
     if direct:
         arm.goto(scene.captured("home"), "direct to feeding_start", dps=dps or float(cfg.motion.direct_dps))
         return
-    arm.travel(scene.captured("home"), "to feeding_start")
+    goal = scene.captured("home")
+    arm.travel(goal, "to feeding_start", tilt_cap=home_tilt_cap(goal))
 
 
 def perceive_target(robot, arm) -> tuple[int, dict | None]:

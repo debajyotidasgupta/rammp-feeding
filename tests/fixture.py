@@ -6,9 +6,9 @@ RAMMP_TEST_SITE picks the site (tests/fake_robot.py renders it):
   level   (default) the arm level on its mount, a D405 on the wrist, the user to the arm's left (tests/poses)
   tilt30  the arm leaning 30 deg forward on its mount, an OAK-D Pro on the wrist, the user to the arm's right, no scene
           camera, a narrow deep cup on a low table, the scoop turning late and the other way (tests/poses_tilt30: the
-          overlook captured on that robot; a fork-down home from the overlook's arm shape, and the delivery look straight
-          in front of the mouth, both computed -- the planner refuses a look from the far side, over its occupant; its
-          measured mount and the fork's pixels as calibrate-wrist found them)"""
+          home -- the fork level -- and the overlook captured on that robot; the delivery look straight in front of the
+          mouth, computed -- the planner refuses a look from the far side, over its occupant; its measured mount and
+          the fork's pixels as calibrate-wrist found them)"""
 
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ if SITE == "tilt30":
            "workspace.table_extent_m.y=[-0.60, 0.40],workspace.table_height_m=0.095,workspace.bowl_centre_m=[0.639, -0.223],"
            "workspace.overlook_camera_height_m=0.40,perception.scene.use=false,bowl.rim_radius_m=0.045,bowl.height_m=0.08,"
            "acquisition.scoop.turn_deg=-90.0,acquisition.scoop.rot_exp=3.0,acquisition.scoop.speed_dps=25.0,"
-           "delivery.second_look_m=[0.0, 0.05, 0.0],")
+           "delivery.second_look_m=[0.0, 0.05, 0.0],motion.home_max_tilt_deg=135.0,")
 else:
     (STATE / "wrist_mount.json").write_text(json.dumps(dict(
         camera="realsense_d405", utensil="fork", camera_in_tool_m=[0.0, 0.075, -0.125],

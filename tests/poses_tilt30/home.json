@@ -1,4 +1,12 @@
 {
- "joints_deg": [174.71, 29.78, 14.55, -76.46, 2.33, -102.3, 10.44],
- "captured": "computed for the test site: the overlook's arm shape, the fork straight down at tool (0.45, -0.05, 0.45), back from the table's edge"
+ "joints_deg": [
+  -170.3,
+  25.204,
+  -24.754,
+  -140.515,
+  160.589,
+  -54.117,
+  -80.974
+ ],
+ "captured": "2026-11-13 19:14:55"
 }

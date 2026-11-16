@@ -31,6 +31,14 @@ from rammp_feeding.ros import Robot  # noqa: E402
 from sim_arm import SimArmRobot  # noqa: E402
 
 
+def looking_down(arm) -> None:
+    """At food_detect_start, the utensil as the captured overlook holds it, the wrist camera looking straight down."""
+    q, R = arm.q(), arm.tool()[1]
+    assert max(abs(a - b) for a, b in zip(q, scene.overlook_joints(arm))) < 1.0, "not at food_detect_start"
+    assert abs(arm.tilt(R) - arm.tilt(arm.tool(scene.captured("overlook"))[1])) < 1.0, "the utensil not as captured"
+    assert (R @ scene.CAM_ROT)[2, 2] < -0.95, "the wrist camera not looking down: %s" % (R @ scene.CAM_ROT)[:, 2]
+
+
 def main() -> int:
     ros = Robot("rammp_e2e")
     t_end = time.time() + 600                           # the planner compiles its kernels on a first run
@@ -52,6 +60,7 @@ def main() -> int:
     t0 = time.time()
     detect(robot, arm)                                  # planned, centred, our world pushed
     assert str(cfg.planner.world_file_in_planner) in robot.worlds, robot.worlds
+    looking_down(arm)
     assert perceive(robot, arm) == 0
     acquire(robot, arm, _target(), record.stage("acquire"))   # OVER, the depth under the tip, plunge, scoop, lift
     T, R = arm.tool()

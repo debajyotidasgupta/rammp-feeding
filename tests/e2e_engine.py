@@ -155,6 +155,11 @@ def main() -> int:
         time.sleep(0.05)
     assert f.result().released and engine._token == [0] * 16, f.result()
     assert r.status == S.STATUS_SUCCESS, r
+    from rammp_feeding.arm import Arm
+    look = Arm(engine.sim, kin=engine.sim.kin)          # the meal begins at food_detect_start, the camera looking down
+    R = look.tool()[1]
+    assert max(abs(a - b) for a, b in zip(look.q(), scene.overlook_joints(look))) < 1.0, "not at food_detect_start"
+    assert (R @ scene.CAM_ROT)[2, 2] < -0.95, "the wrist camera not looking down: %s" % (R @ scene.CAM_ROT)[:, 2]
     assert n_reset == 1, "start_meal did not put the planner's own world back"
     bite_at["on"] = True
     from rammp_feeding.config import cfg

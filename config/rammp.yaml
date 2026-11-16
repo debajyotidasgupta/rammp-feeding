@@ -69,6 +69,10 @@ motion:
                                 # timed points directly, and a speed held over longer pieces jumps from one to the next
   max_tilt_deg: 25.0            # the utensil's worst tilt off straight down on any move, but 5 deg past the move's own
                                 # start or end where either is further (a move that turns it on purpose)
+  home_max_tilt_deg: null       # SITE: the two planned moves between feeding_start and the bowl may tilt the utensil this
+                                # far instead -- a home holding it level, whose paths to the bowl turn it through
+                                # tines-up (135 on an arm leaning 30 deg; a piece left on it may slide off); null: the
+                                # rule above
   max_joint_step_deg: 12        # a continuous IK path: a bigger step on any joint is a jump, not a path
   steer_within_deg: 25          # IK seeds steer J2 / J4 / J6 off a limit once within this of it ...
   steer_step_deg: 3.0           # ... by this much per step

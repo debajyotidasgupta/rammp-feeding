@@ -37,7 +37,7 @@ From a new Jetson to `rammp feed`, in order.
 ```bash
 uv tool install "sheppy @ git+https://github.com/rammp-org/sheppy@dev"
 git clone https://github.com/rammp-org/rammp-deployments.git
-docker pull debajyotidasgupta/rammp-feeding:0.5.2
+docker pull debajyotidasgupta/rammp-feeding:0.5.3
 sudo mkdir -p /srv/rammp_feeding/config /srv/rammp_feeding/runs && sudo chown -R 1000:1000 /srv/rammp_feeding
 ```
 - SAM3's weights are gated: accept the `facebook/sam3` licence on Hugging Face and download the snapshot to the Jetson.
@@ -47,7 +47,7 @@ sudo mkdir -p /srv/rammp_feeding/config /srv/rammp_feeding/runs && sudo chown -R
   tty=-i; [ -t 0 ] && tty=-it
   exec docker run --rm $tty --network host --ipc host --user 1000:1000 -e ROS_DOMAIN_ID=0 -e HOME=/tmp \
     -v /srv/rammp_feeding/config:/config -v /srv/rammp_feeding/runs:/runs \
-    debajyotidasgupta/rammp-feeding:0.5.2 ros2 run rammp_feeding rammp "$@"
+    debajyotidasgupta/rammp-feeding:0.5.3 ros2 run rammp_feeding rammp "$@"
   ```
 
 ## 4. The deployment manifest
@@ -85,6 +85,7 @@ Where the robot differs:
 | `acquisition.scoop.turn_deg: -90` | The user sits to the arm's right (-y): the scoop ends with the tines pointing at them |
 | `acquisition.scoop.rot_exp: 3` | A narrow, deep bowl: the fork turns late, near the rim |
 | `workspace.overlook_camera_height_m` | Lower it (0.40, 0.35) where the arm cannot hold the fork straight down 0.45 m over the bowl (a tilted mount, a long fork): `rammp detect` refuses and says why |
+| `motion.home_max_tilt_deg: 135` | Home holds the fork level: the planner's paths between home and the bowl turn it through tines-up, which the usual tilt limit refuses (a piece left on the fork as a meal ends may slide off) |
 
 `bowl.floor_above_table_m` (5 mm) and `utensil.punch_floor_margin_m` (5 mm) are defaults. Change them only if the
 plunge stops short (section 7).
@@ -98,8 +99,8 @@ is fixed or redone.
 
 To pose the arm by hand: stop the arm node, move the arm with the Kinova Web App, then restart the node.
 
-1. `rammp capture home`: feeding_start, with the fork straight down and the arm parked beside the table, clear of the
-   user. A home with the fork level makes the first planned move tip it past its limit, and the move is refused.
+1. `rammp capture home`: feeding_start, where every meal starts and ends, the arm parked clear of the table and the
+   user. With the fork level there, set `motion.home_max_tilt_deg` (section 5).
 2. `rammp calibrate-wrist --board` writes the sheet to print. Then run `rammp calibrate-wrist`: lay the board under the
    arm's first pose, or stand it facing the fork (then `perception.wrist_calibration.out_m: 0` in `local.yaml`, and
    capture home with the fork pointing at it), and keep it still. It measures the wrist camera's mount and the fork's

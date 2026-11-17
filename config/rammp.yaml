@@ -100,6 +100,8 @@ motion:
                                 # table raised to it: the utensil hangs below the gripper) ...
     min_tip_above_bowl_m: 0.015 # ... above the bowl's top over the bowl
     bowl_margin_m: 0.04         # "over the bowl": within its rim radius + this
+    table_clear_of_base_m: 0.15 # the planner's table starts at least this far (x) from the arm's base, whatever the
+                                # site's table edge and the camera's error (its padded box off the arm's own links)
 
 guards:                         # the contact guard: a joint-torque step this big against recent history = stop
   torque_window: {span: 6, gap: 3}    # samples (/joint_states at 50 Hz): the baseline window, and the gap before the

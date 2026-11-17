@@ -165,21 +165,27 @@ def user_obstacles(m) -> list[dict]:
             dict(name="user_torso", position=[m[0] - 0.12, m[1], m[2] - 0.30], dims=[0.28, 0.42, 0.45])]
 
 
+def table_x(error_m: float) -> list[float]:
+    """The planner's table along x (workspace.table_extent_m.x): its near edge (toward the arm) moved back by error_m,
+    and never nearer the arm's base than motion.free_space.table_clear_of_base_m (the planner's padded table clear of
+    the arm's own links at any pose, whatever the site's edge and the camera's error)."""
+    near, far = [float(v) for v in cfg.workspace.table_extent_m.x]
+    return [max(near + float(error_m), float(cfg.motion.free_space.table_clear_of_base_m)), far]
+
+
 def world() -> dict:
     """RAMMP-CuRobo's world (arm.base_frame): the table raised to our tip floor, a hollow bowl (a floor up to
     bowl.floor_above_table_m and 12 wall boxes: a solid box would put the utensil over its opening inside it), the
     user's head and torso round the measured mouth (once measured), the pedestal. The bowl grows by the workspace's
     error_m and its top by scene_error_m; the table's top rises by error_m, and its near edge (toward the arm) moves
-    back by scene_error_m (the planner's padded table clear of the arm's own base, whichever camera read the rest)."""
+    back by scene_error_m, at least table_clear_of_base_m from the base (table_x)."""
     ws = workspace()
     e, es = float(ws["error_m"]), float(ws["scene_error_m"])
     tz, top = ws["table_z"] + e, ws["bowl_top_z"] + es
     bx, by = ws["bowl_xy"]
     r = float(ws["bowl_radius"])
     m = user_mouth()
-    ext = cfg.workspace.table_extent_m
-    tx, ty = [float(v) for v in ext.x], [float(v) for v in ext.y]
-    tx[0] += es
+    tx, ty = table_x(es), [float(v) for v in cfg.workspace.table_extent_m.y]
     floor = float(cfg.motion.free_space.min_tip_above_table_m)
     f = float(cfg.bowl.floor_above_table_m)                     # the bowl's floor: the same height the plunge stops above
     obs = [dict(name="pedestal", position=[0.0, 0.0, -0.05], dims=[0.14, 0.14, 0.04]),   # (the planner's own: unpadded)

@@ -693,7 +693,8 @@ class World(unittest.TestCase):
         self.assertAlmostEqual(scene.tip_floor(*sc.bowl_xy), over, places=9)          # the scoop's end unchanged
         table = next(o for o in scene.world()["obstacles"] if o["name"] == "table")      # its near edge as before:
         near = table["position"][0] - table["dims"][0] / 2                                # the planner's padded table
-        self.assertAlmostEqual(near, float(cfg.workspace.table_extent_m.x[0]) + float(cfg.scene_camera.error_m))
+        self.assertAlmostEqual(near, max(float(cfg.workspace.table_extent_m.x[0]) + float(cfg.scene_camera.error_m),
+                                         float(cfg.motion.free_space.table_clear_of_base_m)))
         self.assertGreater(near - 0.02, 0.075 + 0.005)            # clear of its base sphere (r 0.075 + 0.005 buffer)
 
     def test_the_sites_table_height_over_the_reading(self):
@@ -710,6 +711,25 @@ class World(unittest.TestCase):
                 cfg.scene_camera.error_m) + float(cfg.motion.free_space.min_tip_above_table_m))
         finally:
             cfg["workspace"]["table_height_m"] = was
+
+    def test_the_planners_table_clear_of_the_arms_base(self):
+        """With no scene camera and the wrist camera's small error, a site table edge of 0.08 m still leaves the
+        planner's table table_clear_of_base_m from the base (here and at the fork's stand); a further edge is kept."""
+        from unittest import mock
+        from rammp_feeding import fork
+        sc = Scene()
+        site(sc)
+        f = state_dir() / "scene_state.json"
+        f.write_text(json.dumps(dict(json.loads(f.read_text()), source="site", refined_by="the wrist camera")))
+        near = lambda w: next(o["position"][0] - o["dims"][0] / 2 for o in w["obstacles"] if o["name"] == "table")  # noqa: E731
+        clear = float(cfg.motion.free_space.table_clear_of_base_m)
+        with mock.patch.dict(cfg["perception"]["scene"], {"use": False}):
+            with mock.patch.dict(cfg["workspace"]["table_extent_m"], {"x": [0.08, 0.76]}):
+                self.assertAlmostEqual(near(scene.world()), clear)
+                self.assertAlmostEqual(near(fork.world()), clear)
+            with mock.patch.dict(cfg["workspace"]["table_extent_m"], {"x": [0.30, 0.76]}):
+                self.assertAlmostEqual(near(scene.world()), 0.30 + float(cfg.perception.wrist_bowl_error_m))
+                self.assertAlmostEqual(near(fork.world()), 0.30 + float(cfg.workspace.bowl_centre_error_m))
 
     def test_each_planned_move_pushes_our_world_and_the_command_restores_the_planners(self):
         sc = Scene()
@@ -1436,7 +1456,8 @@ class ForkPick(unittest.TestCase):
         table = fork.world()["obstacles"][1]
         self.assertAlmostEqual(table["position"][2] + table["dims"][2] / 2, floor)
         self.assertAlmostEqual(table["position"][0] - table["dims"][0] / 2,     # its near edge clear of the arm's base
-                               float(cfg.workspace.table_extent_m.x[0]) + float(cfg.scene_camera.error_m))
+                               max(float(cfg.workspace.table_extent_m.x[0]) + float(cfg.scene_camera.error_m),
+                                   float(cfg.motion.free_space.table_clear_of_base_m)))
         self.assertAlmostEqual(fork.AtStand(at).floor(0.5, -0.2), floor)
         self.assertEqual(fork.AtStand(at).floor(at[0] + 0.02, at[1]), -math.inf)
         self.assertAlmostEqual(fork.AtStand().floor(at[0] + 0.02, at[1]), floor)

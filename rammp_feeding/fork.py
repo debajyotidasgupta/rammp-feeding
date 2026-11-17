@@ -156,15 +156,14 @@ class AtStand(Held):
 def world() -> dict:
     """RAMMP-CuRobo's world for the stand routine: the pedestal and the table (workspace.table_height_m) raised to our
     floor (the planner knows the arm, not what hangs below it), its near edge moved back as a meal's first look has it
-    (the scene camera's error_m; with none, workspace.bowl_centre_error_m): the planner's padded table clear of the
-    arm's own base."""
+    (the scene camera's error_m; with none, workspace.bowl_centre_error_m), at least table_clear_of_base_m from the
+    arm's base (scene.table_x)."""
     from rammp_feeding.scene_camera import in_use
     obs = [dict(name="pedestal", position=[0.0, 0.0, -0.05], dims=[0.14, 0.14, 0.04])]   # (the planner's own: unpadded)
     th = cfg.workspace.get("table_height_m", None)
     if th is not None:
-        ext = cfg.workspace.table_extent_m
-        tx, ty = [float(v) for v in ext.x], [float(v) for v in ext.y]
-        tx[0] += float(cfg.scene_camera.error_m if in_use() else cfg.workspace.bowl_centre_error_m)
+        tx = scene.table_x(cfg.scene_camera.error_m if in_use() else cfg.workspace.bowl_centre_error_m)
+        ty = [float(v) for v in cfg.workspace.table_extent_m.y]
         top = float(th) + float(cfg.motion.free_space.min_tip_above_table_m)
         obs.append(dict(name="table", position=[sum(tx) / 2, sum(ty) / 2, top - 0.025],
                         dims=[tx[1] - tx[0], ty[1] - ty[0], 0.05]))

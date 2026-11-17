@@ -40,10 +40,10 @@ DL, G = cfg.delivery, cfg.guards.torque_step_nm
 
 
 def swing(arm: Arm) -> None:
-    """One planned path to the delivery look's pose, carrying: the utensil at most swing_max_tilt_deg off vertical (or
-    5 deg past where it starts)."""
+    """One planned path to the delivery look's pose, carrying, round the arm's base the short way: the utensil at most
+    swing_max_tilt_deg off vertical (or 5 deg past where it starts)."""
     arm.travel(scene.captured("deliver"), "swing to the user", tilt_cap=float(DL.swing_max_tilt_deg), carrying=True,
-               pose=True)
+               pose=True, short_way=True)
 
 
 def measure_mouth(robot, arm: Arm, face, t_frame: float, rgb, out: Path | None, look: int) -> np.ndarray | None:
@@ -166,7 +166,7 @@ def retract(robot, arm: Arm) -> None:
         arm.straight(Te, Re, float(R_.back_off_mps), "back to the delivery look", torque_stop=False)   # it came
     goal = scene.overlook_joints(arm)
     reach = max(math.hypot(*arm.tip()[:2]), math.hypot(*arm.tip(goal)[:2])) + float(R_.reach_margin_m)
-    arm.travel(goal, "back to food_detect_start", max_reach_m=reach, carrying=True)
+    arm.travel(goal, "back to food_detect_start", max_reach_m=reach, carrying=True, short_way=True)
 
 
 def deliver(robot, arm: Arm, face, out: Path | None, stop_after: str = "", start_at: str = "swing",

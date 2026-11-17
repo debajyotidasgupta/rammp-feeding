@@ -163,9 +163,13 @@ class Motion(unittest.TestCase):
         arm = Arm(robot)
         raw0 = np.array(robot.raw, float)
         arm.travel(scene.overlook_joints(arm), "out")
-        self.assertTrue(arm.retrace(arm.last_run, "back"))
+        way = arm.last_run
+        self.assertTrue(arm.retrace(way, "back"))
         self.assertTrue(np.allclose(np.degrees(robot.raw), np.degrees(raw0), atol=0.05))
+        self.assertIsNone(arm.last_run)                           # (any later move: no path kept to retrace)
         self.assertFalse(arm.retrace(None, "back"))
+        far = ([list(np.array(p) + np.r_[40.0, [0.0] * 6]) for p in way[0]], way[1])
+        self.assertFalse(arm.retrace(far, "back"))                # (its end 40 deg off: planned instead)
 
     def test_the_short_way_round_the_base(self):
         """Joint 1 turned 300 deg one way reaches where 60 deg the other way does: only the short way passes."""
@@ -176,8 +180,8 @@ class Motion(unittest.TestCase):
         goal = q0 + np.r_[-60.0, [0.0] * 6]
         short = [q0 + np.r_[-60.0 * x, [0.0] * 6] for x in np.linspace(0, 1, 41)]
         far = [q0 + np.r_[300.0 * x, [0.0] * 6] for x in np.linspace(0, 1, 41)]
-        self.assertIsNone(arm._short_way(far, goal))
-        self.assertAlmostEqual(arm._short_way(short, goal), 60.0, places=6)
+        self.assertFalse(arm._short_way(far, goal))
+        self.assertTrue(arm._short_way(short, goal))
 
     def test_torque_guard(self):
         G = TorqueGuard(2.5)

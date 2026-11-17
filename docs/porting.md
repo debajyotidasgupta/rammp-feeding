@@ -14,7 +14,8 @@ From a new Jetson to `rammp feed`, in order.
 - An NVIDIA Jetson AGX Orin (arm64) with Docker and the NVIDIA runtime.
 - A Kinova Gen3 7-DoF with a Robotiq 2F-85, on the arm stack's 2.0 generation (kinova-gen3-ros2 2.0.0, rammp-curobo
   2.0.1). rammp-feeding 0.2.x is for the 1.1.0 stack.
-- A fork in the gripper. The module never opens or closes it.
+- A fork in the gripper, or on a stand the module picks it up from (section 6, "A stand to pick the fork from"):
+  only those two actions command the gripper.
 - A wrist RGB-D camera (RealSense D405 or D435i), and a fixed scene camera that sees the table (Orbbec Gemini 336L or
   D435i). Another model needs its own `config/camera/` profile. Intrinsics always come from `camera_info`.
 - A table and a bowl, with the food spaced apart. A tape measure, and a printer for the ChArUco board.
@@ -37,7 +38,7 @@ From a new Jetson to `rammp feed`, in order.
 ```bash
 uv tool install "sheppy @ git+https://github.com/rammp-org/sheppy@dev"
 git clone https://github.com/rammp-org/rammp-deployments.git
-docker pull debajyotidasgupta/rammp-feeding:0.6.0
+docker pull debajyotidasgupta/rammp-feeding:0.6.2
 sudo mkdir -p /srv/rammp_feeding/config /srv/rammp_feeding/runs && sudo chown -R 1000:1000 /srv/rammp_feeding
 ```
 - SAM3's weights are gated: accept the `facebook/sam3` licence on Hugging Face and download the snapshot to the Jetson.
@@ -47,7 +48,7 @@ sudo mkdir -p /srv/rammp_feeding/config /srv/rammp_feeding/runs && sudo chown -R
   tty=-i; [ -t 0 ] && tty=-it
   exec docker run --rm $tty --network host --ipc host --user 1000:1000 -e ROS_DOMAIN_ID=0 -e HOME=/tmp \
     -v /srv/rammp_feeding/config:/config -v /srv/rammp_feeding/runs:/runs \
-    debajyotidasgupta/rammp-feeding:0.6.0 ros2 run rammp_feeding rammp "$@"
+    debajyotidasgupta/rammp-feeding:0.6.2 ros2 run rammp_feeding rammp "$@"
   ```
 
 ## 4. The deployment manifest
@@ -60,7 +61,7 @@ Edit rammp-deployments' `december_2026/sheppy-manifest.yaml`:
 - **sam3:** its weights mount points at the snapshot: `<snapshot_dir>:/models/sam3:ro`.
 - **scene camera:** runs as `/scene_camera`, with `camera_name: scene_camera`.
 - **The robot:** `config/robots/<robot>/` holds `mount.yaml` (`robot: <robot>`, `rpy_deg` of the mount) and the
-  planner's `curobo/` (as dojo's). Activate it with `uv run scripts/set_robot.py december_2026/config/robots/<robot>`.
+  planner's `curobo/`. Activate it with `uv run scripts/set_robot.py december_2026/config/robots/<robot>`.
 - **The profile:** `profiles/<robot>.yaml` selects `kinova_gen3_driver`, `kinova_gen3_description`, `curobo_planner`,
   the two cameras with their serials, and `sam3_docker`. Leave `feeding` out until section 7. Check it with
   `uv run scripts/validate_manifest.py`.

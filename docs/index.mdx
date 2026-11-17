@@ -13,7 +13,8 @@ title: Robot-assisted feeding
 
 It repeats until the bowl is empty or the user declines. It is one RAMMP node. Every move goes through the arm node.
 Free-space moves are the shared RAMMP-CuRobo planner's paths, checked by us for the fork. Straight-line and contact
-moves are computed on the arm's model. It never commands the gripper.
+moves are computed on the arm's model. It commands the gripper only to pick the fork up from its stand and put it
+back (pick_up_fork, put_down_fork).
 
 Deploying: the [deployment checklist](porting.md). ROS interfaces: the [interface reference](interface.md).
 

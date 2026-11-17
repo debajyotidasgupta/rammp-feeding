@@ -9,17 +9,19 @@
   alternatives:
     # Transcribed from the feeding module's rammp-alternative.yaml. A capability engine (rammp-kitchen-capability-
     # engines' CapabilityEngine, engine id `feeding`): it registers with the orchestrator and moves the arm only in an
-    # action the orchestrator starts (start_meal, feed, finish_meal; docs/interface.md). It moves the arm only through
+    # action the orchestrator starts (start_meal, feed, finish_meal; with a stand, pick_up_fork and put_down_fork;
+    # docs/interface.md). It moves the arm only through
     # the arm node (execute_joint_trajectory: its own IK paths and the planner's paths), so `arm`,
     # `arm_state_publisher` and `planner` must be selected alongside, with `wrist_camera`, `scene_camera` and `sam3`.
-    # Stopping it cancels the action in flight: the move stops and the arm settles. It never commands the gripper.
+    # Stopping it cancels the action in flight: the move stops and the arm settles. It commands the gripper only in the
+    # two fork actions (/setpoint/gripper, with the action's token).
     # It uses the shared planner as configured for everyone: its own world goes in only while an action plans, and the
     # planner's comes back as the action ends.
     - id: rammp_feeding_docker
       tier: experimental
       kind: docker
       container:
-        image: debajyotidasgupta/rammp-feeding:0.6.1     # Docker Hub, arm64
+        image: debajyotidasgupta/rammp-feeding:0.6.2     # Docker Hub, arm64
         network_mode: host
         ipc: host
         user: "1000:1000"
@@ -57,17 +59,19 @@
         - /scene_camera/color/image_raw
         - /scene_camera/color/camera_info
         - /scene_camera/depth/image_rect_raw
+        - /gripper_state
       publishes:
         - /feeding/status
         - /tf_static
         - /reset
+        - /setpoint/gripper
     # The real alternative's interface with no hardware: the same node with mock:=true (it registers and answers
     # every action at once; nothing moves).
     - id: feeding_mock
       tier: experimental
       kind: docker
       container:
-        image: debajyotidasgupta/rammp-feeding:0.6.1
+        image: debajyotidasgupta/rammp-feeding:0.6.2
         network_mode: host
         ipc: host
         environment:
@@ -86,7 +90,9 @@
         - /scene_camera/color/image_raw
         - /scene_camera/color/camera_info
         - /scene_camera/depth/image_rect_raw
+        - /gripper_state
       publishes:
         - /feeding/status
         - /tf_static
         - /reset
+        - /setpoint/gripper

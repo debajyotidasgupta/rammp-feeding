@@ -91,8 +91,7 @@ motion:
     timeout_s: 30
     replans: 4                  # a path that fails our check, or that the planner refuses for bending its hold: plan
                                 # again (cuRobo's paths differ), at most this often
-    short_way_tries: 4          # travel(short_way): the least-turning of this many paths round the base the short way ...
-    short_way_slack_deg: 30     # ... the tool's bearing from the base turning within this of the short way
+    short_way_slack_deg: 30     # travel(short_way): the tool's bearing from the base turning within this of the short way
     retrace_onto_deg: 30        # Arm.retrace: from this far off a path's end (joints), a joint line onto it first
     check_step_deg: 0.5         # a planned path is checked as it will run: sampled this finely on the furthest joint
     utensil_padding_m: 0.01     # the utensil check: our boxes (the bowl, the user) grown this per side (the bowl exact) ...

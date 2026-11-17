@@ -95,7 +95,8 @@ goals.
 | Path | Contents |
 | --- | --- |
 | `/config/local.yaml` | The site's settings |
-| `/config/{home,overlook,deliver}.json` | Captured poses |
+| `/config/{home,overlook,deliver,fork_look}.json` | Captured poses |
+| `/config/utensil_state.json` | Whether the gripper holds the fork, and its seat on the stand |
 | `/config/wrist_mount.json`, `/config/scene_extrinsic.json` | The calibrations (the scene camera's only where the robot does not place it) |
 | `/config/scene_state.json` | This meal's bowl and table |
 | `/runs/` | The run record, with `record` on |

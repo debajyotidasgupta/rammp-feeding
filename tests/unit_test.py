@@ -1190,9 +1190,11 @@ class ForkPick(unittest.TestCase):
         centre; the fork held after (its state saved, the arm's checks the fork's), the arm home."""
         from rammp_feeding import fork
         out = fork.pick_up(self.robot, self.arm, self.g)
-        (closed, at_close), (opened, at_open) = self.robot.grips
+        (closed, at_close), (opened, at_open), (held, _) = self.robot.grips     # (held: opened again, firm)
+        self.assertEqual(held, float(self.P.gripper_open))
         self.assertEqual((closed, opened), (float(self.P.gripper_closed), float(self.P.gripper_open)))
-        self.assertEqual(set(self.robot.grip_settings), {(float(self.P.gripper_speed), float(self.P.gripper_force))})
+        soft, firm = (float(self.P.gripper_speed), float(self.P.gripper_force)), (float(self.P.gripper_speed), float(self.P.hold_force))
+        self.assertEqual(list(self.robot.grip_settings), [soft, soft, firm])   # (soft in the stand, firm once out)
         T, R = self.arm.tool(scene.captured("home"))
         self.assertLess(np.linalg.norm(at_close - (T + R @ fork.fingertips_in_tool())), 1e-6)       # before moving
         self.assertLess(np.linalg.norm(at_open - self.in_hole), 0.004)
@@ -1221,8 +1223,8 @@ class ForkPick(unittest.TestCase):
         in_hole = np.asarray(self.sc.hole_at) - [0.0, 0.0, float(self.P.insert_m)]
         self.robot.grips.clear()
         fork.put_down(self.robot, self.arm, self.g)
-        [(closed, at)] = self.robot.grips
-        self.assertEqual(closed, float(self.P.gripper_closed))
+        (soft, _), (closed, at) = self.robot.grips                     # (soft again before the stand, then let go)
+        self.assertEqual((soft, closed), (float(self.P.gripper_open), float(self.P.gripper_closed)))
         self.assertLess(np.linalg.norm(at - in_hole), 0.004)
         self.assertEqual(fork.state().get("holding"), False)
         self.assertNotIn("hole", fork.state())
@@ -1246,6 +1248,22 @@ class ForkPick(unittest.TestCase):
         fork.put_down(self.robot, self.arm, self.g)
         self.assertEqual(self.robot.moves[n:n + 1], ["position"])                # (straight down: no way round first)
         self.assertLess(np.linalg.norm(self.robot.grips[-1][1] - in_hole), 0.004)
+
+    def test_a_fork_moved_in_the_fingers_is_not_put_back(self):
+        """The fork hung 10 px elsewhere in the wrist image at the put-back than at the pick (it slipped in the
+        fingers): refused at fork_look, before the stand, the fork still held; not moved: put back."""
+        from rammp_feeding import fork
+        fork.pick_up(self.robot, self.arm, self.g)
+        self.robot.fork_slip_px = (10, 0)
+        self.robot.grips.clear()
+        with self.assertRaisesRegex(MoveError, "moved .* in the fingers since the pick"):
+            fork.put_down(self.robot, self.arm, self.g)
+        self.assertEqual(self.robot.grips, [])
+        self.assertTrue(fork.holding())
+        self.assertLess(g.max_step(self.arm.q(), scene.captured("fork_look")), 0.5)
+        self.robot.fork_slip_px = (0, 0)
+        fork.put_down(self.robot, self.arm, self.g)
+        self.assertFalse(fork.holding())
 
     def test_the_strip_is_read_several_times(self):
         """Its readings' median: one stray reading in three (its mask 20 px off) moves nothing; readings that keep

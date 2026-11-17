@@ -69,3 +69,8 @@ pick:                           # a stand to pick the fork from (rammp_feeding/f
                                 # this short of fully open (its end walls hold them; else they are not in it), and closed
                                 # to let go they end within this of closed
   settle_s: 0.5                 # after the fingers open or close, before the arm moves
+  hold_force: 0.5               # the fork clear of the holder after the pick: the fingers' ceiling for the meal (the
+                                # scoop's turn and the bite shifted it at gripper_force); back to gripper_force at the stand
+  fork_prompts: [fork]          # SAM3's words for the fork in the fingers (fork_look, its box: utensil.image_region_px) ...
+  grip_shift_tol_m: 0.002       # ... the put-back stopped when it hangs more than this (at its tines' depth) from where it
+                                # hung at the pick: it moved in the fingers, the block would land off its seat

@@ -19,16 +19,20 @@ stand. The gripper is commanded here and nowhere else.
             the fingers open (the hold) -- where the arm node serves their position, refused unless the opening's end
             walls stopped them short of open (lock_margin: else they are not in it), closed again first; straight up
             (lift_m), the block off its seat; straight out through the holder's open side (slide_m across the
-            opening's long side, the way open_side points: away from the stand's post); a planned path to
-            fork_look, the holder now empty, and the stand's strip found there (strip): the seat -- the opening's centre
-            and the fingers' turn -- kept in the strip's frame; a planned path to feeding_start
+            opening's long side, the way open_side points: away from the stand's post); the fingers opened again at
+            hold_force (a firm hold for the meal); a planned path to fork_look, the holder now empty, and the stand's
+            strip found there (strip): the seat -- the opening's centre and the fingers' turn -- kept in the strip's
+            frame, and where the fork hangs in the camera's frame (fork_px: SAM3's fork); a planned path to
+            feeding_start
   strip     the stand's marker, from fork_look: SAM3 on stand_prompts (the tape along the stand's arm to its seat); its
             depth points between the table and the fingers' ends, outside the utensil's image region; the best-scored
             with stand_min_points: its post end (the tape's clean cut, on its centreline) and its direction toward
             the seat, on the base's level; the median of stand_reads readings (looked at again while they spread)
   put_down  from feeding_start holding the fork: a planned path to fork_look; the strip found and the seat placed from
             it (refused when the stand moved more than max_stand_move_m or turned more than max_stand_turn_deg since the
-            pick, or no strip: put the fork back by hand); a planned path beside the open side at the lift's height;
+            pick, or no strip: put the fork back by hand; refused, too, when the fork hangs more than grip_shift_tol_m
+            (at its tines' depth) from where it hung at the pick: it moved in the fingers); a planned path beside the open
+            side at the lift's height, the fingers back to gripper_force;
             straight in through it; straight down onto the seat (the guard's stop within seat_tol_m of it: seated, the
             holder taking the fork's weight); the fingers close (they let go; refused unless they
             closed); straight up out of the opening (above_m over the rim); a planned path to feeding_start
@@ -185,10 +189,10 @@ class Gripper:
     position: Callable[[], Optional[float]]
 
 
-def _grip(g: Gripper, position: float) -> Optional[float]:
-    """The fingers to position, slow and soft (gripper_speed, gripper_force: the stand is light), settle_s for the
-    block to settle round them; where they stopped (None: not served)."""
-    g.move(float(position), float(P().gripper_speed), float(P().gripper_force))
+def _grip(g: Gripper, position: float, force: float | None = None) -> Optional[float]:
+    """The fingers to position, slow and soft (gripper_speed, gripper_force: the stand is light; force: another
+    ceiling), settle_s for the block to settle round them; where they stopped (None: not served)."""
+    g.move(float(position), float(P().gripper_speed), float(P().gripper_force if force is None else force))
     time.sleep(float(P().settle_s))
     return g.position()
 
@@ -379,6 +383,23 @@ def _strip_once(dets, W, uv, lo: float, hi: float, toward=None, like=None):
     return None, why
 
 
+def fork_px(robot) -> tuple[float, float] | None:
+    """Where the fork hangs in the wrist camera's frame now (from fork_look): the centre of SAM3's best fork mask
+    (pick.fork_prompts) on the fork's box (utensil.image_region_px), in pixels; None when none is seen. The camera
+    rides on the gripper: its place in the frame is its place in the fingers."""
+    x0, y0, x1, y1 = (int(v) for v in cfg.utensil.image_region_px)
+    best = None
+    for d in robot.detect("camera", [str(w) for w in P().fork_prompts], float(P().score_threshold)):
+        m = np.asarray(d.mask, bool)
+        on = m[max(0, y0):max(0, y1), max(0, x0):max(0, x1)]
+        if on.sum() >= int(P().min_points) and (best is None or d.score > best[0]):
+            best = (d.score, m)
+    if best is None:
+        return None
+    v, u = np.nonzero(best[1])
+    return float(u.mean()), float(v.mean())
+
+
 def strip(robot, arm: Arm, out: Path | None = None, toward=None, like=None) -> tuple[np.ndarray, np.ndarray]:
     """The stand's strip as the wrist camera sees it from here (the arm still): (its post end, its direction toward
     its seat end, level), the median of stand_reads readings (each SAM3 on a new colour frame, one depth median) that
@@ -565,13 +586,17 @@ def pick_up(robot, arm: Arm, g: Gripper, step: Step = _no_step, out: Path | None
     save_state(s)
     _straight(arm, arm.tool()[0] + float(p.slide_m) * open_side(h), R, float(p.lift_mps),
               "out of the holder's open side", "the fork caught on the holder: check the stand")
+    _grip(g, float(p.gripper_open), float(p.hold_force))   # clear of the stand: a firm hold, the meal's moves don't shift it
     step("seat", 0.7, "Looking at the empty holder")
     arm.travel(scene.captured("fork_look"), "to fork_look")
     E, a = strip(robot, arm, out, toward=h.centre)
     rec = seat_record(h, R, E, a)
     log.info("    the seat from the strip's post end: along %.1f, across %.1f, up %.1f mm (as utensil.pick."
              "seat_in_strip_m)", *(1000 * np.array([rec["along"], rec["across"], rec["up"]])))
-    save_state(dict(s, seat=rec))
+    px = fork_px(robot)
+    if px is None:
+        log.info("    the fork in the fingers: not seen (%s) -- the put-back cannot check it", ", ".join(P().fork_prompts))
+    save_state(dict(s, seat=dict(rec, fork_px=px)))
     record.event("fork_picked_up", hole=h.to_json())
     step("home", 0.8, "Going home with the fork")
     _home(robot, arm)                                  # (the arm holding AtStand's fork: a fresh Arm is the meal's)
@@ -598,6 +623,17 @@ def put_down(robot, arm: Arm, g: Gripper, step: Step = _no_step, stop_after: str
     from rammp_feeding.cli import home_tilt_cap
     arm.travel(scene.captured("fork_look"), "to fork_look", tilt_cap=home_tilt_cap(arm.q()))
     E, a = strip(robot, arm, record_dir("put_fork"), like=s["seat"]["a"])
+    then, now = s["seat"].get("fork_px"), fork_px(robot)
+    if then is None or now is None:
+        log.info("    the fork in the fingers: not seen %s -- not checked", "at the pick" if then is None else "now")
+    else:
+        moved = (math.hypot(now[0] - then[0], now[1] - then[1])               # (pixels, at the tines' depth)
+                 * float(cfg.utensil.glass_to_tip_m) / float(arm.cam.colour.fx))
+        log.info("    the fork in the fingers: %.1f mm from where it hung at the pick (its tines' depth)", 1000 * moved)
+        if moved > float(p.grip_shift_tol_m):
+            raise MoveError("the fork has moved %.1f mm in the fingers since the pick (its tines, at most %.1f): the "
+                            "block would land off its seat -- seat the fork in the fingers by hand, or put it back by "
+                            "hand (rammp gripper close)" % (1000 * moved, 1000 * float(p.grip_shift_tol_m)))
     h, R, open_dir = seat_now(s["seat"], E, a)
     arm.hold(_fork(arm, h.centre))
     over = tool_at(h, R, float(p.lift_m) - float(p.insert_m))
@@ -609,6 +645,7 @@ def put_down(robot, arm: Arm, g: Gripper, step: Step = _no_step, stop_after: str
         raise MoveError("beside the holder's open side is out of the arm's reach -- put the fork back by hand")
     step("place", 0.3, "Taking the fork back to its stand")
     arm.travel(q_in, "beside the holder's open side")
+    _grip(g, float(p.gripper_open))                    # soft again before the stand: a firm hold drags the holder
     _straight(arm, over, R, float(p.lift_mps), "in through the open side", "the fork met the holder: check the stand")
     log.info("    over the seat: the opening's centre (%.4f %.4f %.4f)", *h.centre)
     if stop_after == "above":                         # (over the seat: the next put-back goes straight down)

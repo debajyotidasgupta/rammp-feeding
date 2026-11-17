@@ -21,7 +21,7 @@
       tier: experimental
       kind: docker
       container:
-        image: debajyotidasgupta/rammp-feeding:0.6.2     # Docker Hub, arm64
+        image: debajyotidasgupta/rammp-feeding:0.6.3     # Docker Hub, arm64
         network_mode: host
         ipc: host
         user: "1000:1000"
@@ -71,7 +71,7 @@
       tier: experimental
       kind: docker
       container:
-        image: debajyotidasgupta/rammp-feeding:0.6.2
+        image: debajyotidasgupta/rammp-feeding:0.6.3
         network_mode: host
         ipc: host
         environment:

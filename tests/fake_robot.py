@@ -47,7 +47,8 @@ class Scene:
     piece_height: float = 0.025
     floor_lift: float = 0.0                         # the surface the depth reads under the bowl, above the table
     mouth: tuple = (-0.27, -0.20, 0.60) if TILT else (-0.277, 0.306, 0.428)
-    hole_at: tuple | None = None if TILT else (0.42, 0.02, 0.0072 + 0.20)   # the opening's centre, at the rim
+    hole_at: tuple = (0.55, -0.05, 0.095 + 0.20) if TILT else (0.42, 0.02, 0.0072 + 0.20)   # the opening's centre, at
+                                                    # the rim (on tilt30 beside its bowl, in the 30 deg arm's reach)
     hole_yaw_deg: float = 64.0                      # its long side's direction, round from the base's x (fork_look's
                                                     # fingers: 60)
     hole_size: tuple = (0.0241, 0.0579)             # the opening: short side, long side
@@ -116,6 +117,7 @@ class FakeRobot:
         self.moves: list[str] = []
         self.worlds: list = []                          # set_world: a file's content; "reset": the planner's own back
         self.grips: list[tuple[float, np.ndarray]] = []   # gripper(): the position, where the fingertips were
+        self.fork_slip_px = (0, 0)                       # the fork in the fingers, moved this far in the wrist image
         self.fingers = 0.0                              # where they are: 0 open .. 1 closed (None: not served)
         self.grip_settings: list[tuple] = []            # gripper(): (speed, force)
         from rammp_feeding.arm import chain
@@ -312,6 +314,12 @@ class FakeRobot:
                 v, u = np.nonzero(on)
                 out.append(Detection(str(prompts[0]), 0.5, [float(u.min()), float(v.min()), float(u.max()),
                                                             float(v.max())], on))
+        if any(p in cfg.utensil.get("pick.fork_prompts", []) for p in prompts):   # the fork in the fingers: rides with the
+            x0, y0, x1, y1 = (int(v) for v in cfg.utensil.image_region_px)            # camera (fork_slip_px: it moved)
+            du, dv = self.fork_slip_px
+            m = np.zeros((480, 640), bool)
+            m[max(0, y0 + dv):max(0, y1 + dv), max(0, x0 + du):max(0, x1 + du)] = True
+            out.append(Detection(str(prompts[0]), 0.9, [x0 + du, y0 + dv, x1 + du, y1 + dv], m))
         if any(p in cfg.utensil.get("pick.prompts", []) for p in prompts):
             hole = self._block()[1]
             if hole.any():

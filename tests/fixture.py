@@ -40,7 +40,8 @@ if SITE == "tilt30":
            "workspace.table_extent_m.y=[-0.60, 0.40],workspace.table_height_m=0.095,workspace.bowl_centre_m=[0.639, -0.223],"
            "workspace.overlook_camera_height_m=0.40,perception.scene.use=false,bowl.rim_radius_m=0.045,bowl.height_m=0.08,"
            "acquisition.scoop.turn_deg=-90.0,acquisition.scoop.rot_exp=3.0,acquisition.scoop.speed_dps=25.0,"
-           "delivery.second_look_m=[0.0, 0.05, 0.0],motion.home_max_tilt_deg=135.0,")
+           "delivery.second_look_m=[0.0, 0.05, 0.0],motion.home_max_tilt_deg=135.0,"
+           "utensil.pick.use=true,utensil.pick.glass_to_fingertips_m=0.130,utensil.pick.open_side=[-0.9, 0.44],")
 else:
     (STATE / "wrist_mount.json").write_text(json.dumps(dict(
         camera="realsense_d405", utensil="fork", camera_in_tool_m=[0.0, 0.075, -0.125],

@@ -42,7 +42,8 @@ def main() -> int:
     g = fork.Gripper(robot.gripper, robot.gripper_position)
     out = fork.pick_up(robot, arm, g, out=fork.record_dir("pick_fork"))
     in_hole = np.asarray(sc.hole_at) - [0.0, 0.0, float(P.insert_m)]
-    assert [p for p, _ in robot.grips] == [float(P.gripper_closed), float(P.gripper_open)], robot.grips
+    assert [p for p, _ in robot.grips] == [float(P.gripper_closed), float(P.gripper_open), float(P.gripper_open)], \
+        robot.grips                                  # (in closed, open in the opening, open again firm once out)
     off = float(np.linalg.norm(robot.grips[1][1] - in_hole))
     assert off < 0.004, "the fingers opened %.1f mm from the hole's depth" % (1000 * off)
     assert fork.holding() and arm.held.fork
@@ -68,8 +69,8 @@ def main() -> int:
     in_hole = np.asarray(sc.hole_at) - [0.0, 0.0, float(P.insert_m)]
     robot.grips.clear()
     fork.put_down(robot, arm, g)
-    assert [p for p, _ in robot.grips] == [float(P.gripper_closed)], robot.grips
-    off = float(np.linalg.norm(robot.grips[0][1] - in_hole))
+    assert [p for p, _ in robot.grips] == [float(P.gripper_open), float(P.gripper_closed)], robot.grips
+    off = float(np.linalg.norm(robot.grips[-1][1] - in_hole))
     assert off < 0.004, "the fingers let go %.1f mm from the hole's depth" % (1000 * off)
     assert not fork.holding() and "hole" not in fork.state()
     assert g_at(arm, scene.captured("home")), "the put-back did not end home"

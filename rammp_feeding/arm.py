@@ -126,6 +126,22 @@ def smooth_timing(path: Sequence[Sequence[float]], vmax: float, amax: float,
     return list(Q), [dt] * n
 
 
+def planner_timing(pos, times, vmax: float, amax: float) -> tuple[list[np.ndarray], list[float]] | None:
+    """The planner's own timed path (smooth by construction), stretched evenly until no joint passes vmax (deg/s) or amax
+    (deg/s^2): (points, durations); None without usable times. (smooth_timing through a planned path's waypoints stops
+    a joint at every small turn back: whole moves slowed to minutes.)"""
+    P = [np.asarray(pos[0], float)]
+    for q in pos[1:]:                                      # unwrapped
+        P.append(P[-1] + joint_delta(P[-1], q))
+    P, dt = np.array(P), np.diff(np.asarray(times, float))
+    if len(P) < 3 or len(dt) != len(P) - 1 or (dt <= 0).any():
+        return None
+    V = np.diff(P, axis=0) / dt[:, None]
+    A = np.diff(V, axis=0) / ((dt[:-1] + dt[1:]) / 2)[:, None]
+    k = max(1.0, float(np.abs(V).max()) / vmax, math.sqrt(float(np.abs(A).max()) / amax))
+    return list(P), [float(d * k) for d in dt]
+
+
 class Held:
     """What the gripper holds, as the arm's checks take it. An arm without one holds this module's fork: its tip from the
     wrist camera's calibration, and the scene's floor, boxes and world. A module built on this one subclasses it for
@@ -167,6 +183,7 @@ class Arm:
             raise RuntimeError("not measured on this robot yet: %s (docs/porting.md)" % ", ".join(unmeasured()))
         from rammp_feeding.scene import tip_in_tool       # (the tip model: the wrist camera's intrinsics and mount)
         self.robot, self.kin, self.held = robot, kin or chain(robot), held
+        self.last_run = None                            # the last travel's timed path (points, durations): retrace
         if held is None:
             self.cam = robot.camera_model("camera") if measured else None
             self.tip_tool = tip_in_tool(self.cam) if measured else None
@@ -397,16 +414,19 @@ class Arm:
 
     def travel(self, goal: Sequence[float], label: str, dps: float | None = None, go: bool = True,
                max_reach_m: float | None = None, carrying: bool = False, level: bool = False, pose: bool = False,
-               **kw) -> list[Joints]:
+               short_way: bool = False, **kw) -> list[Joints]:
         """A collision-free path from the shared planner, from here to goal (go=False: plan only), with our world pushed
         to it first; thinned, checked as it will run against our tip floor, the utensil's tilt (tilt_limit) and, for
         the utensil (and, carrying, the piece), against our boxes -- re-planned when it fails any, or when the planner
         refuses its own path for bending the hold (CONSTRAINT_VIOLATED: a hold is a cost to cuRobo) -- run, and
         settled exactly onto goal. pose: planned to goal's tool pose in the arm shape the planner picks (goal's own
         joints may sit inside its joint-limit margin), and not settled onto goal's joints; level: the same, its tilt
-        held all the way (the planner's HOLD_LEVEL: something that must stay upright, a cup)."""
+        held all the way (the planner's HOLD_LEVEL: something that must stay upright, a cup). short_way: only a path
+        taking the tool round the arm's base the short way (some go round the far side, winding the wrist's cable),
+        the one turning the joints least of free_space.short_way_tries. The path run is kept (last_run) for retrace."""
         from rammp_feeding.scene import push_world, tip_floor, utensil_boxes, utensil_spheres
         FS = M.free_space
+        self.last_run = None
         q = self.q()
         if level or pose:                             # at goal's pose already, in whatever shape: nothing to do
             (T, R), (Tg, Rg) = self.tool(q), self.tool(goal)
@@ -421,14 +441,17 @@ class Arm:
         spheres, boxes = (utensil_spheres(self, carrying), utensil_boxes()) if H is None else (H.spheres(self, carrying),
                                                                                                 H.boxes())
         floor = tip_floor if H is None else H.floor
-        for k in range(int(FS.replans) + 1):
+        tries = int(FS.short_way_tries) if short_way else 1
+        best, why, passed = None, "", 0
+        for k in range(int(FS.replans) + tries):
             try:                                      # to goal's tool pose (level: its tilt held on the way, a cup)
-                pos, _ = (self.robot.plan_pose(q, *self.tool(goal), float(FS.timeout_s), hold=1 if level else 0)
-                          if level or pose else self.robot.plan_joints(q, goal, float(FS.timeout_s)))
+                pos, times = (self.robot.plan_pose(q, *self.tool(goal), float(FS.timeout_s), hold=1 if level else 0)
+                              if level or pose else self.robot.plan_joints(q, goal, float(FS.timeout_s)))
             except RuntimeError as e:
-                if "CONSTRAINT_VIOLATED" not in str(e) or k == int(FS.replans):
+                if "CONSTRAINT_VIOLATED" not in str(e):
                     raise MoveError("%s: %s" % (label, e))
-                log.info("    %-28s re-planning (%d/%d): %s", label, k + 1, int(FS.replans), e)
+                why = str(e)
+                log.info("    %-28s re-planning (%d): %s", label, k + 1, e)
                 continue
             pos[0] = q
             keep = [0]
@@ -438,21 +461,60 @@ class Arm:
             path = [list(map(float, pos[i])) for i in keep + [len(pos) - 1]]
             try:
                 lo, hi = self.check_path(path, floor, max_reach_m, spheres, boxes, kw.get("tilt_cap"))
-                break
             except MoveError as e:
-                if k == int(FS.replans):
-                    raise MoveError("%s: %s -- not moving" % (label, e))
-                log.info("    %-28s re-planning (%d/%d): %s", label, k + 1, int(FS.replans), e)
+                why = str(e)
+                log.info("    %-28s re-planning (%d): %s", label, k + 1, e)
+                continue
+            score = self._short_way(pos, goal) if short_way else 0.0
+            if score is None:
+                why = "every path round the far side"
+                log.info("    %-28s re-planning (%d): round the far side", label, k + 1)
+                continue
+            if best is None or score < best[0]:
+                best = (score, pos, times, path, lo, hi)
+            passed += 1
+            if passed >= tries:
+                break
+        if best is None:
+            raise MoveError("%s: %s -- not moving" % (label, why))
+        _, pos, times, path, lo, hi = best
         log.info("    %-28s planned: %d waypoints, %s tip z %.3f .. %.3f%s", label, len(path),
                  self.held_name.replace("the ", ""), lo, hi, "" if go else "  (plan only)")
         if go:
-            timed, durations = smooth_timing(path, joint_cap(dps or float(FS.dps)), float(M.joint_accel_dps2),
-                                             float(M.trajectory_sample_s))
+            vmax, amax = joint_cap(dps or float(FS.dps)), float(M.joint_accel_dps2)
+            timed, durations = (planner_timing(pos, times, vmax, amax)
+                                or smooth_timing(path, vmax, amax, float(M.trajectory_sample_s)))
             self.run(timed, label, durations=durations,
                      torque_limit=kw.pop("torque_limit", float(cfg.guards.torque_step_nm.free_space)), **kw)
+            self.last_run = ([[float(v) for v in p] for p in timed], [float(d) for d in durations])
             if not (level or pose):                   # (a plan to the pose ends there, maybe in other joints: kept)
                 self.goto(goal, "settle " + label)
         return path
+
+    def _short_way(self, pos, goal) -> float | None:
+        """A path's total joint turning, or None when it takes the tool round the base the long way (its bearing)."""
+        bearing = lambda q: math.atan2(*self.tool(q)[0][1::-1])
+        a = np.unwrap([bearing(p) for p in pos[::4]] + [bearing(goal)])
+        short = (bearing(goal) - bearing(pos[0]) + math.pi) % (2 * math.pi) - math.pi
+        if abs(a[-1] - a[0] - short) > math.radians(float(M.free_space.short_way_slack_deg)):
+            return None
+        return float(sum(np.abs(joint_delta(p, q)).sum() for p, q in zip(pos, pos[1:])))
+
+    def retrace(self, way, label: str) -> bool:
+        """Back along a path a travel ran (its last_run), reversed: every joint turns back the way it turned, so nothing
+        winds up as a fresh plan the other way round can. Its end reached by a joint line first when within
+        free_space.retrace_onto_deg. False (nothing moved): no path, or the arm too far from its end."""
+        if not way:
+            return False
+        pts, durs = [list(p) for p in way[0]][::-1], list(way[1])[::-1]
+        d = max_step(self.q(), pts[0])
+        if d > float(M.free_space.retrace_onto_deg):
+            log.info("    %-28s %.1f deg from the way it came: planned instead", label, d)
+            return False
+        if d > float(M.near_pose_deg):
+            self.goto(pts[0], "onto " + label)
+        self.run(pts, label, durations=durs, torque_limit=float(cfg.guards.torque_step_nm.free_space))
+        return True
 
     # ------------------------------------------------------------------ the tool's force, from the joint torques
     def tool_force(self, tau, q=None) -> np.ndarray:

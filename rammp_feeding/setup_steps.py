@@ -102,6 +102,7 @@ def run(robot, arm, steps=STEPS, ask: Callable[[str], str] = input, face=None) -
                 if face is None:
                     from rammp_feeding.face import Face
                     face = Face()
+                face.orient(scene.camera_pose(arm)[1])
                 seen = face.find(robot.cameras["camera"], float(cfg.delivery.face_find_s))
                 log.info("  the wrist camera %s from the delivery look", "sees a face" if seen else
                          "sees NO face -- pose it again with the user seated (rammp setup deliver)")

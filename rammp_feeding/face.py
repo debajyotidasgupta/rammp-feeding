@@ -1,6 +1,7 @@
 """The user's face from the wrist camera, MediaPipe face landmarks on the CPU (~25 ms a frame).
 
-- The image is upright after a quarter turn at the delivery pose (camera.mount.image_rotated_at_delivery).
+- The image is turned upright by the quarter turns that bring the world's down to the image's (orient: the camera's
+  pose), whichever way the wrist holds it.
 - The mouth's range: the lips' own depth (each lip landmark's 5 x 5 depth window), unless that is far beyond what the
   face's size allows (the depth past the sensor's range, or the food in front of the lips); else the face's size --
   the outer eye corners' spacing (delivery.face.eye_corners_m): a turned head looks narrower, so it reads FARTHER.
@@ -29,10 +30,15 @@ class Face:
         from mediapipe.tasks.python import BaseOptions, vision
         self.det = vision.FaceLandmarker.create_from_options(vision.FaceLandmarkerOptions(
             base_options=BaseOptions(model_asset_path=str(cfg.path("face.model"))), num_faces=1))
-        self.rotated = bool(cfg.camera.mount.get("image_rotated_at_delivery", False))
+        self.k = 0                                      # np.rot90's quarter turns that make the image upright
+
+    def orient(self, R) -> None:
+        """The camera at R (base <- its optical frame): the image's turn to upright from where the world's down falls."""
+        d = np.asarray(R, float).T @ np.array([0.0, 0.0, -1.0])
+        self.k = -int(round(np.degrees(np.arctan2(d[0], d[1])) / 90.0)) % 4
 
     def upright(self, rgb: np.ndarray) -> np.ndarray:
-        return np.rot90(rgb, -1) if self.rotated else rgb
+        return np.rot90(rgb, self.k)
 
     def landmarks(self, rgb: np.ndarray):
         """Face landmarks in the upright image (pixels), or None."""
@@ -44,9 +50,9 @@ class Face:
         h, w = img.shape[:2]
         return np.array([[p.x * w, p.y * h] for p in r.face_landmarks[0]])
 
-    def to_image(self, x, y, H: int):
-        """An upright pixel -> the camera image's."""
-        return (y, H - 1 - x) if self.rotated else (x, y)
+    def to_image(self, x, y, H: int, W: int):
+        """An upright pixel -> the camera image's (H x W)."""
+        return [(x, y), (W - 1 - y, x), (W - 1 - x, H - 1 - y), (y, H - 1 - x)][self.k]
 
     def mouth(self, rgb: np.ndarray, depth: np.ndarray | None, cam) -> dict | None:
         """The mouth in the camera's optical frame (cam: its model): cam_xyz (m), source "depth" (the lips) or "size"
@@ -54,14 +60,14 @@ class Face:
         L = self.landmarks(rgb)
         if L is None:
             return None
-        H = rgb.shape[0]
+        H, W = rgb.shape[:2]
         z_eyes = float(cam.colour.fx * float(FACE.eye_corners_m) / max(1e-6, np.linalg.norm(L[EYES[0]] - L[EYES[1]])))
         z, src = z_eyes, "size"
         if depth is not None:
             Hd, Wd = depth.shape
             zs = []
             for i in LIPS:                                  # each lip point's depth: a 5 x 5 window where it images
-                u, v = self.to_image(*L[i], H)
+                u, v = self.to_image(*L[i], H, W)
                 zi = z_eyes
                 for _ in range(4):
                     ud, vd = (int(round(x)) for x in cam.colour_to_depth(u, v, zi))
@@ -76,7 +82,7 @@ class Face:
             med = float(np.median(zs)) if len(zs) >= 3 else None
             if med is not None and med <= max(float(FACE.depth_beyond_eyes_factor) * z_eyes, z_eyes + 0.3):
                 z, src = med, "depth"
-        u, v = self.to_image(*L[[13, 14]].mean(0), H)
+        u, v = self.to_image(*L[[13, 14]].mean(0), H, W)
         opening = float(np.linalg.norm(L[13] - L[14]) / max(1e-6, np.linalg.norm(L[61] - L[291])))
         return dict(cam_xyz=[float(x) for x in cam.ray(u, v, z)], source=src, open=opening,
                     range_from_eyes_m=z_eyes, px=[float(u), float(v)])

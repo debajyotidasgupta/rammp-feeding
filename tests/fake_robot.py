@@ -330,6 +330,9 @@ class FakeFace:
     def __init__(self, robot):
         self.robot = robot
 
+    def orient(self, R):
+        pass
+
     def find(self, cam, wait_s):
         return self.mouth(None, None, cam) is not None
 

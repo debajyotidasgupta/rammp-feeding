@@ -96,6 +96,7 @@ def present(robot, arm: Arm, face, out: Path | None, wait_open: bool = True, ope
         if look == 2:
             T, R = arm.tool()
             arm.straight(T + np.array(DL.second_look_m, float), R, float(DL.look_mps), "to the second look")
+        face.orient(scene.camera_pose(arm)[1])
         if not face.find(cam, float(DL.face_find_s)):
             log.info("    no face in view from look %d", look)
             continue

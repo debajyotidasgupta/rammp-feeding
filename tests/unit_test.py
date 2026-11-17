@@ -15,7 +15,8 @@ import numpy as np  # noqa: E402
 
 from fake_robot import FakeRobot, Scene  # noqa: E402
 from rammp_feeding import geometry as g, scene  # noqa: E402
-from rammp_feeding.arm import Arm, Held, MoveError, TorqueGuard, chain, smooth_timing, time_scale  # noqa: E402
+from rammp_feeding.arm import (Arm, Held, MoveError, TorqueGuard, chain, planner_timing, smooth_timing,  # noqa: E402
+                               time_scale)
 from rammp_feeding.config import cfg, state_dir  # noqa: E402
 from rammp_feeding.ros import Detection  # noqa: E402
 
@@ -142,6 +143,42 @@ class Motion(unittest.TestCase):
         V, dV = self._profile(Q, dt)
         self.assertLessEqual(dV.max(), 1.1 * 45.0 * 0.02)
 
+    def test_planner_timing_stretched_to_the_caps(self):
+        """The planner's own timed path, too fast for the caps, stretched evenly until no joint passes either."""
+        t = np.linspace(0.0, 1.0, 51)
+        pos = [[90.0 * (3 * x ** 2 - 2 * x ** 3)] + [0.0] * 6 for x in t]    # 90 deg in 1 s, from rest to rest
+        Q, dt = planner_timing(pos, t, 60.0, 45.0)
+        V = np.abs(np.diff(np.array(Q), axis=0) / np.array(dt)[:, None])
+        A = np.abs(np.diff(V, axis=0) / ((np.array(dt[:-1]) + np.array(dt[1:])) / 2)[:, None])
+        self.assertLessEqual(V.max(), 60.0 + 1e-6)
+        self.assertLessEqual(A.max(), 45.0 + 1e-6)
+        self.assertTrue(np.allclose(Q[0], pos[0]) and np.allclose(Q[-1], pos[-1]))
+        self.assertIsNone(planner_timing(pos, np.zeros(51), 60.0, 45.0))       # no usable times: the caller's timing
+
+    def test_retrace_turns_back_the_way_it_came(self):
+        """A travel's path run backwards: every joint back where it started, none a turn further round."""
+        sc = Scene()
+        site(sc)
+        robot = FakeRobot(sc, scene.captured("home"))
+        arm = Arm(robot)
+        raw0 = np.array(robot.raw, float)
+        arm.travel(scene.overlook_joints(arm), "out")
+        self.assertTrue(arm.retrace(arm.last_run, "back"))
+        self.assertTrue(np.allclose(np.degrees(robot.raw), np.degrees(raw0), atol=0.05))
+        self.assertFalse(arm.retrace(None, "back"))
+
+    def test_the_short_way_round_the_base(self):
+        """Joint 1 turned 300 deg one way reaches where 60 deg the other way does: only the short way passes."""
+        sc = Scene()
+        site(sc)
+        arm = Arm(FakeRobot(sc, scene.captured("home")))
+        q0 = np.array(scene.captured("home"), float)
+        goal = q0 + np.r_[-60.0, [0.0] * 6]
+        short = [q0 + np.r_[-60.0 * x, [0.0] * 6] for x in np.linspace(0, 1, 41)]
+        far = [q0 + np.r_[300.0 * x, [0.0] * 6] for x in np.linspace(0, 1, 41)]
+        self.assertIsNone(arm._short_way(far, goal))
+        self.assertAlmostEqual(arm._short_way(short, goal), 60.0, places=6)
+
     def test_torque_guard(self):
         G = TorqueGuard(2.5)
         for k in range(40):                                      # a slow ramp: no contact
@@ -249,6 +286,24 @@ class Restored(unittest.TestCase):
         with self.assertRaisesRegex(MoveError, "not where this bite's plunge ended"):
             acquire(robot, arm, {}, out, start_at="scoop")
         self.assertEqual(robot.moves, [])
+
+
+class FaceTurn(unittest.TestCase):
+    def test_the_image_turned_upright_from_the_cameras_pose(self):
+        """However the wrist holds the camera, the world's down becomes the image's down; pixels map back."""
+        from rammp_feeding.face import Face
+        f = Face.__new__(Face)
+        down, fwd = np.array([0.0, 0.0, -1.0]), np.array([1.0, 0.0, 0.0])
+        for k, right in ((0, np.cross(down, fwd)), (3, down), (2, -np.cross(down, fwd)), (1, -down)):
+            y = np.cross(fwd, right)                          # the optical frame: x right, y down, z ahead
+            f.orient(np.stack([right, y, fwd], 1))
+            self.assertEqual(f.k, k)
+            img = np.arange(4 * 6).reshape(4, 6)
+            up = f.upright(img)
+            for v in range(up.shape[0]):
+                for u in range(up.shape[1]):
+                    x, y_ = f.to_image(u, v, 4, 6)
+                    self.assertEqual(up[v, u], img[y_, x])
 
 
 class Delivery(unittest.TestCase):

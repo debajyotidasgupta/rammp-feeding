@@ -643,14 +643,14 @@ class World(unittest.TestCase):
         sc = Scene()
         site(sc)
         self.assertAlmostEqual(scene.workspace()["table_z"], sc.table_z)
-        cfg["workspace"]["table_height_m"] = sc.table_z + 0.02
+        was, cfg["workspace"]["table_height_m"] = cfg["workspace"]["table_height_m"], sc.table_z + 0.02
         try:
             self.assertAlmostEqual(scene.workspace()["table_z"], sc.table_z + 0.02)
             table = next(o for o in scene.world()["obstacles"] if o["name"] == "table")
             self.assertAlmostEqual(table["position"][2] + table["dims"][2] / 2, sc.table_z + 0.02 + float(
                 cfg.scene_camera.error_m) + float(cfg.motion.free_space.min_tip_above_table_m))
         finally:
-            cfg["workspace"]["table_height_m"] = None
+            cfg["workspace"]["table_height_m"] = was
 
     def test_each_planned_move_pushes_our_world_and_the_command_restores_the_planners(self):
         sc = Scene()
@@ -1050,6 +1050,319 @@ class NoSceneCamera(unittest.TestCase):
         self.assertAlmostEqual(got["bowl_top_z"], sc.table_z + 0.08)
         self.assertAlmostEqual(ws["error_m"], float(cfg.perception.wrist_bowl_error_m))
         self.assertAlmostEqual(ws["scene_error_m"], float(cfg.perception.wrist_bowl_error_m))   # the ruler's top, placed
+
+
+class ForkPick(unittest.TestCase):
+    """The fork on its stand (rammp_feeding/fork.py): the level test site's stand beside the bowl, the block on the
+    fork's handle with its rectangular opening (the lab's size), turned 4 deg from fork_look's fingers."""
+
+    def setUp(self):
+        from rammp_feeding import fork
+        self.sc = Scene()
+        site(self.sc)
+        self.robot = FakeRobot(self.sc, scene.captured("home"))
+        self.arm = Arm(self.robot)
+        fork.save_state(dict(holding=False))
+        self.P = cfg.utensil.pick
+        self.in_hole = np.asarray(self.sc.hole_at) - [0.0, 0.0, float(self.P.insert_m)]
+        self.g = fork.Gripper(self.robot.gripper, self.robot.gripper_position)
+
+    def tearDown(self):
+        from rammp_feeding import fork
+        fork.save_state(dict(holding=False))
+
+    def _at_look(self):
+        from rammp_feeding import fork
+        self.robot.raw = np.radians(scene.captured("fork_look"))
+        self.arm.hold(fork.AtStand())
+
+    def test_the_opening_is_found_where_it_is(self):
+        """Its centre and the rim's height (the block's top, not the opening's floor), its long side and its size."""
+        from rammp_feeding import fork
+        self._at_look()
+        h = fork.find(self.robot, self.arm)
+        self.assertLess(np.linalg.norm(h.centre - np.asarray(self.sc.hole_at)), 0.003)
+        a = math.radians(self.sc.hole_yaw_deg)
+        self.assertGreater(abs(float(h.long_axis @ [math.cos(a), math.sin(a), 0.0])), math.cos(math.radians(2.0)))
+        np.testing.assert_allclose(h.size_m, self.sc.hole_size, atol=0.003)
+        self.sc.hole_size = (0.012, 0.030)                       # too narrow for the closed fingers
+        with self.assertRaisesRegex(MoveError, "not within"):
+            fork.find(self.robot, self.arm)
+        self.sc.hole_at = None
+        with self.assertRaisesRegex(MoveError, "no opening"):
+            fork.find(self.robot, self.arm)
+
+    def test_the_fingers_open_along_the_openings_long_side(self):
+        """The tool axis they open along (x) laid along its long side, pointing straight down; of the two ways round
+        (the gripper the same turned 180 deg), the one whose way in keeps the joints furthest from their limits;
+        refused past max_turn_deg from fork_look's either way round."""
+        from rammp_feeding import fork
+        self._at_look()
+        R_look = self.arm.tool()[1]
+        h = fork.find(self.robot, self.arm)
+        R = fork.insertion(self.arm, R_look, h)
+        a = math.radians(self.sc.hole_yaw_deg)
+        np.testing.assert_allclose(R[:, 2], [0.0, 0.0, -1.0], atol=1e-9)
+        self.assertGreater(abs(float(R[:, 0] @ [math.cos(a), math.sin(a), 0.0])), math.cos(math.radians(2.0)))
+        self.assertAlmostEqual(np.linalg.det(R), 1.0)
+
+        def margin(Rr):                                          # (over the opening seeded half round both ways too)
+            q0, m = self.arm.q(), math.inf
+            qs = [self.arm.ik(fork.tool_at(h, Rr, float(self.P.above_m)), Rr, list(np.asarray(q0) + np.array([0] * 6 + [t])))
+                  for t in (0.0, 180.0, -180.0)]
+            q = max((v for v in qs if v is not None), key=self.arm.margin, default=None)
+            for dz in (float(self.P.above_m), -float(self.P.insert_m), float(self.P.lift_m) - float(self.P.insert_m)):
+                q = None if q is None else self.arm.ik(fork.tool_at(h, Rr, dz), Rr, q)
+                if q is None:
+                    return -math.inf
+                m = min(m, self.arm.margin(q))
+            return m
+        other = R @ np.diag([-1.0, -1.0, 1.0])                   # (turned 180 deg about its axis)
+        self.assertGreaterEqual(margin(R), margin(other))
+        h.long_axis = -h.long_axis                               # (the same opening, its axis the other way)
+        np.testing.assert_allclose(fork.insertion(self.arm, R_look, h), R, atol=1e-9)
+        b = a + math.radians(float(self.P.max_turn_deg) + 5.0)
+        h.long_axis = np.array([math.cos(b), math.sin(b), 0.0])
+        with self.assertRaisesRegex(MoveError, "fork_look's fingers"):
+            fork.insertion(self.arm, R_look, h)
+
+    def test_the_pick_goes_in_closed_and_opens_only_in_the_opening(self):
+        """The fingers closed before the arm moves, opened only once they are insert_m into the opening under its
+        centre; the fork held after (its state saved, the arm's checks the fork's), the arm home."""
+        from rammp_feeding import fork
+        out = fork.pick_up(self.robot, self.arm, self.g)
+        (closed, at_close), (opened, at_open) = self.robot.grips
+        self.assertEqual((closed, opened), (float(self.P.gripper_closed), float(self.P.gripper_open)))
+        self.assertEqual(set(self.robot.grip_settings), {(float(self.P.gripper_speed), float(self.P.gripper_force))})
+        T, R = self.arm.tool(scene.captured("home"))
+        self.assertLess(np.linalg.norm(at_close - (T + R @ fork.fingertips_in_tool())), 1e-6)       # before moving
+        self.assertLess(np.linalg.norm(at_open - self.in_hole), 0.004)
+        s = fork.state()
+        self.assertTrue(s["holding"] and not s["in_holder"] and len(s["lifted_joints"]) == 7)
+        self.assertLess(np.linalg.norm(np.subtract(s["hole"]["centre"], self.sc.hole_at)), 0.003)
+        self.assertTrue(fork.holding())
+        self.assertTrue(self.arm.held.fork)                         # (the fork's own tip and tilt rule)
+        self.assertLess(g.max_step(self.arm.q(), scene.captured("home")), 0.1)
+        self.assertEqual(out["holding"], True)
+        with self.assertRaisesRegex(MoveError, "already holds"):
+            fork.pick_up(self.robot, self.arm, self.g)
+        self.robot.raw = np.radians(scene.captured("fork_look"))   # the seat kept against the strip: placed from the
+        self.arm.hold(fork._fork(self.arm, self.sc.hole_at))        # strip as found again, the stand unmoved
+        h, R, _ = fork.seat_now(s["seat"], *fork.strip(self.robot, self.arm, like=s["seat"]["a"]))
+        self.assertLess(np.linalg.norm(h.centre - np.asarray(self.sc.hole_at)), 0.003)
+
+    def test_the_put_back_finds_the_stand_where_it_is_now(self):
+        """The stand moved 2 cm and turned 8 deg after the pick: from fork_look the strip found, the seat placed from
+        it, in through the open side, down onto it, the fingers closed there (it lets go), straight up out of the
+        opening, home; the place forgotten (the next pick finds it anew). Moved past max_stand_move_m: refused, the fork
+        still held, the arm not past fork_look."""
+        from rammp_feeding import fork
+        fork.pick_up(self.robot, self.arm, self.g)
+        self.sc.move_stand(0.015, -0.013, 8.0)
+        in_hole = np.asarray(self.sc.hole_at) - [0.0, 0.0, float(self.P.insert_m)]
+        self.robot.grips.clear()
+        fork.put_down(self.robot, self.arm, self.g)
+        [(closed, at)] = self.robot.grips
+        self.assertEqual(closed, float(self.P.gripper_closed))
+        self.assertLess(np.linalg.norm(at - in_hole), 0.004)
+        self.assertEqual(fork.state().get("holding"), False)
+        self.assertNotIn("hole", fork.state())
+        self.assertFalse(fork.holding())
+        self.assertLess(g.max_step(self.arm.q(), scene.captured("home")), 0.1)
+        with self.assertRaisesRegex(MoveError, "not in the gripper"):
+            fork.put_down(self.robot, self.arm, self.g)
+        fork.pick_up(self.robot, self.arm, self.g)
+        self.sc.move_stand(float(self.P.max_stand_move_m) + 0.01, 0.0, 0.0)
+        self.robot.grips.clear()
+        with self.assertRaisesRegex(MoveError, "the stand moved .* put the fork back by hand"):
+            fork.put_down(self.robot, self.arm, self.g)
+        self.assertEqual(self.robot.grips, [])
+        self.assertTrue(fork.holding())
+        self.assertLess(g.max_step(self.arm.q(), scene.captured("fork_look")), 0.5)
+        self.sc.move_stand(-float(self.P.max_stand_move_m) + 0.02, 0.0, 0.0)     # (3 cm from the pick's: in reach)
+        in_hole = np.asarray(self.sc.hole_at) - [0.0, 0.0, float(self.P.insert_m)]
+        out = fork.put_down(self.robot, self.arm, self.g, stop_after="above")    # over the seat, then on down from there
+        self.assertLess(np.linalg.norm(np.subtract(out["opening_m"], self.sc.hole_at)), 0.004)
+        n = len(self.robot.moves)
+        fork.put_down(self.robot, self.arm, self.g)
+        self.assertEqual(self.robot.moves[n:n + 1], ["position"])                # (straight down: no way round first)
+        self.assertLess(np.linalg.norm(self.robot.grips[-1][1] - in_hole), 0.004)
+
+    def test_the_strip_is_read_several_times(self):
+        """Its readings' median: one stray reading in three (its mask 20 px off) moves nothing; readings that keep
+        spreading past stand_spread_m are looked at again, then refused (the fork back by hand)."""
+        from rammp_feeding import fork
+        self._at_look()
+        E0, a0 = fork.strip(self.robot, self.arm)
+        real, calls = self.robot.detect, []
+
+        def stray(role, prompts, t):
+            calls.append(1)
+            return [Detection(d.label, d.score, d.box, np.roll(d.mask, 20 if len(calls) % 3 == 2 else 0, axis=1))
+                    for d in real(role, prompts, t)]
+        self.robot.detect = stray
+        E1, a1 = fork.strip(self.robot, self.arm)
+        self.assertLess(np.linalg.norm(E1 - E0), 0.001)
+        self.assertGreater(float(a1 @ a0), math.cos(math.radians(1.0)))
+
+        def spread(role, prompts, t):
+            calls.append(1)
+            return [Detection(d.label, d.score, d.box, np.roll(d.mask, 15 * (len(calls) % 3), axis=1))
+                    for d in real(role, prompts, t)]
+        self.robot.detect = spread
+        with self.assertRaisesRegex(MoveError, "readings spread .* by hand"):
+            fork.strip(self.robot, self.arm)
+
+    def test_the_stands_own_seat_is_taken_when_set(self):
+        """utensil.pick.seat_in_strip_m set (the stand is rigid): the seat placed by it, not by the pick's reading."""
+        from unittest import mock
+        from rammp_feeding import fork
+        h = fork.Hole(np.array([0.42, 0.02, 0.20]), np.array([1.0, 0.0, 0.0]), (0.024, 0.058))
+        R = np.stack([h.long_axis, np.cross(fork.DOWN, h.long_axis), fork.DOWN], 1)
+        E, a = np.array([0.40, 0.08, 0.14]), np.array([0.0, -1.0, 0.0])
+        rec = fork.seat_record(h, R, E, a)
+        own = [rec["along"] + 0.004, rec["across"] - 0.002, rec["up"]]
+        with mock.patch.dict(cfg["utensil"]["pick"], {"seat_in_strip_m": own}):
+            h2, _, _ = fork.seat_now(rec, E, a)
+        np.testing.assert_allclose(h2.centre, h.centre + 0.004 * a - 0.002 * fork._turn(a, 90.0), atol=1e-9)
+
+    def test_the_seat_moves_with_the_strip(self):
+        """seat_record / seat_now: the opening kept in the strip's frame comes back exactly where a moved and turned
+        strip puts it, its long side and the fingers turned with it, the open side too."""
+        from rammp_feeding import fork
+        h = fork.Hole(np.array([0.42, 0.02, 0.20]), np.array([math.cos(1.1), math.sin(1.1), 0.0]), (0.024, 0.058))
+        R = np.stack([h.long_axis, np.cross(fork.DOWN, h.long_axis), fork.DOWN], 1)
+        E, a = np.array([0.40, 0.08, 0.14]), np.array([math.cos(2.3), math.sin(2.3), 0.0])
+        rec = fork.seat_record(h, R, E, a)
+        c, s_, t = math.cos(math.radians(12)), math.sin(math.radians(12)), np.array([0.03, -0.02, 0.0])
+        Rz = np.array([[c, -s_, 0.0], [s_, c, 0.0], [0.0, 0.0, 1.0]])
+        h2, R2, out = fork.seat_now(rec, Rz @ (E - h.centre) + h.centre + t, Rz @ a)
+        np.testing.assert_allclose(h2.centre, h.centre + t, atol=1e-9)
+        np.testing.assert_allclose(h2.long_axis, Rz @ h.long_axis, atol=1e-9)
+        np.testing.assert_allclose(R2, Rz @ R, atol=1e-9)
+        np.testing.assert_allclose(out, Rz @ fork.open_side(h), atol=1e-9)
+
+    def test_a_stop_in_the_opening_comes_straight_back_out(self):
+        """in_holder: empty, straight up to above_m over the rim; holding the fork, on up to where the lift ends."""
+        from rammp_feeding import fork
+        self._at_look()
+        h = fork.find(self.robot, self.arm)
+        R = fork.insertion(self.arm, self.arm.tool()[1], h)
+        for held, dz in ((False, float(self.P.above_m)), (True, float(self.P.lift_m) - float(self.P.insert_m))):
+            q = self.arm.ik(fork.tool_at(h, R, -float(self.P.insert_m)), R, scene.captured("fork_look"))
+            self.robot.raw = np.radians(q)
+            fork.save_state(dict(holding=held, in_holder=True, hole=h.to_json(), R=R.tolist()))
+            fork.recover(self.robot, self.arm)
+            self.assertLess(np.linalg.norm(self.arm.tool()[0] - fork.tool_at(h, R, dz)), 0.002)
+            self.assertFalse(fork.state()["in_holder"])
+            self.assertEqual(self.arm.held.fork, held)
+        n = len(self.robot.moves)
+        fork.recover(self.robot, self.arm)                          # (out already: nothing)
+        self.assertEqual(len(self.robot.moves), n)
+
+    def test_by_hand_and_what_the_routine_needs(self):
+        """rammp gripper open|close: held / not, where it stood unknown (put-fork refuses it). Without a stand, the
+        table or the finger ends' ruler, the routine refuses and names them."""
+        from unittest import mock
+        from rammp_feeding import fork
+        grips = []
+        hand = fork.Gripper(lambda p, speed, force: grips.append(p), lambda: None)
+        fork.by_hand(hand, True)
+        self.assertEqual(grips, [float(self.P.gripper_open)])
+        self.assertTrue(fork.holding())
+        with self.assertRaisesRegex(MoveError, "not known"):
+            fork.put_down(self.robot, self.arm, hand)
+        fork.by_hand(hand, False)
+        self.assertFalse(fork.holding())
+        with mock.patch.dict(cfg["workspace"], {"table_height_m": None}), \
+                mock.patch.dict(cfg["utensil"]["pick"], {"glass_to_fingertips_m": None, "use": False}):
+            with self.assertRaisesRegex(RuntimeError, "not measured: utensil.pick.use .*, workspace.table_height_m, "
+                                                      "utensil.pick.glass_to_fingertips_m"):
+                fork.pick_up(self.robot, self.arm, hand)
+
+    def test_the_finger_ends_from_the_glass_ruler(self):
+        """glass_to_fingertips_m along the wrist camera's axis from its glass (its glass_to_optical_m added), on the
+        tool's axis: the level site's D405 0.125 m behind the tool point, 0.162 + 0.003 out -> 0.040 m past it."""
+        from rammp_feeding import fork
+        np.testing.assert_allclose(fork.fingertips_in_tool(), [0.0, 0.0, 0.040], atol=1e-9)
+
+    def test_the_fingers_must_be_held_by_the_opening(self):
+        """Opened fully in it (nothing held them): refused, closed again, the arm where it is (the next pick comes
+        back up first); no position served: not checked. Closing to let go and still held open: refused."""
+        from rammp_feeding import fork
+        real = self.robot.gripper_position
+        self.g.position = lambda: None if real() is None else (0.0 if real() < 0.5 else real())
+        with self.assertRaisesRegex(MoveError, "opened fully"):
+            fork.pick_up(self.robot, self.arm, self.g)
+        self.assertEqual([p for p, _ in self.robot.grips][-2:], [float(self.P.gripper_open),
+                                                                 float(self.P.gripper_closed)])
+        s = fork.state()
+        self.assertTrue(s["in_holder"] and not s["holding"])
+        self.robot.fingers = None                                   # the arm node serves no position
+        fork.pick_up(self.robot, self.arm, fork.Gripper(self.robot.gripper, self.robot.gripper_position))
+        self.assertTrue(fork.holding())
+        self.robot.fingers = 0.0
+        with self.assertRaisesRegex(MoveError, "did not close"):
+            fork.put_down(self.robot, self.arm, fork.Gripper(self.robot.gripper, lambda: 0.3))
+        self.assertTrue(fork.state()["holding"] and fork.state()["in_holder"])
+
+    def test_a_first_try_stops_at_each_stage(self):
+        """--stop-after above: over the opening, the state unchanged; insert: in it, closed; open: opened in it, the
+        fork held but not lifted. The next pick or put comes back up first."""
+        from rammp_feeding import fork
+        out = fork.pick_up(self.robot, self.arm, self.g, stop_after="above")
+        self.assertEqual(out["stopped_after"], "above")
+        self.assertEqual(fork.state(), {"holding": False, "t": fork.state()["t"]})
+        self.assertAlmostEqual(self.arm.tip()[2] - self.sc.hole_at[2], float(self.P.above_m), delta=0.002)
+        fork.pick_up(self.robot, self.arm, self.g, stop_after="insert")
+        s = fork.state()
+        self.assertTrue(s["in_holder"] and not s["holding"])
+        self.assertLess(np.linalg.norm(self.arm.tip() - self.in_hole), 0.003)
+        fork.pick_up(self.robot, self.arm, self.g, stop_after="open")      # (up out of it first, then in again)
+        s = fork.state()
+        self.assertTrue(s["in_holder"] and s["holding"])
+        fork.put_down(self.robot, self.arm, self.g, stop_after="release")  # (the lift finished first)
+        s = fork.state()
+        self.assertTrue(s["in_holder"] and not s["holding"])
+        self.assertLess(np.linalg.norm(self.arm.tip() - self.in_hole), 0.003)
+
+    def test_a_push_on_the_stand_stops_the_move(self):
+        """Our contact guard at guards.torque_step_nm.fork on the way in (a site raising the others leaves it): a 4 N.m
+        step stops it, and the stop says to check the stand; the fingers stay where they stopped, in the opening's
+        state (the next pick or put comes straight back up first)."""
+        from rammp_feeding import fork
+        real = self.arm.straight
+
+        def straight(T, R, mps, label, **kw):
+            if label == "into the opening":
+                self.robot.inject[len(self.robot.moves)] = (0.5, [0.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+            return real(T, R, mps, label, **kw)
+        self.arm.straight = straight
+        with self.assertRaisesRegex(MoveError, "into the opening STOPPED: joint 2 torque.*check the stand.*nothing else "
+                                               "moved"):
+            fork.pick_up(self.robot, self.arm, self.g)
+        self.assertEqual([p for p, _ in self.robot.grips], [float(self.P.gripper_closed)])     # never opened
+        self.assertTrue(fork.state()["in_holder"])
+
+    def test_a_shallow_opening_is_refused(self):
+        from rammp_feeding import fork
+        self._at_look()
+        self.sc.hole_depth = float(self.P.insert_m) + 0.004
+        with self.assertRaisesRegex(MoveError, "mm deep"):
+            fork.find(self.robot, self.arm)
+
+    def test_the_routines_world_is_the_table_and_its_floor_spares_the_stand(self):
+        from rammp_feeding import fork
+        at = np.asarray(self.sc.hole_at, float)
+        self.assertEqual([o["name"] for o in fork.world()["obstacles"]], ["pedestal", "table"])
+        floor = float(cfg.workspace.table_height_m) + float(cfg.motion.free_space.min_tip_above_table_m)
+        table = fork.world()["obstacles"][1]
+        self.assertAlmostEqual(table["position"][2] + table["dims"][2] / 2, floor)
+        self.assertAlmostEqual(table["position"][0] - table["dims"][0] / 2,     # its near edge clear of the arm's base
+                               float(cfg.workspace.table_extent_m.x[0]) + float(cfg.scene_camera.error_m))
+        self.assertAlmostEqual(fork.AtStand(at).floor(0.5, -0.2), floor)
+        self.assertEqual(fork.AtStand(at).floor(at[0] + 0.02, at[1]), -math.inf)
+        self.assertAlmostEqual(fork.AtStand().floor(at[0] + 0.02, at[1]), floor)
 
 
 class Setup(unittest.TestCase):

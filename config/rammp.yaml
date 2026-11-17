@@ -108,6 +108,8 @@ guards:                         # the contact guard: a joint-torque step this bi
     plunge_in_food: 8.0         # once the tines are in the food: firm food (grilled chicken) takes ~4 N.m to pierce
     scoop: 6.0                  # open air: 2.5 trips on the arm's own acceleration
     free_space: 6.0             # every planned move (detect, home, the swing, the retract's return)
+    fork: 3.0                   # every straight move at the fork's stand (into the opening, the lift, and back): low,
+                                # the stand is light and topples -- a site raising the others leaves this one
   scoop_food_off_path_m: 0.015  # the food point this far off its planned path stops the scoop ...
   scoop_food_drop_m: 0.010      # ... or this far below it
 

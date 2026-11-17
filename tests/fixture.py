@@ -3,7 +3,9 @@ wrist camera's mount and the fork's pixels as rammp calibrate-wrist leaves them,
 reading, the table, where the bowl is laid), and the run record beside it.
 
 RAMMP_TEST_SITE picks the site (tests/fake_robot.py renders it):
-  level   (default) the arm level on its mount, a D405 on the wrist, the user to the arm's left (tests/poses)
+  level   (default) the arm level on its mount, a D405 on the wrist, the user to the arm's left, the fork picked up
+          from its stand beside the bowl (utensil.pick; tests/poses, fork_look solved on the arm's model over the
+          stand)
   tilt30  the arm leaning 30 deg forward on its mount, an OAK-D Pro on the wrist, the user to the arm's right, no scene
           camera, a narrow deep cup on a low table, the scoop turning late and the other way (tests/poses_tilt30: the
           home -- the fork level -- and the overlook captured on that robot; the delivery look straight in front of the
@@ -44,5 +46,7 @@ else:
         camera="realsense_d405", utensil="fork", camera_in_tool_m=[0.0, 0.075, -0.125],
         rotation_quat_xyzw=[0.0, 0.0, 1.0, 0.0], tip_px=[456, 374], image_region_px=[280, 365, 660, 480])))
     SET = ("utensil.glass_to_tip_m=0.233,workspace.table_extent_m.x=[0.08, 0.76],"
-           "workspace.table_extent_m.y=[-0.30, 0.80],workspace.bowl_centre_m=[0.290, 0.158],")
+           "workspace.table_extent_m.y=[-0.30, 0.80],workspace.bowl_centre_m=[0.290, 0.158],"
+           "utensil.pick.use=true,workspace.table_height_m=0.0072,utensil.pick.glass_to_fingertips_m=0.162,"
+           "utensil.pick.open_side=[-0.9, 0.44],")
 os.environ.update(RAMMP_NO_LOCAL="1", RAMMP_STATE_DIR=str(STATE), RAMMP_SET=SET + RUNS)

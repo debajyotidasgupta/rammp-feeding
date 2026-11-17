@@ -211,12 +211,18 @@ def utensil_spheres(arm, food: bool = False) -> list[list[float]]:
 
 
 def push_world(robot) -> None:
-    """The latest workspace and mouth into the shared planner: a YAML file both containers see, then set_world (padded
-    as the planner pads every box). Done before each planned move (Arm.travel), and undone when the command ends
-    (restore_world: the planner's /reset): other clients plan against the planner's own world."""
+    """The latest workspace and mouth into the shared planner (write_world). Done before each planned move
+    (Arm.travel), and undone when the command ends (restore_world: the planner's /reset): other clients plan against
+    the planner's own world."""
+    write_world(robot, world())
+
+
+def write_world(robot, w: dict) -> None:
+    """A world into the shared planner: a YAML file both containers see, then set_world (padded as the planner pads
+    every box)."""
     from pathlib import Path
     p = Path(str(cfg.planner.world_file)).expanduser()
-    text = yaml.safe_dump(world())
+    text = yaml.safe_dump(w)
     if not p.exists() or p.read_text() != text:          # (written only when it changes: a planned move is frequent)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(text)

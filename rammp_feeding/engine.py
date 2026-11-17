@@ -7,8 +7,11 @@ orchestrator, it runs an action only when the orchestrator starts one -- nothing
                bowl first when start_meal has not; every later bite uses that reading. A piece still on the fork (the
                user did not take it) is presented again by the next feed, not scooped anew; an empty bowl ends it
   finish_meal  the arm back to feeding_start
+  pick_up_fork / put_down_fork   with a stand to pick the fork from (utensil.pick.use, rammp_feeding/fork.py): the fork
+               picked up from it, or hung back on it, from feeding_start and back
 
-Each action builds its own ros.Robot on this node: its subscriptions, clients and publishers live only while it runs.
+The gripper is commanded only by the two fork actions, through the engine library's self.arm. Each action builds its
+own ros.Robot on this node: its subscriptions, clients and publishers live only while it runs.
 Our collision world goes into the shared planner while the action plans and the planner's own comes back as it ends. A
 cancel stops the move in flight, waits for the arm to settle, and ends the action as cancelled. The waits at the mouth
 are bounded (node.*) so that a bite ends within the orchestrator's 120 s.
@@ -37,11 +40,13 @@ log = logging.getLogger("rammp")
 class Feeding(CapabilityEngine):
     display_name = "Eating"
     perception_classes = ["food container", "food"]
-    required_resources = ["arm"]                             # the arm only: nothing here commands the gripper
+    required_resources = ["arm"]                             # (the gripper: the fork actions, through self.arm)
     actions = [
         Action("start_meal", "Find the bowl", sticky_followup=True),
         Action("feed", "Feed a bite", sticky_followup=True),
         Action("finish_meal", "Done eating"),
+        Action("pick_up_fork", "Pick up the fork"),
+        Action("put_down_fork", "Put the fork back"),
     ]
 
     def __init__(self, engine_id: str = "feeding"):
@@ -68,8 +73,13 @@ class Feeding(CapabilityEngine):
 
     # ------------------------------------------------------------------ the engine contract
     def availability(self, instance_id, world_state):
-        """Fast, no side effects: every action, always (the meal's first feed finds the bowl itself)."""
-        return [ActionAvailability(action_id=a.action_id, available=True) for a in self.actions]
+        """Fast, no side effects: every action, always (the meal's first feed finds the bowl itself); the fork's two
+        only with a stand to pick it from (utensil.pick.use)."""
+        from rammp_feeding import fork
+        stand = fork.used()
+        return [ActionAvailability(action_id=a.action_id, available=stand or not a.action_id.endswith("_fork"),
+                                   reason="" if stand or not a.action_id.endswith("_fork") else
+                                   "no stand to pick the fork from (utensil.pick.use false)") for a in self.actions]
 
     def hibernate(self):
         self._meal = False
@@ -117,6 +127,8 @@ class Feeding(CapabilityEngine):
             robot = self._robot(roles, check)
             step("setup", 0.0, "Getting the arm ready")
             arm = Arm(robot)
+            if action_id in ("pick_up_fork", "put_down_fork"):
+                return self._fork(robot, arm, action_id, ctx, step)
             if action_id == "start_meal":
                 return self._start_meal(robot, arm, step)
             if action_id == "feed":
@@ -133,7 +145,9 @@ class Feeding(CapabilityEngine):
         except (MoveError, RobotError, RuntimeError, OSError, ValueError) as e:
             code, recoverable = {"locate": ("bowl_not_found", True), "detect": ("bowl_not_found", True),
                                  "perceive": ("perception_failed", True), "acquire": ("pickup_failed", False),
-                                 "deliver": ("delivery_failed", False)}.get(stage[0], ("move_failed", False))
+                                 "deliver": ("delivery_failed", False), "find": ("fork_not_found", True),
+                                 "grasp": ("fork_pickup_failed", False), "place": ("fork_putdown_failed", False)
+                                 }.get(stage[0], ("move_failed", False))
             if isinstance(e, FileNotFoundError) or "not measured" in str(e) or "not calibrated" in str(e):
                 code, recoverable = "not_set_up", False
             elif isinstance(e, RobotError):
@@ -149,6 +163,32 @@ class Feeding(CapabilityEngine):
                 robot.close()
 
     # ------------------------------------------------------------------ the actions
+    def _fork(self, robot, arm, action_id, ctx, step) -> dict:
+        """pick_up_fork / put_down_fork (fork.pick_up, fork.put_down): the gripper through self.arm, its commands
+        carrying the orchestrator's token."""
+        from rammp_feeding import fork
+        self.arm.begin_action(ctx, bytes(self._token))
+        if action_id == "pick_up_fork":
+            return fork.pick_up(robot, arm, self._gripper(), step, fork.record_dir("pick_fork"))
+        return fork.put_down(robot, arm, self._gripper(), step)
+
+    def _gripper(self):
+        """The gripper through self.arm (its commands carry the action's token): fork.Gripper."""
+        from rammp_feeding import fork
+        from rammp_feeding.arm import MoveError
+
+        def move(position, speed, force):
+            if not self.arm.gripper(float(position), force=float(force), speed=float(speed)):
+                raise MoveError("the gripper: %s" % (self.arm.last_error or "refused"))
+
+        def position():
+            try:
+                s = self.arm.gripper_state()
+            except Exception:  # noqa: BLE001                (the arm node serves none)
+                return None
+            return float(s.position) if s.present else None
+        return fork.Gripper(move, position)
+
     def _start_meal(self, robot, arm, step) -> dict:
         st = self._find_bowl(robot, arm, step, (0.1, 0.4))
         return {"bowl_xy_m": [float(v) for v in st["bowl_xy"]]}
@@ -222,6 +262,8 @@ class Feeding(CapabilityEngine):
     def _mock(self, action_id, ctx) -> dict:
         ctx.checkpoint()
         ctx.progress(action_id, 1.0, "Done (mock)", pausable=False)
+        if action_id in ("pick_up_fork", "put_down_fork"):
+            return {"holding": True} if action_id == "pick_up_fork" else {"put_down": True}
         if action_id == "start_meal":
             self._meal = True
             return {"bowl_xy_m": [0.45, 0.0]}

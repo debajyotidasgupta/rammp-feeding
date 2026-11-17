@@ -11,3 +11,61 @@ image_region_px: null           # the utensil's box in the colour image: never f
 punch_floor_margin_m: 0.005     # the plunge stops this far above the bowl's floor (bowl.floor_above_table_m over the
                                 # table): deep enough that the piece does not slip off in the scoop, clear of the floor
                                 # the scoop's first turn sweeps the tines across
+pick:                           # a stand to pick the fork from (rammp_feeding/fork.py): the fork hangs tines down, a block
+                                # on its handle with a rectangular opening on top -- the fingers go in closed, open there
+  use: false                    # SITE: true -- the arm picks the fork up from its stand and hangs it back (needs
+                                # workspace.table_height_m, glass_to_fingertips_m and a captured fork_look); false: the
+                                # fork is put in by hand
+  prompts: [rectangular hole, hole, slot]   # SAM3's words for the opening (whatever colour the block is): the
+                                # best-scored mask with a rim round it is taken
+  score_threshold: 0.3
+  depth_frames: 10              # per-pixel median over this many frames after the arm stopped at fork_look
+  depth_wait_s: 3.0
+  rim_ring_px: [4, 12]          # the rim (the block's top): depth pixels this far outside the opening's mask, from .. to
+  min_points: 50                # depth points on the rim at least
+  inlier_m: 0.01                # rim points further than this from their median height: not the rim
+  min_opening_m: [0.018, 0.040] # the opening, short side x long side: at least this (the closed fingers fit) ...
+  max_opening_m: [0.040, 0.090] # ... and at most this (larger: not the holder's opening)
+  fingers_open_along_tool: x    # the tool axis the fingers open along (the Gen3's Robotiq 2F-85: x): laid along the
+                                # opening's long side, so they open against its short end walls
+  look_offset_m: [0.0, 0.0, 0.0]  # SITE: added to what is found from fork_look (the opening, the strip's end), base
+                                # frame: the wrist camera's mount as seen from that one pose, set where the fingers are
+                                # seen to go in off the opening's centre
+  max_turn_deg: 20.0            # the fingers turned at most this far from fork_look's to line up with the opening
+                                # (more: the stand turned, or not the holder's opening)
+  glass_to_fingertips_m: null   # SITE (with use): a ruler from the wrist camera's front glass straight out to the closed
+                                # fingers' ends (glass_to_tip_m's ruler); they are on the tool's axis
+  above_m: 0.10                 # over the opening: the finger ends this far above the rim, pointing straight down
+  insert_m: 0.025               # into the opening: the finger ends this far under the rim
+  floor_clear_m: 0.008          # ... and at least this far above the opening's floor as the depth reads it (refused else)
+  insert_mps: 0.01              # into the opening and out of it (the fork going back into its stand: the same)
+  seat_tol_m: 0.02              # going back down, the guard's stop this close above the seat's depth: seated (the holder
+                                # takes the fork's weight); higher: on something else, stopped
+  lift_m: 0.10                  # the fork straight up this far from the opening, off its stand
+  lift_mps: 0.02                # over the opening, and the lift
+  open_side: null               # SITE (with use): [x, y], base frame: the way the holder's open side faces (away from the
+                                # stand's post); the fork leaves and comes back across the opening's long side, this way
+  slide_m: 0.08                 # lifted, the fork this far out through the holder's open side, and back in
+  stand_prompts: [white strip]  # SAM3's words for the stand's marker: the tape along its arm to the seat (the site names
+                                # its colour); found from fork_look with the holder empty, after each pick and before
+                                # each put-back, the seat kept in its frame
+  stand_min_points: 300         # depth points on the strip at least
+  stand_reads: 3                # the strip read this many times at each look (SAM3 on new frames): their median ...
+  stand_spread_m: 0.002         # ... taken when they agree to this; else looked at again ...
+  stand_looks: 3                # ... at most this many times (then the put-back refused: by hand)
+  seat_in_strip_m: null         # SITE (optional): [along, across, up] the seat from the strip's post end, the stand's own
+                                # (each pick logs its reading): used in place of the pick's reading -- the stand is rigid
+  seat_check_m: 0.003           # a pick's reading this far from it: logged as a warning
+  max_stand_move_m: 0.05        # the put-back refused when the stand moved more than this since the pick ...
+  max_stand_turn_deg: 20.0      # ... or turned more than this
+  stand_radius_m: 0.08          # the stand's column round the opening: where the fingers go in and the fork hangs, under
+                                # the floor kept above the table elsewhere
+  gripper_closed: 1.0           # the fingers closed to go into the opening, and to let go of the fork (0 open .. 1 closed)
+  gripper_open: 0.0             # the fingers opened inside the opening: the hold
+  gripper_speed: 0.2            # the fingers' speed, a fraction of the 2F-85's fastest ...
+  gripper_force: 0.1            # ... and its current ceiling, a fraction (the lowest that still holds the block from
+                                # inside): opened hard against the walls they would push the light stand over
+  lock_margin: 0.05             # where the arm node serves the fingers' position: opened in the opening they stop at least
+                                # this short of fully open (its end walls hold them; else they are not in it), and closed
+                                # to let go they end within this of closed
+  settle_s: 0.5                 # after the fingers open or close, before the arm moves

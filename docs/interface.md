@@ -26,6 +26,7 @@ finds its bowl (`start_meal`, or the meal's first `feed`), and never with `perce
 | `/arm/robot_description` | `std_msgs/String` | yes | The arm's model, rooted at `arm_mount` |
 | `/joint_states` | `sensor_msgs/JointState` | yes | `arm_joint_1..7`: joints, and torques for the contact stop and the bite |
 | `/control_status` | `rammp_common_interfaces/ControlStatus` | yes | The e-stop |
+| `/ee_state`, `/gripper_state` | the arm node's | `pick_up_fork`, `put_down_fork` | The gripper's state, through the engine library |
 | `/tf`, `/tf_static` | `tf2_msgs/TFMessage` | yes | The cameras' frames; on the demo robot, the scene camera's mount |
 | `/wrist_camera/color/image_raw`, `.../depth/image_rect_raw`, `.../color/camera_info` | `sensor_msgs/Image`, `CameraInfo` | yes | The wrist camera (topics: the selected camera profile) |
 | `/scene_camera/color/image_raw`, `.../depth/image_rect_raw`, `.../color/camera_info` | `sensor_msgs/Image`, `CameraInfo` | `start_meal` | The scene camera |
@@ -38,6 +39,7 @@ finds its bowl (`start_meal`, or the meal's first `feed`), and never with `perce
 | `/rammp_curobo/plan_to_joints` | `rammp_curobo_interfaces/action/PlanToJoints` | `planner` | Free-space paths |
 | `/rammp_curobo/set_world` | `rammp_curobo_interfaces/srv/SetWorld` | `planner` | Our world while an action plans: `/config/planner_world.yaml`, read by the planner at `/feeding/planner_world.yaml` |
 | `/perception/sam3/detect` | `rammp_perception_interfaces/srv/Detect` | `sam3` | Boxes and masks: the bowl and the food |
+| `/setpoint/gripper` | `rammp_arm_interfaces/msg/GripperSetpoint` | `arm` | `pick_up_fork`, `put_down_fork` only, through the engine library's `self.arm`, with the action's token |
 
 ## Orchestrator interface
 
@@ -51,12 +53,22 @@ Served under `/feeding/`, types from `rammp_orchestrator_interfaces`: `activate`
 | `start_meal` | Find the bowl | — | `bowl_xy_m` |
 | `feed` | Feed a bite | — | `bite_taken`; `bowl_empty` when nothing is left; `declined` and `food_on_fork` when the user did not open their mouth |
 | `finish_meal` | Done eating | — | `home` |
+| `pick_up_fork` | Pick up the fork | — | `holding`, `opening_m` |
+| `put_down_fork` | Put the fork back | — | `put_down` |
 
 The bowl is measured once a meal, by `start_meal` or, when it has not run, by the meal's first `feed`; every bite after it uses that reading (its rim, when SAM3 does not find the bowl in a bite's image). A meal ends with `finish_meal` or the object's deselection. `feed` takes about 50 s and at most about 105 s (the waits at the mouth are
 bounded: `node.*` in `config/rammp.yaml`). A piece the user did not take stays on the fork, and the next `feed`
 presents it again rather than scooping another. Error codes: `bowl_not_found`, `perception_failed`,
 `no_pickable_piece`, `pickup_failed`, `delivery_failed`, `no_bite`, `presentation_refused`, `move_failed`,
-`robot_unavailable`, `not_set_up`. A cancel stops the move in flight and waits for the arm to settle.
+`robot_unavailable`, `not_set_up`, `fork_not_found`, `fork_pickup_failed`, `fork_putdown_failed`. A cancel stops the
+move in flight and waits for the arm to settle.
+
+`pick_up_fork` and `put_down_fork` exist only with a stand to pick the fork from (`utensil.pick.use`). The pick: the
+fingers go closed into the opening on the fork's block, open there, lift it, and take it out through the holder's open
+side; the empty holder's taped strip is then found, and the seat kept against it. The put-back finds the strip again
+(wherever the stand is now; refused when it moved or turned too far), comes back in through the open side, lowers the
+block onto its seat and lets go. Both start and end at feeding_start. They are the only actions that command the gripper (`/setpoint/gripper`, through the engine
+library, with the action's token).
 
 ## Parameters
 

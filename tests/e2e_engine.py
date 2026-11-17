@@ -1,8 +1,10 @@
 """The feeding engine end to end on the real arm stack (tests/test_e2e.sh): the node as sheppy runs it, standalone (no
 orchestrator), driven through its own /feeding/execute_action as the orchestrator would, with the real 2.0 driver (each
 goal accepted, then cancelled: tests/sim_arm.py), its description node and the 2.0.1 planner. The cameras, SAM3, the
-face and the bite are tests/fake_robot.py's; the scene camera's reading is the fake scene's.
+face and the bite are tests/fake_robot.py's; the scene camera's reading is the fake scene's. On a site with a stand
+to pick the fork from (the level one), the gripper goes through the engine library to the driver:
 
+  pick_up_fork                  (with a stand) the fingers in closed, opened in the opening, the fork home
   start_meal                    the bowl found, the arm over it
   feed                          one bite taken, SAM3 not finding the bowl (its rim from the meal's reading)
   feed, cancelled mid-plunge    (the moves at their own pace) ends as cancelled within a few seconds, the move stopped
@@ -13,6 +15,7 @@ face and the bite are tests/fake_robot.py's; the scene camera's reading is the f
   finish_meal                   recovers (back from the user), then home
   feed                          a new meal's first bite: the bowl found first (the scene camera read again), then a bite
   finish_meal                   home
+  put_down_fork                 (with a stand) the fork hung back, the fingers closed there, home
 
 Each action: its result, /feeding/status, the planner's own world back (/reset) as it ends, and none of its
 subscriptions left once it has ended."""
@@ -92,11 +95,24 @@ def main() -> int:
             TestFeeding.sim.ros = ros
             return TestFeeding.sim
 
+        def _gripper(self):
+            """The engine's gripper to the driver, and the fake's fingers (where the block's opening stops them: the
+            driver's --sim has no opening) for the position."""
+            from rammp_feeding.fork import Gripper
+            g = super()._gripper()
+            return Gripper(lambda p, s, f: (g.move(p, s, f), TestFeeding.sim.gripper(p, s, f)) and None,
+                           TestFeeding.sim.gripper_position)
+
     engine = TestFeeding()
     client = rclpy.create_node("e2e_orchestrator")
     status, resets = [], []
     client.create_subscription(String, "/feeding/status", lambda m: status.append(json.loads(m.data)), 10)
     client.create_subscription(Empty, "/reset", lambda m: resets.append(time.time()), 10)
+    from rammp_arm_interfaces.msg import GripperSetpoint
+    from rclpy.qos import qos_profile_sensor_data
+    grips = []                                          # the gripper's setpoints, as the driver gets them
+    client.create_subscription(GripperSetpoint, "/setpoint/gripper", lambda m: grips.append(round(m.position, 2)),
+                               qos_profile_sensor_data)
     ex = MultiThreadedExecutor()
     ex.add_node(engine)
     ex.add_node(client)
@@ -148,6 +164,14 @@ def main() -> int:
         time.sleep(0.05)
     assert f.result().accepted and list(f.result().token) == token, f.result()
     S = Result
+    from rammp_feeding import fork
+    stand = fork.used()
+    if stand:                                           # the fork on its stand: picked up first
+        r, _, _ = run("pick_up_fork")
+        assert r.status == S.STATUS_SUCCESS and json.loads(r.payload_json)["holding"], r
+        assert grips and grips[0] == 1.0 and grips[-1] == 0.0 and set(grips) == {0.0, 1.0}, sorted(set(grips))
+        assert fork.holding() and max(abs(a - b) for a, b in zip(engine.sim.joints(), scene.captured("home"))) < 1.0
+        print("    (the fork picked up: %d gripper setpoints, closed then open; the arm home)" % len(grips), flush=True)
     r, n_reset, _ = run("start_meal")
     assert engine.sim.ros.token == token, "the action's arm goals do not carry the orchestrator's token"
     f = rel.call_async(ReleaseControl.Request(token=token))
@@ -229,6 +253,12 @@ def main() -> int:
     r, _, _ = run("finish_meal")
     assert r.status == S.STATUS_SUCCESS, r
     assert max(abs(a - b) for a, b in zip(engine.sim.joints(), scene.captured("home"))) < 1.0, "not home"
+    if stand:                                           # the fork hung back on its stand
+        n = len(grips)
+        r, _, _ = run("put_down_fork")
+        assert r.status == S.STATUS_SUCCESS, r
+        assert grips[n:] and set(grips[n:]) == {1.0}, sorted(set(grips[n:]))
+        assert not fork.holding() and max(abs(a - b) for a, b in zip(engine.sim.joints(), scene.captured("home"))) < 1.0
     assert {s["state"] for s in status} >= {"idle", "executing"} and status[-1]["state"] == "idle", status[-3:]
     assert all(s["mode"] == "standalone" and not s["mock"] for s in status)
     assert engine.sim.accepted == len(engine.sim.moves), (engine.sim.accepted, len(engine.sim.moves))

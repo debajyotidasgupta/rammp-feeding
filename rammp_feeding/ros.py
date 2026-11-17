@@ -14,6 +14,8 @@ What it uses:
             plans; we execute
   cameras   rammp-suite-software's drivers: colour and depth images, their camera_info, their /tf_static
   detection rammp-perception: SAM3's /perception/sam3/detect (boxes and masks) on either camera
+  gripper   the engine library's ArmInterface (/setpoint/gripper), the rammp CLI's: under the node the engine's own
+            self.arm commands it
   tf        ours: the scene camera's measured pose, arm_mount -> its link frame (rammp calibrate-scene), static
 
 Joint vectors are degrees (folded, arm_joint_1..7) through joints(); joint_sample() and execute() carry the arm's raw
@@ -164,6 +166,16 @@ class Camera:
         return median_depth([image_array(m) for m in got])
 
 
+class _Ctx:
+    """The engine library's action context, by hand (the rammp CLI): never cancelled (Ctrl-C stops the command)."""
+
+    def cancelled(self) -> bool:
+        return False
+
+    def checkpoint(self) -> None:
+        pass
+
+
 class Trajectory:
     """An executing ExecuteJointTrajectory goal."""
 
@@ -209,7 +221,7 @@ class Robot:
         self._joint_stamp = -1.0
         self.estopped, self.arbitration, self.description = False, False, None
         latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
-        self._scope = self._executor = None
+        self._scope = self._executor = self._gripper = None
         if node is None:                   # the rammp CLI: a node of its own
             if not rclpy.ok():             # no rclpy signal handlers: Ctrl-C must reach the move in flight (it cancels)
                 from rclpy.signals import SignalHandlerOptions
@@ -464,6 +476,31 @@ class Robot:
             raise RobotError("SAM3: %s" % r.message)
         return detections(r.detections)
 
+    # ------------------------------------------------------------------ the gripper
+    def gripper(self, position: float, speed: float | None = None, force: float | None = None) -> None:
+        """The fingers to `position` (0 open .. 1 closed) at `speed` (a fraction of the fastest) under `force` (a
+        fraction: a current ceiling) through the engine library's ArmInterface (/setpoint/gripper, this module's
+        token), back once they stop. The rammp CLI's: under the node, the engine's self.arm."""
+        if self._scope is not None:
+            raise RobotError("under the engine the gripper is its self.arm's")
+        if self._gripper is None:
+            from capability_engine.arm import ArmInterface
+            from rclpy.callback_groups import ReentrantCallbackGroup
+            self._gripper = ArmInterface(self.node, ReentrantCallbackGroup(), standalone=True)
+            self._gripper.begin_action(_Ctx(), bytes(self.token))
+        if not self._gripper.gripper(float(position), force=force, speed=speed):
+            raise RobotError("the gripper: %s" % (self._gripper.last_error or "refused"))
+
+    def gripper_position(self) -> float | None:
+        """Where the fingers are (0 open .. 1 closed), from the arm node's /gripper_state; None when it serves none."""
+        if self._gripper is None:                    # (no command yet: nothing read)
+            return None
+        try:
+            s = self._gripper.gripper_state()
+        except Exception:  # noqa: BLE001
+            return None
+        return float(s.position) if s.present else None
+
     # ------------------------------------------------------------------
     def _wait(self, fut, timeout_s: float, why: str):
         t_end = time.time() + timeout_s
@@ -480,6 +517,8 @@ class Robot:
             self._scope.close()
             return
         import rclpy
+        if self._gripper is not None:
+            self._gripper.end_action()
         try:
             self._executor.shutdown(timeout_sec=2.0)
             self._spinner.join(timeout=2.0)

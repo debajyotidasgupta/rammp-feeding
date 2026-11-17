@@ -22,8 +22,19 @@
                                    --board: the sheet to print, runs_dir/charuco_board.pdf)
     rammp calibrate-scene          the scene camera's pose through the same board, where both cameras see it (from
                                    feeding_start, the wrist camera's route over it and back; after calibrate-wrist)
-    rammp capture home|overlook|deliver   the arm's joints now as feeding_start / food_detect_start's arm shape / the
-                                   delivery look (state_dir). Never moves.
+    rammp capture home|overlook|deliver|fork_look   the arm's joints now as feeding_start / food_detect_start's arm
+                                   shape / the delivery look / over the fork's stand (state_dir). Never moves.
+    rammp pick-fork [--stop-after above|insert|open]   from feeding_start: the fork picked up from its stand
+                                   (utensil.pick), out through the holder's open side, its seat kept against the
+                                   stand's taped strip, back home (--stop-after: over the opening, in it, or the
+                                   fingers opened in it)
+    rammp put-fork [--stop-after above|insert|release]   the strip found again, wherever the stand is now; the fork in
+                                   through the open side and hung back on its seat, then home (--stop-after: over the
+                                   seat, on it, or the fingers closed)
+    rammp find-fork                at fork_look: the opening on the fork's block, and whether the way in is reachable.
+                                   Never moves.
+    rammp gripper open|close       setting up: open with the fork's block hung on the closed fingers by hand (the fork
+                                   held: calibrate-wrist before a fork_look exists), close to take it off (not held)
     rammp setup [step ...]         after the arm moved against the table, the bowl or the user: each step in turn
                                    (site, home, scene, overlook, bowl, deliver); Enter runs it, s skips it
 
@@ -50,7 +61,10 @@ log = logging.getLogger("rammp")
 # --stop-after / --start-at per command (empty: the whole command / from its first stage)
 STAGES = dict(acquire=(("over", "hover30", "hover10", "plunge"), ("over", "scoop")),
               deliver=(("swing", "present", "bite"), ("swing", "present", "bite", "retract")))
-TIP_FREE = ("check", "state", "capture", "calibrate-wrist")     # (and home --direct): no tip model, no wrist camera
+STAGES.update({"pick-fork": (("above", "insert", "open"), ()), "put-fork": (("above", "insert", "release"), ())})
+TIP_FREE = ("check", "state", "capture", "calibrate-wrist", "gripper")   # (and home --direct): no tip model, no wrist
+                                                                          # camera
+POSES = CAPTURES + ("fork_look",)                   # rammp capture: the site's poses, and over the fork's stand
 
 
 def _robot():
@@ -224,11 +238,12 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="rammp", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", choices=["check", "state", "home", "detect", "perceive", "acquire", "rise", "deliver",
                                         "retract", "feed", "locate-scene", "calibrate-scene", "calibrate-wrist",
-                                        "capture", "setup"])
-    ap.add_argument("name", nargs="*", help="capture: " + " | ".join(CAPTURES) + "; setup: its steps (default: all)")
+                                        "capture", "setup", "pick-fork", "put-fork", "find-fork", "gripper"])
+    ap.add_argument("name", nargs="*", help="capture: " + " | ".join(POSES) + "; setup: its steps (default: all); "
+                    "gripper: open | close")
     ap.add_argument("--plan", action="store_true")
     ap.add_argument("--stop-after", default="", help="acquire: over | hover30 | hover10 | plunge; deliver: swing | "
-                    "present | bite")
+                    "present | bite; pick-fork: above | insert | open; put-fork: above | insert | release")
     ap.add_argument("--start-at", default="", help="acquire: over | scoop; deliver: swing | present | bite | retract")
     ap.add_argument("--no-wait-open", action="store_true")
     ap.add_argument("--bites", type=int, default=99)
@@ -241,10 +256,12 @@ def main(argv=None) -> int:
         ap.error("rammp %s: --stop-after %s, --start-at %s" % (a.command, " | ".join(stops) or "(none)",
                                                                " | ".join(starts) or "(none)"))
     from rammp_feeding.setup_steps import STEPS
-    if a.command == "capture" and (len(a.name) != 1 or a.name[0] not in CAPTURES):
-        ap.error("rammp capture " + " | ".join(CAPTURES))
+    if a.command == "capture" and (len(a.name) != 1 or a.name[0] not in POSES):
+        ap.error("rammp capture " + " | ".join(POSES))
     if a.command == "setup" and not set(a.name) <= set(STEPS):
         ap.error("rammp setup [%s ...]" % " | ".join(STEPS))
+    if a.command == "gripper" and (len(a.name) != 1 or a.name[0] not in ("open", "close")):
+        ap.error("rammp gripper open | close")
     import signal
 
     def _stop(*_):
@@ -264,7 +281,11 @@ def main(argv=None) -> int:
     try:
         # (the arm's model; the tip model -- the measurements and the wrist camera's camera_info -- wherever a command
         # uses it: not where the arm is, the direct move home, a capture, or the measurement of the camera's mount)
-        arm = Arm(robot, measured=not (a.command in TIP_FREE or a.command == "home" and a.direct))
+        if a.command == "find-fork":                 # (the wrist camera, without the fork's measurements)
+            from rammp_feeding.fork import AtStand
+            arm = Arm(robot, held=AtStand())
+        else:
+            arm = Arm(robot, measured=not (a.command in TIP_FREE or a.command == "home" and a.direct))
         from rammp_feeding.scene_camera import publish
         publish(robot)                             # our measured scene camera pose, on /tf_static
         c = a.command
@@ -308,7 +329,20 @@ def main(argv=None) -> int:
         elif c == "setup":
             from rammp_feeding.setup_steps import run
             rc = run(robot, arm, a.name or STEPS)
-        if c in ("home", "detect", "rise", "retract", "acquire", "deliver"):
+        elif c in ("pick-fork", "put-fork", "find-fork", "gripper"):
+            from rammp_feeding import fork
+            if c != "gripper" and not fork.used():
+                raise RuntimeError("no stand to pick the fork from here (utensil.pick.use false)")
+            g = fork.Gripper(robot.gripper, robot.gripper_position)
+            if c == "pick-fork":
+                log.info("  %s", fork.pick_up(robot, arm, g, out=fork.record_dir("pick_fork"), stop_after=a.stop_after))
+            elif c == "put-fork":
+                log.info("  %s", fork.put_down(robot, arm, g, stop_after=a.stop_after))
+            elif c == "gripper":
+                fork.by_hand(g, a.name[0] == "open")
+            else:
+                fork.look(robot, arm, fork.record_dir("find_fork"))
+        if c in ("home", "detect", "rise", "retract", "acquire", "deliver", "pick-fork", "put-fork"):
             report(arm, "now")
     except (MoveError, RuntimeError, OSError, ValueError) as e:      # (FileNotFoundError is an OSError)
         log.error("\n  STOPPED: %s", e)

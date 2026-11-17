@@ -1,11 +1,16 @@
 """rammp_feeding.ros.Robot without ROS, for the offline tests: a kinematic arm that plays the trajectories it is sent
 (sampled at 100 Hz), a straight-line "planner", and cameras rendering the scene from where the arm actually holds them.
 
-The scene: a table at table_z, a clear bowl (its depth reads the table through it, its rim rim_height up) round
-bowl_xy, one food piece (a cylinder) at piece_xy, the user's mouth at mouth. SAM3's boxes are the bowl's and the piece's
-projections. The site (tests/fixture.py's RAMMP_TEST_SITE): level -- the arm level on its mount, a D405 on the wrist, the
-user to the arm's left; tilt30 -- the arm leaning 30 deg forward on its mount (that robot's own description render), an
-OAK-D Pro on the wrist, a narrow deep cup on a low table, the user to the arm's right.
+The scene: a table at table_z, a clear bowl (its depth reads the table through it, its rim rim_height up) round bowl_xy,
+one food piece (a cylinder) at piece_xy, the user's mouth at mouth. SAM3's boxes are the bowl's and the piece's
+projections. On the level site, the fork's stand beside the bowl: the block on the fork's handle, its level top (the
+rim) at hole_at with a rectangular opening in it (the lab's: 24.1 x 57.9 mm, hole_depth deep), and the stand's taped
+strip running from the block's side away across its long side, strip_drop under the rim, both rendered in depth; SAM3's
+masks for the opening's words the opening, for the stand's words the strip. The gripper's commands are kept (grips: the
+position, and where the closed fingertips were). The site (tests/fixture.py's RAMMP_TEST_SITE): level -- the arm level
+on its mount, a D405 on the wrist, the user to the arm's left; tilt30 -- the arm leaning 30 deg forward on its mount
+(that robot's own description render), an OAK-D Pro on the wrist, a narrow deep cup on a low table, the user to the
+arm's right.
 """
 
 from __future__ import annotations
@@ -42,6 +47,20 @@ class Scene:
     piece_height: float = 0.025
     floor_lift: float = 0.0                         # the surface the depth reads under the bowl, above the table
     mouth: tuple = (-0.27, -0.20, 0.60) if TILT else (-0.277, 0.306, 0.428)
+    hole_at: tuple | None = None if TILT else (0.42, 0.02, 0.0072 + 0.20)   # the opening's centre, at the rim
+    hole_yaw_deg: float = 64.0                      # its long side's direction, round from the base's x (fork_look's
+                                                    # fingers: 60)
+    hole_size: tuple = (0.0241, 0.0579)             # the opening: short side, long side
+    block_size: tuple = (0.045, 0.085)              # the block's top round it: short side, long side
+    hole_depth: float = 0.04
+    strip_gap: float = 0.03                         # the strip's seat end this far from the block's side, across its long
+    strip_size: tuple = (0.03, 0.10)                # side; the strip's width, its length
+    strip_drop: float = 0.066                       # its top under the block's rim
+
+    def move_stand(self, dx: float, dy: float, turn_deg: float) -> None:
+        """The stand (the block and its strip) moved and turned about the opening's centre."""
+        self.hole_at = (self.hole_at[0] + dx, self.hole_at[1] + dy, self.hole_at[2])
+        self.hole_yaw_deg += turn_deg
 
 
 class FakeTrajectory:
@@ -96,6 +115,9 @@ class FakeRobot:
         self.cameras = {"camera": FakeCamera(self, "camera")}
         self.moves: list[str] = []
         self.worlds: list = []                          # set_world: a file's content; "reset": the planner's own back
+        self.grips: list[tuple[float, np.ndarray]] = []   # gripper(): the position, where the fingertips were
+        self.fingers = 0.0                              # where they are: 0 open .. 1 closed (None: not served)
+        self.grip_settings: list[tuple] = []            # gripper(): (speed, force)
         from rammp_feeding.arm import chain
         self.kin = chain(self)
 
@@ -163,6 +185,26 @@ class FakeRobot:
     def planner_listens(self):
         return True
 
+    # --- the gripper: opened in the block's opening, its end walls stop the fingers (a 2F-85: 85 mm open)
+    def gripper(self, position: float, speed: float | None = None, force: float | None = None) -> None:
+        from rammp_feeding.fork import fingertips_in_tool
+        T, R = self.kin.fk(self.joints())
+        tips = T + R @ fingertips_in_tool()
+        self.grips.append((float(position), tips))
+        self.grip_settings.append((speed, force))
+        sc, at = self.sc, float(position)
+        if sc.hole_at is not None:
+            c, a = np.asarray(sc.hole_at, float), np.radians(sc.hole_yaw_deg)
+            d = tips[:2] - c[:2]
+            inside = (abs(d @ [-np.sin(a), np.cos(a)]) < sc.hole_size[0] / 2 and abs(d @ [np.cos(a), np.sin(a)])
+                      < sc.hole_size[1] / 2 and c[2] - sc.hole_depth < tips[2] < c[2])
+            if inside:
+                at = max(at, 1.0 - sc.hole_size[1] / 0.085)
+        self.fingers = at if self.fingers is not None else None
+
+    def gripper_position(self):
+        return self.fingers
+
     # --- the wrist camera: depth rendered from the arm's pose, SAM3's boxes projected
     def camera_pose(self):
         T, R = self.kin.fk(self.joints())
@@ -195,7 +237,51 @@ class FakeRobot:
         z = np.where(self._disc(sc.piece_xy, sc.piece_radius, floor + sc.piece_height), t_top, z)
         ring = self._disc(sc.bowl_xy, sc.bowl_radius, rim) & ~self._disc(sc.bowl_xy, sc.bowl_radius - 0.006, rim)
         z = np.where(ring, t_rim, z)
+        strip, t_strip = self._strip()
+        z = np.where(strip, t_strip, z)
+        block, hole, t_rim, t_floor = self._block()
+        z = np.where(block & ~hole, t_rim, z)
+        z = np.where(hole, t_floor, z)
         return np.nan_to_num(1000 * z, nan=0.0).astype(np.uint16)
+
+    def _block(self):
+        """The fork's block seen from the camera: (its top's pixels, the opening's, the depth along each ray to its top,
+        and into the opening: to its floor, or to the wall the ray meets first)."""
+        o, d = self._rays()
+        sc = self.sc
+        none = np.zeros(d.shape[:2], bool)
+        if sc.hole_at is None:
+            return none, none, np.zeros(d.shape[:2]), np.zeros(d.shape[:2])
+        c = np.asarray(sc.hole_at, float)
+        a = np.radians(sc.hole_yaw_deg)
+        axes = (np.array([-np.sin(a), np.cos(a)]), np.array([np.cos(a), np.sin(a)]))     # short, long
+        with np.errstate(divide="ignore", invalid="ignore"):
+            t_rim = (c[2] - o[2]) / d[..., 2]
+            t_in = (c[2] - sc.hole_depth - o[2]) / d[..., 2]
+            p = (o + t_rim[..., None] * d)[..., :2] - c[:2]
+            block = (np.abs(p @ axes[0]) <= sc.block_size[0] / 2) & (np.abs(p @ axes[1]) <= sc.block_size[1] / 2)
+            hole = (np.abs(p @ axes[0]) <= sc.hole_size[0] / 2) & (np.abs(p @ axes[1]) <= sc.hole_size[1] / 2)
+            for ax, half in zip(axes, np.asarray(sc.hole_size) / 2):    # a wall: where the ray leaves the opening
+                u0, du = p @ ax, d[..., :2] @ ax
+                t_in = np.minimum(t_in, np.where(du > 0, t_rim + (half - u0) / du,
+                                                 np.where(du < 0, t_rim + (-half - u0) / du, np.inf)))
+        return block & (t_rim > 0), hole & (t_rim > 0), t_rim, t_in
+
+    def _strip(self):
+        """The stand's strip seen from the camera (where the block above does not hide it): its pixels, the depth along
+        each ray to its top."""
+        o, d = self._rays()
+        sc = self.sc
+        if sc.hole_at is None:
+            return np.zeros(d.shape[:2], bool), np.zeros(d.shape[:2])
+        c, a = np.asarray(sc.hole_at, float), np.radians(sc.hole_yaw_deg)
+        short, long = np.array([-np.sin(a), np.cos(a)]), np.array([np.cos(a), np.sin(a)])
+        mid = c[:2] - short * (sc.block_size[0] / 2 + sc.strip_gap + sc.strip_size[1] / 2)   # (the far side, as the lab's)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            t = (c[2] - sc.strip_drop - o[2]) / d[..., 2]
+            q = (o + t[..., None] * d)[..., :2] - mid
+            on = (np.abs(q @ long) <= sc.strip_size[0] / 2) & (np.abs(q @ short) <= sc.strip_size[1] / 2) & (t > 0)
+        return on & ~self._block()[0], t
 
     def project(self, p) -> np.ndarray:
         o, Rc = self.camera_pose()
@@ -220,6 +306,18 @@ class FakeRobot:
             top = sc.table_z + sc.piece_height
             out.append(Detection(cfg.food.prompt, 0.8, self._box(sc.piece_xy, sc.piece_radius, top),
                                  self._disc(sc.piece_xy, sc.piece_radius, top)))
+        if any(p in cfg.utensil.get("pick.stand_prompts", []) for p in prompts):
+            on = self._strip()[0]
+            if on.any():
+                v, u = np.nonzero(on)
+                out.append(Detection(str(prompts[0]), 0.5, [float(u.min()), float(v.min()), float(u.max()),
+                                                            float(v.max())], on))
+        if any(p in cfg.utensil.get("pick.prompts", []) for p in prompts):
+            hole = self._block()[1]
+            if hole.any():
+                v, u = np.nonzero(hole)
+                out.append(Detection(str(prompts[0]), 0.92, [float(u.min()), float(v.min()), float(u.max()),
+                                                             float(v.max())], hole))
         return out
 
     def close(self):

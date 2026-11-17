@@ -257,7 +257,9 @@ def main() -> int:
         n = len(grips)
         r, _, _ = run("put_down_fork")
         assert r.status == S.STATUS_SUCCESS, r
-        assert grips[n:] and set(grips[n:]) == {1.0}, sorted(set(grips[n:]))
+        put = grips[n:]                                 # soft again before the stand (open), then closed: it lets go
+        k = put.index(1.0) if 1.0 in put else len(put)
+        assert put and put[-1] == 1.0 and set(put[:k]) <= {0.0} and set(put[k:]) == {1.0}, sorted(set(put))
         assert not fork.holding() and max(abs(a - b) for a, b in zip(engine.sim.joints(), scene.captured("home"))) < 1.0
     assert {s["state"] for s in status} >= {"idle", "executing"} and status[-1]["state"] == "idle", status[-3:]
     assert all(s["mode"] == "standalone" and not s["mock"] for s in status)

@@ -12,9 +12,11 @@ title: Robot-assisted feeding
    waits for the bite and returns.
 
 It repeats until the bowl is empty or the user declines. It is one RAMMP node. Every move goes through the arm node.
-Free-space moves are the shared RAMMP-CuRobo planner's paths, checked by us for the fork. Straight-line and contact
-moves are computed on the arm's model. It commands the gripper only to pick the fork up from its stand and put it
-back (pick_up_fork, put_down_fork).
+Free-space moves are the shared RAMMP-CuRobo planner's paths; one that sweeps a joint round is planned again.
+Straight-line and contact moves are computed on the arm's model. Both kinds are checked, before they run, against one
+collision world: the table, the bowl, the user once measured, and the fork's stand once found. The planner checks the
+arm's links; we check the fork's tip and length on every path. It commands the gripper only to pick the fork up from
+its stand and put it back (pick_up_fork, put_down_fork).
 
 Deploying: the [deployment checklist](porting.md). ROS interfaces: the [interface reference](interface.md).
 
@@ -38,9 +40,26 @@ actions (`start_meal`, `feed` for one bite, `finish_meal`) and nothing moves oth
 | `feed [--bites N]` | Locate, detect, then bites until done, then home. |
 | `calibrate-wrist [--board]` | The wrist camera's mount and the fork's pixels, from the ChArUco board (`--board`: the sheet to print). |
 | `calibrate-scene` | The scene camera's pose through the board. |
-| `capture home\|overlook\|deliver` | The arm's joints now as that pose. Never moves. |
+| `capture home\|overlook\|deliver\|fork_look` | The arm's joints now as that pose. Never moves. |
+| `pick-fork [--stop-after above\|insert\|open]` | The fork picked up from its stand (`above`: stop over the opening to check the fingers). |
+| `put-fork [--stop-after above\|insert\|release]` | The fork hung back on its stand. |
+| `find-fork` | At fork_look: the opening, and whether the way in is reachable. Never moves. |
+| `tip DX DY` | The tip seen DX, DY m (base frame) off where the model puts it: the model moved to match. Never moves. |
 
 A command that cannot proceed refuses with the reason and leaves the arm still. Every command can be run again.
+
+## Fakes
+Any sensing can be a stand-in, set in `local.yaml` under `fakes:`; the arm, the planner and the gripper stay real, so
+the arm moves to the fake things through the same moves and checks:
+
+| Setting | Stands in for |
+| --- | --- |
+| `fakes.food: {pieces_m: [[x, y], ...]}` | SAM3 and the depth: pieces lying in the bowl, taken one per bite until the bowl is empty |
+| `fakes.mouth: {at_m: [x, y, z]}` | MediaPipe: the user's mouth, open after `fakes.open_after_s`; the bite felt after `fakes.bite_after_s` |
+| `fakes.holder: {centre_m: [x, y, z], long_deg: a}` | SAM3 on the fork's stand: its opening's centre at the rim and its long side |
+
+Remove a setting to go back to the real sensing. In code, `rammp_feeding/sensing.py` hands out each sensing function,
+real or fake; `sensing.use(...)` puts a test's own in place.
 
 ## Exit codes
 

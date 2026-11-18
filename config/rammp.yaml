@@ -76,7 +76,8 @@ motion:
   max_joint_step_deg: 12        # a continuous IK path: a bigger step on any joint is a jump, not a path
   steer_within_deg: 25          # IK seeds steer J2 / J4 / J6 off a limit once within this of it ...
   steer_step_deg: 3.0           # ... by this much per step
-  near_pose_deg: 1.0            # within this of a pose's joints = "at" that pose
+  near_pose_deg: 1.0            # within this of a pose's joints = "at" that pose (a tool pose: its orientation) ...
+  near_pose_m: 0.003            # ... and a tool pose within this of its position
   arrived_m: 0.002              # a straight move this short is no move
   settle_dps: 10.0              # a short joint move onto a goal (after a planned path)
   direct_dps: 20.0              # rammp home --direct: one joint move to feeding_start, no planner
@@ -102,6 +103,8 @@ motion:
     bowl_margin_m: 0.04         # "over the bowl": within its rim radius + this
     table_clear_of_base_m: 0.15 # the planner's table starts at least this far (x) from the arm's base, whatever the
                                 # site's table edge and the camera's error (its padded box off the arm's own links)
+    max_joint_travel_deg: 200.0 # a planned path turning any joint further than this in all (its turns summed): planned
+                                # again -- a sweep round the workspace for a goal nearby
 
 guards:                         # the contact guard: a joint-torque step this big against recent history = stop
   torque_window: {span: 6, gap: 3}    # samples (/joint_states at 50 Hz): the baseline window, and the gap before the
@@ -135,8 +138,11 @@ acquisition:
                                 # pointing +y (the user to the arm's left), -90 pointing -y (the user to its right)
     rot_exp: 0.8                # turn angle = turn_deg * s**rot_exp: <1 starts turning the moment the food lifts; >1
                                 # turns late, near the rim (a narrow, deep bowl)
-    waypoints: 40
-    backoff_from: 0.2           # fraction of the scoop before moving across to over the bowl's centre
+    waypoints: 40               # its IK steps (more on an arm near its reach: the steps stay under max_joint_step_deg)
+    end_over: bowl_centre       # where the scoop ends: bowl_centre (across to over the bowl's centre, where the
+                                # swing starts), or plunge (straight above where the tines went in: an arm whose
+                                # reach over the bowl's centre is short)
+    backoff_from: 0.2           # fraction of the scoop before moving across (end_over bowl_centre)
     lift_m: 0.04                # the scoop ends with the piece this far over the free-space tip floor above the bowl's
                                 # centre (its top + min_tip_above_bowl_m + the scene camera's error_m)
   stepped:                      # the hover route, for aim checks (tip_px: rammp acquire --stop-after hover10, rise)
@@ -244,6 +250,20 @@ delivery:
   retract:
     back_off_mps: 0.20
     reach_margin_m: 0.10        # the planned return keeps the tip within its start's / goal's reach + this
+
+fakes:                          # stand-ins for what the robot senses (rammp_feeding/fakes.py), each null for the real
+                                # one; the arm, the planner and the gripper stay real, so a run moves the arm to them
+  food: null                    # {pieces_m: [[x, y], ...]}: pieces lying in the bowl (base frame), not SAM3 and the
+                                # depth; taken in turn, nearest the bowl's centre first, until none is left (empty)
+  piece_height_m: 0.020         # a fake piece's height over the bowl's floor
+  piece_radius_m: 0.012         # ... and its radius: the tip within it reads the piece's top, else the floor
+  mouth: null                   # {at_m: [x, y, z]}: the user's mouth (base frame), not MediaPipe: seen from any look
+                                # that has it in the wrist camera's image, open open_after_s after the wait starts
+  open_after_s: 2.0
+  bite_after_s: 2.0             # with a fake mouth: the bite felt this long after the approach, not the joint torques
+  holder: null                  # {centre_m: [x, y, z], long_deg: a}: the fork's opening (its centre at the rim, its
+                                # long side a deg round from x), not SAM3 and the depth; its size and depth
+                                # utensil.pick.opening_m (or the lab's 24 x 58 x 36 mm), the stand's strip read from it
 
 node:                           # the node's feed action (rammp_feeding/engine.py), one bite in at most ~105 s: the
   open_mouth_timeout_s: 25.0    # orchestrator cancels an action at 120 s. No open mouth by then: the user declined

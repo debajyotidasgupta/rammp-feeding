@@ -60,6 +60,9 @@ pick:                           # a stand to pick the fork from (rammp_feeding/f
   max_stand_turn_deg: 20.0      # ... or turned more than this
   stand_radius_m: 0.08          # the stand's column round the opening: where the fingers go in and the fork hangs, under
                                 # the floor kept above the table elsewhere
+  block_m: [0.045, 0.085, 0.10] # the block round the opening, [across, along its long side, down from the rim]: in
+                                # the collision world wherever the stand is known (the planner keeps the arm off it,
+                                # our check the utensil), but on the moves into and out of it
   gripper_closed: 1.0           # the fingers closed to go into the opening, and to let go of the fork (0 open .. 1 closed)
   gripper_open: 0.0             # the fingers opened inside the opening: the hold
   gripper_speed: 0.2            # the fingers' speed, a fraction of the 2F-85's fastest ...
@@ -69,6 +72,8 @@ pick:                           # a stand to pick the fork from (rammp_feeding/f
                                 # this short of fully open (its end walls hold them; else they are not in it), and closed
                                 # to let go they end within this of closed
   settle_s: 0.5                 # after the fingers open or close, before the arm moves
+  opening_m: null               # [short, long, deep] by ruler, where the wrist camera's depth cannot read the block
+                                # (too near for its stereo): the rim's height from the opening's size in the image
   hold_force: 0.5               # the fork clear of the holder after the pick: the fingers' ceiling for the meal (the
                                 # scoop's turn and the bite shifted it at gripper_force); back to gripper_force at the stand
   fork_prompts: [fork]          # SAM3's words for the fork in the fingers (fork_look, its box: utensil.image_region_px) ...

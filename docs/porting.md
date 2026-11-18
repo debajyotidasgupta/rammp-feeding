@@ -146,6 +146,9 @@ its post). Then:
 If the setup was calibrated elsewhere, write the two files instead of running the calibrations (see below).
 
 ## 7. Verify, then feed
+0. A dry run with nothing real to touch: set `fakes.food` (a point inside the bowl) and `fakes.mouth` (a point in
+   front of the delivery look) in `local.yaml`, run `rammp feed --bites 1` with an empty bowl and nobody seated, then
+   remove them.
 1. `rammp detect`, `rammp perceive`, then `rammp acquire --stop-after hover10`: the tips should stop about 10 mm above
    the piece's centre. If not, re-measure `glass_to_tip_m` and run `calibrate-wrist` again. Then `rammp rise`.
 2. `rammp detect`, `rammp perceive`, `rammp acquire`. Open `acquire/plunge_end.jpg` (the run record: `record:
@@ -165,6 +168,8 @@ If the setup was calibrated elsewhere, write the two files instead of running th
 | A new bowl position | `rammp setup bowl` |
 | The scene camera moved | `rammp setup scene` |
 | The fork changed or re-seated, or the arm power-cycled | Check the 10 mm hover. If it is off, `glass_to_tip_m` and `calibrate-wrist` |
+| The fork's tip seen a few mm off at the hover, `glass_to_tip_m` right | `rammp tip DX DY` (where it is, less where it should be, base frame) |
+| The fork's stand moved | `rammp capture fork_look` over it, then `rammp pick-fork --stop-after above` and check the fingers are centred |
 | The wrist camera moved | `calibrate-wrist`, then `rammp setup scene` |
 
 ## Entering an existing calibration

@@ -3,7 +3,9 @@ against tests/fake_robot.py (the level test site: its stand beside the bowl): ra
 food_detect_start, perceive, acquire, the presentation, retract, home: tests/test_bite.py's), the stand nudged,
 rammp put-fork (the stand found again by its strip).
 
-    python3 tests/test_fork.py
+    python3 tests/test_fork.py [--fakes]
+        --fakes: the stand, the food and the mouth the module's own stand-ins (rammp_feeding/fakes.py), where the fake
+        robot has them
 
 What it checks: the order of the gripper's commands and where the fingers are at each, the moves' refusals and
 geometry, the fork's state across the three. What it cannot: the opening's fit, contact (the block is rendered).
@@ -19,7 +21,7 @@ import fixture  # noqa: F401  (the test site: before rammp_feeding is imported)
 import numpy as np  # noqa: E402
 
 from fake_robot import FakeFace, FakeRobot, Scene  # noqa: E402
-from rammp_feeding import fork, record, scene, scene_camera  # noqa: E402
+from rammp_feeding import fakes, fork, record, scene, scene_camera, sensing  # noqa: E402
 from rammp_feeding.acquire import acquire  # noqa: E402
 from rammp_feeding.arm import Arm  # noqa: E402
 from rammp_feeding.cli import _target, detect, home, perceive  # noqa: E402
@@ -34,6 +36,11 @@ def main() -> int:
     sc = Scene()
     robot = FakeRobot(sc, scene.captured("home"))
     fork.save_state(dict(holding=False))
+    faked = "--fakes" in sys.argv
+    if faked:                                        # the module's stand-ins where the fake robot has the things
+        cfg["fakes"].update(holder={"centre_m": list(sc.hole_at), "long_deg": sc.hole_yaw_deg},
+                            food={"pieces_m": [list(sc.piece_xy)]}, mouth={"at_m": list(sc.mouth)}, open_after_s=0.0)
+        fakes.refill()
     arm = Arm(robot)
     record.setup_logging()
     record.session("test_fork")
@@ -49,6 +56,7 @@ def main() -> int:
     assert fork.holding() and arm.held.fork
     picked = len(robot.moves)
     arm = Arm(robot)                                 # (the meal's arm: the fork's usual model)
+    face = sensing.now().face(arm) if faked else FakeFace(robot)
 
     if scene_camera.in_use():                        # the scene camera's reading: the fake scene's
         (state_dir() / "scene_state.json").write_text(json.dumps(dict(
@@ -59,13 +67,15 @@ def main() -> int:
     detect(robot, arm)                               # the bite, as rammp feed runs it (the bite's force aside)
     assert perceive(robot, arm) == 0, "perceive"
     acquire(robot, arm, _target(), record.stage("acquire"))
-    assert deliver(robot, arm, FakeFace(robot), record.stage("deliver"), stop_after="present") == 0, "present"
-    assert deliver(robot, arm, FakeFace(robot), record.stage("deliver"), start_at="retract") == 0, "retract"
+    assert deliver(robot, arm, face, record.stage("deliver"), stop_after="present") == 0, "present"
+    assert deliver(robot, arm, face, record.stage("deliver"), start_at="retract") == 0, "retract"
     home(robot, arm)
     assert g_at(arm, scene.captured("home")), "the bite did not end home"
     fed = len(robot.moves) - picked
 
     sc.move_stand(0.012, 0.009, -6.0)                # (bumped during the meal: the put-back finds it again)
+    if faked:
+        cfg["fakes"]["holder"] = {"centre_m": list(sc.hole_at), "long_deg": sc.hole_yaw_deg}
     in_hole = np.asarray(sc.hole_at) - [0.0, 0.0, float(P.insert_m)]
     robot.grips.clear()
     fork.put_down(robot, arm, g)
@@ -73,9 +83,11 @@ def main() -> int:
     off = float(np.linalg.norm(robot.grips[-1][1] - in_hole))
     assert off < 0.004, "the fingers let go %.1f mm from the hole's depth" % (1000 * off)
     assert not fork.holding() and "hole" not in fork.state()
+    assert any(o["name"] == "fork_stand" for o in scene.world()["obstacles"]), "the stand not kept in the world"
     assert g_at(arm, scene.captured("home")), "the put-back did not end home"
-    print("THE FORK GOES THROUGH (picked up at %s, %d moves; a bite, %d moves; hung back, %d moves; %.1f s)"
-          % (out["opening_m"], picked, fed, len(robot.moves) - picked - fed, time.time() - t0))
+    print("THE FORK GOES THROUGH (picked up at %s, %d moves; a bite, %d moves; hung back, %d moves; %.1f s%s)"
+          % (out["opening_m"], picked, fed, len(robot.moves) - picked - fed, time.time() - t0,
+             "; fakes" if faked else ""))
     return 0
 
 

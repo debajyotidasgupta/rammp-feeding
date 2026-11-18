@@ -37,8 +37,10 @@ When the arm, the bowl or the user moves, run `rammp setup` (or one of its steps
 ```
 rammp_feeding/  engine.py (the node)  cli.py (the rammp command)  setup_steps.py (rammp setup)  ros.py (all ROS I/O)
                 arm.py (guarded moves)
-                kinematics.py  scene.py (workspace, tip model, planner world)  perception.py  acquire.py  deliver.py
-                face.py  scene_camera.py  wrist_calibration.py  camera.py  geometry.py  config.py  record.py
+                kinematics.py  scene.py (workspace, tip model, the collision world)  perception.py  acquire.py
+                deliver.py  fork.py (the fork's stand)  face.py  scene_camera.py  wrist_calibration.py  camera.py
+                geometry.py  config.py  record.py
+                sensing.py (each sensing function, real or fake)  fakes.py (fake food, mouth, holder: config fakes.*)
 config/         rammp.yaml (every tuned value), profiles (camera/, utensil/, bowl/, food/), machines/template.yaml
 launch/  tests/
 ```

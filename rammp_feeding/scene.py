@@ -14,9 +14,10 @@ follow from them (base frame, m).
   food_detect_start  computed: the wrist camera overlook_camera_height_m above the table, the bowl's centre on its
                      optical axis (the middle of its image), in the captured overlook's orientation, by continuous IK
                      from it -- first on the scene camera's coarse reading, then on the wrist camera's own (rammp
-                     detect)
-  the planner world  the table (raised to our tip floor), a hollow bowl, the user round the measured mouth, the
-                     pedestal -- RAMMP-CuRobo's world schema, cuboids only
+                     detect); "at" it by the tool's pose
+  the world          the table (raised to our tip floor), a hollow bowl, the user round the measured mouth, the fork's
+                     stand where it is known, the pedestal -- RAMMP-CuRobo's world schema, cuboids only: the planner
+                     keeps the arm's links off it, and our check (Arm.check_world) the utensil on every path
 """
 
 from __future__ import annotations
@@ -49,6 +50,16 @@ def tip_in_tool(cam) -> np.ndarray:
     images at tip_px."""
     u, v = (float(x) for x in cfg.utensil.tip_px)
     return cam_to_tool(cam.ray(u, v, float(cfg.utensil.camera_to_tip_m)))
+
+
+def shifted_tip_px(arm, shift_m) -> tuple[float, float]:
+    """The tip pixel (tip_px) that moves the tip model by shift_m [dx, dy] (base frame, level) at the arm's pose now: a
+    correction from where the tip is seen to be against where the model puts it (camera_to_tip_m, the ruler's, kept)."""
+    T, R = arm.tool()
+    want = T + R @ arm.tip_tool + np.array([float(shift_m[0]), float(shift_m[1]), 0.0])
+    o, Rc = camera_pose(arm)
+    u, v = arm.cam.pixel(Rc.T @ (want - o))
+    return float(u), float(v)
 
 
 def camera_pose(arm, q=None) -> tuple[np.ndarray, np.ndarray]:
@@ -96,8 +107,14 @@ def measured_mouth(m) -> None:
 def tip_floor(x: float, y: float) -> float:
     """The lowest the utensil tip may pass at (x, y) on a free-space move: above the bowl's top over the bowl (and a
     margin round it), above the table over its footprint -- each plus how far that reading may be off; elsewhere none
-    of ours."""
-    w, fs, ext = workspace(), cfg.motion.free_space, cfg.workspace.table_extent_m
+    of ours. With no reading of the bowl yet: above the site's table (workspace.table_height_m)."""
+    fs, ext = cfg.motion.free_space, cfg.workspace.table_extent_m
+    try:
+        w = workspace()
+    except FileNotFoundError:
+        th = cfg.workspace.get("table_height_m", None)
+        on = th is not None and ext.x[0] <= x <= ext.x[1] and ext.y[0] <= y <= ext.y[1]
+        return float(th) + float(fs.min_tip_above_table_m) if on else -math.inf
     e = w["error_m"]
     if math.hypot(x - w["bowl_xy"][0], y - w["bowl_xy"][1]) < w["bowl_radius"] + float(fs.bowl_margin_m) + e:
         return w["bowl_top_z"] + float(fs.min_tip_above_bowl_m) + w["scene_error_m"]
@@ -149,13 +166,27 @@ def overlook_joints(arm) -> list[float]:
     return list(_RESOLVED[key])
 
 
+def off_pose(arm, q, goal) -> tuple[float, float]:
+    """How far the tool at joints q is from where it is at joints goal: (m, deg), whatever the arm's shape."""
+    from rammp_feeding.geometry import rot_log
+    (T, R), (Tg, Rg) = arm.tool(q), arm.tool(goal)
+    return float(np.linalg.norm(Tg - T)), float(np.degrees(np.linalg.norm(rot_log(Rg @ R.T))))
+
+
+def is_at_food_detect_start(arm, q=None) -> bool:
+    """The tool at food_detect_start's pose (within motion.near_pose_m and near_pose_deg), in any arm shape."""
+    m, deg = off_pose(arm, arm.q() if q is None else q, overlook_joints(arm))
+    return m <= float(cfg.motion.near_pose_m) and deg <= float(cfg.motion.near_pose_deg)
+
+
 def at_food_detect_start(arm, q=None) -> None:
-    """MoveError unless the arm is at food_detect_start (within near_pose_deg): where a target is read and aimed from."""
+    """MoveError unless the tool is at food_detect_start's pose: where a target is read and aimed from."""
     from rammp_feeding.arm import MoveError
-    from rammp_feeding.geometry import max_step
-    off = max_step(arm.q() if q is None else q, overlook_joints(arm))
-    if off > float(cfg.motion.near_pose_deg):
-        raise MoveError("not at food_detect_start (%.1f deg away) -- rammp detect" % off)
+    q = arm.q() if q is None else q
+    if not is_at_food_detect_start(arm, q):
+        m, deg = off_pose(arm, q, overlook_joints(arm))
+        raise MoveError("not at food_detect_start (the tool %.0f mm, %.1f deg from it) -- rammp detect"
+                        % (1000 * m, deg))
 
 
 # ------------------------------------------------------------------ the planner's world
@@ -173,31 +204,70 @@ def table_x(error_m: float) -> list[float]:
     return [max(near + float(error_m), float(cfg.motion.free_space.table_clear_of_base_m)), far]
 
 
+def stand_box() -> dict | None:
+    """The fork's stand as the collision world takes it: the block round its opening (utensil.pick.block_m, its top at
+    the rim), where the stand is known -- the fake holder's (fakes.holder), else where the utensil's state last placed
+    it (the pick's opening, or the seat it went back to); None without one."""
+    if not cfg.get("utensil.pick.use", False):
+        return None
+    from rammp_feeding import fakes, fork
+    h = fakes.holder() if fakes.on("holder") else None
+    if h is None:
+        s = fork.state()
+        known = s.get("hole") or s.get("stand")
+        if not known:
+            return None
+        h = fork.Hole.from_json(known)
+    across, along, down = (float(v) for v in cfg.utensil.pick.block_m)
+    yaw = math.degrees(math.atan2(h.long_axis[1], h.long_axis[0]))
+    return dict(name="fork_stand", position=[h.centre[0], h.centre[1], h.centre[2] - down / 2],
+                dims=[along, across, down], rpy_deg=[0.0, 0.0, yaw])
+
+
 def world() -> dict:
     """RAMMP-CuRobo's world (arm.base_frame): the table raised to our tip floor, a hollow bowl (a floor up to
     bowl.floor_above_table_m and 12 wall boxes: a solid box would put the utensil over its opening inside it), the
-    user's head and torso round the measured mouth (once measured), the pedestal. The bowl grows by the workspace's
-    error_m and its top by scene_error_m; the table's top rises by error_m, and its near edge (toward the arm) moves
-    back by scene_error_m, at least table_clear_of_base_m from the base (table_x)."""
-    ws = workspace()
-    e, es = float(ws["error_m"]), float(ws["scene_error_m"])
-    tz, top = ws["table_z"] + e, ws["bowl_top_z"] + es
-    bx, by = ws["bowl_xy"]
-    r = float(ws["bowl_radius"])
-    m = user_mouth()
-    tx, ty = table_x(es), [float(v) for v in cfg.workspace.table_extent_m.y]
+    user's head and torso round the measured mouth (once measured), the fork's stand (once known: stand_box), the
+    pedestal. The bowl grows by the workspace's error_m and its top by scene_error_m; the table's top rises by error_m,
+    and its near edge (toward the arm) moves back by scene_error_m, at least table_clear_of_base_m from the base
+    (table_x). With no reading of the bowl yet (the fork's routine before a meal): the site's table, its edge moved back
+    as a meal's first look has it, and no bowl."""
+    from rammp_feeding.scene_camera import in_use
+    try:
+        ws = workspace()
+    except FileNotFoundError:
+        ws = None
     floor = float(cfg.motion.free_space.min_tip_above_table_m)
-    f = float(cfg.bowl.floor_above_table_m)                     # the bowl's floor: the same height the plunge stops above
-    obs = [dict(name="pedestal", position=[0.0, 0.0, -0.05], dims=[0.14, 0.14, 0.04]),   # (the planner's own: unpadded)
-           dict(name="table", position=[sum(tx) / 2, sum(ty) / 2, tz + floor - 0.025], dims=[tx[1] - tx[0], ty[1] - ty[0], 0.05]),
-           dict(name="bowl_floor", position=[bx, by, tz + f / 2], dims=[2 * (r + e), 2 * (r + e), f])]
+    ty = [float(v) for v in cfg.workspace.table_extent_m.y]
+    obs = [dict(name="pedestal", position=[0.0, 0.0, -0.05], dims=[0.14, 0.14, 0.04])]   # (the planner's own: unpadded)
+    if ws is None:
+        th = cfg.workspace.get("table_height_m", None)
+        if th is not None:
+            tx = table_x(cfg.scene_camera.error_m if in_use() else cfg.workspace.bowl_centre_error_m)
+            obs.append(dict(name="table", position=[sum(tx) / 2, sum(ty) / 2, float(th) + floor - 0.025],
+                            dims=[tx[1] - tx[0], ty[1] - ty[0], 0.05]))
+    else:
+        e, es = float(ws["error_m"]), float(ws["scene_error_m"])
+        tz, top = ws["table_z"] + e, ws["bowl_top_z"] + es
+        bx, by = ws["bowl_xy"]
+        r = float(ws["bowl_radius"])
+        tx = table_x(es)
+        f = float(cfg.bowl.floor_above_table_m)         # the bowl's floor: the same height the plunge stops above
+        obs += [dict(name="table", position=[sum(tx) / 2, sum(ty) / 2, tz + floor - 0.025],
+                     dims=[tx[1] - tx[0], ty[1] - ty[0], 0.05]),
+                dict(name="bowl_floor", position=[bx, by, tz + f / 2], dims=[2 * (r + e), 2 * (r + e), f])]
+        for k in range(12):
+            a = 2 * math.pi * k / 12
+            obs.append(dict(name="bowl_wall_%d" % k,
+                            position=[bx + r * math.cos(a), by + r * math.sin(a), (tz + top) / 2],
+                            dims=[0.006 + 2 * e, 2 * (r + e) * math.tan(math.pi / 12) + 0.004, top - tz],
+                            rpy_deg=[0.0, 0.0, math.degrees(a)]))
+    m = user_mouth()
     if m is not None:
         obs += user_obstacles(m)
-    for k in range(12):
-        a = 2 * math.pi * k / 12
-        obs.append(dict(name="bowl_wall_%d" % k, position=[bx + r * math.cos(a), by + r * math.sin(a), (tz + top) / 2],
-                        dims=[0.006 + 2 * e, 2 * (r + e) * math.tan(math.pi / 12) + 0.004, top - tz],
-                        rpy_deg=[0.0, 0.0, math.degrees(a)]))
+    stand = stand_box()
+    if stand is not None:
+        obs.append(stand)
     for o in obs:
         o["position"], o["dims"] = [float(v) for v in o["position"]], [float(v) for v in o["dims"]]
         o["rpy_deg"] = [float(v) for v in o.get("rpy_deg", [0.0, 0.0, 0.0])]

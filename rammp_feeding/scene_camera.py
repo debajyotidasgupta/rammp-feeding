@@ -145,6 +145,9 @@ def site_bowl(out: Path | None) -> dict:
 
 
 def locate(robot, out: Path | None) -> dict:
+    from rammp_feeding import fakes
+    if fakes.on("food"):                                # (a new meal: every fake piece back in the bowl)
+        fakes.refill()
     if not in_use():
         return site_bowl(out)
     T, source = extrinsic(robot)

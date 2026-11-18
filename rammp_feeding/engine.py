@@ -67,7 +67,6 @@ class Feeding(CapabilityEngine):
         self.create_service(ReleaseControl, "~/release_control", self._on_release_control, callback_group=self._group)
         self._meal = False                                   # this meal's bowl found (start_meal, or its first feed)
         self._holding = False                                # a piece on the fork, not yet taken
-        self._face = None                                    # MediaPipe, loaded by the first feed and kept
         if not self.mock:
             self._publish_scene_pose()
 
@@ -213,8 +212,7 @@ class Feeding(CapabilityEngine):
         from rammp_feeding.cli import perceive_target
         from rammp_feeding.config import cfg
         from rammp_feeding.deliver import deliver
-        from rammp_feeding import record
-        from rammp_feeding.geometry import max_step
+        from rammp_feeding import record, sensing
         N = cfg.node
         found_s = 0.0
         if not self._meal:                                  # the meal's first bite: its bowl found first (never the
@@ -225,11 +223,11 @@ class Feeding(CapabilityEngine):
         if self._holding:                                   # the food still on the fork: present it again
             self._recover(robot, arm, to_bowl=False)
         else:
-            if max_step(arm.q(), scene.overlook_joints(arm)) > float(cfg.motion.near_pose_deg):
+            if not scene.is_at_food_detect_start(arm):
                 step("over", 0.05, "Moving over the bowl")
                 self._recover(robot, arm)
                 back_over(arm)                              # (out of the bowl: straight back across, no planner)
-                arm.travel(scene.overlook_joints(arm), "to food_detect_start")   # (a settle when it got there)
+                arm.travel(scene.overlook_joints(arm), "to food_detect_start")
             step("perceive", 0.1, "Finding the food")
             rc, target = perceive_target(robot, arm)
             if rc == 3:
@@ -239,14 +237,11 @@ class Feeding(CapabilityEngine):
             step("acquire", 0.25, "Picking up the food")
             acquire(robot, arm, target, record.stage("acquire"))
             self._holding = True
-        if self._face is None:
-            from rammp_feeding.face import Face
-            self._face = Face()
         stages = {"swing": (0.5, "Bringing the food over"), "present": (0.6, "Waiting for an open mouth"),
                   "bite": (0.8, "Waiting for the bite"), "retract": (0.9, "Going back to the bowl")}
         stage_dir = record.stage("deliver")
-        rc = deliver(robot, arm, self._face, stage_dir, open_timeout_s=max(float(N.open_mouth_timeout_s) - found_s,
-                                                                          float(N.open_mouth_min_s)),
+        rc = deliver(robot, arm, sensing.now().face(arm), stage_dir,
+                     open_timeout_s=max(float(N.open_mouth_timeout_s) - found_s, float(N.open_mouth_min_s)),
                      bite_timeout_s=float(N.bite_timeout_s), settle_s=float(N.bite_settle_s),
                      step=lambda name: step("deliver", *stages[name]))
         if rc == 0:
@@ -289,7 +284,7 @@ class Feeding(CapabilityEngine):
                 retract(robot, arm)
             else:
                 arm.straight(Te, Re, float(cfg.delivery.retract.back_off_mps), "back to the delivery look",
-                             torque_stop=False)
+                             inside=("user",), carrying=True, torque_stop=False)
             return
         tip = arm.tip()
         try:

@@ -714,22 +714,31 @@ class World(unittest.TestCase):
 
     def test_the_planners_table_clear_of_the_arms_base(self):
         """With no scene camera and the wrist camera's small error, a site table edge of 0.08 m still leaves the
-        planner's table table_clear_of_base_m from the base (here and at the fork's stand); a further edge is kept."""
+        planner's table table_clear_of_base_m from the base (with the bowl read, and before it is: the fork's routine);
+        a further edge is kept."""
         from unittest import mock
-        from rammp_feeding import fork
         sc = Scene()
         site(sc)
         f = state_dir() / "scene_state.json"
         f.write_text(json.dumps(dict(json.loads(f.read_text()), source="site", refined_by="the wrist camera")))
         near = lambda w: next(o["position"][0] - o["dims"][0] / 2 for o in w["obstacles"] if o["name"] == "table")  # noqa: E731
+
+        def unread():                                    # the world before the meal's bowl is read
+            kept = f.read_text()
+            f.unlink()
+            try:
+                return scene.world()
+            finally:
+                f.write_text(kept)
         clear = float(cfg.motion.free_space.table_clear_of_base_m)
         with mock.patch.dict(cfg["perception"]["scene"], {"use": False}):
             with mock.patch.dict(cfg["workspace"]["table_extent_m"], {"x": [0.08, 0.76]}):
                 self.assertAlmostEqual(near(scene.world()), clear)
-                self.assertAlmostEqual(near(fork.world()), clear)
+                self.assertAlmostEqual(near(unread()), clear)
             with mock.patch.dict(cfg["workspace"]["table_extent_m"], {"x": [0.30, 0.76]}):
                 self.assertAlmostEqual(near(scene.world()), 0.30 + float(cfg.perception.wrist_bowl_error_m))
-                self.assertAlmostEqual(near(fork.world()), 0.30 + float(cfg.workspace.bowl_centre_error_m))
+                self.assertAlmostEqual(near(unread()), 0.30 + float(cfg.workspace.bowl_centre_error_m))
+                self.assertFalse([o for o in unread()["obstacles"] if o["name"].startswith("bowl_")])
 
     def test_each_planned_move_pushes_our_world_and_the_command_restores_the_planners(self):
         sc = Scene()
@@ -1179,7 +1188,7 @@ class ForkPick(unittest.TestCase):
         self._at_look()
         R_look = self.arm.tool()[1]
         h = fork.find(self.robot, self.arm)
-        R = fork.insertion(self.arm, R_look, h)
+        R = fork.insertion(self.arm, R_look, h)[0]
         a = math.radians(self.sc.hole_yaw_deg)
         np.testing.assert_allclose(R[:, 2], [0.0, 0.0, -1.0], atol=1e-9)
         self.assertGreater(abs(float(R[:, 0] @ [math.cos(a), math.sin(a), 0.0])), math.cos(math.radians(2.0)))
@@ -1199,7 +1208,7 @@ class ForkPick(unittest.TestCase):
         other = R @ np.diag([-1.0, -1.0, 1.0])                   # (turned 180 deg about its axis)
         self.assertGreaterEqual(margin(R), margin(other))
         h.long_axis = -h.long_axis                               # (the same opening, its axis the other way)
-        np.testing.assert_allclose(fork.insertion(self.arm, R_look, h), R, atol=1e-9)
+        np.testing.assert_allclose(fork.insertion(self.arm, R_look, h)[0], R, atol=1e-9)
         b = a + math.radians(float(self.P.max_turn_deg) + 5.0)
         h.long_axis = np.array([math.cos(b), math.sin(b), 0.0])
         with self.assertRaisesRegex(MoveError, "fork_look's fingers"):
@@ -1344,7 +1353,7 @@ class ForkPick(unittest.TestCase):
         from rammp_feeding import fork
         self._at_look()
         h = fork.find(self.robot, self.arm)
-        R = fork.insertion(self.arm, self.arm.tool()[1], h)
+        R = fork.insertion(self.arm, self.arm.tool()[1], h)[0]
         for held, dz in ((False, float(self.P.above_m)), (True, float(self.P.lift_m) - float(self.P.insert_m))):
             q = self.arm.ik(fork.tool_at(h, R, -float(self.P.insert_m)), R, scene.captured("fork_look"))
             self.robot.raw = np.radians(q)
@@ -1448,19 +1457,176 @@ class ForkPick(unittest.TestCase):
         with self.assertRaisesRegex(MoveError, "mm deep"):
             fork.find(self.robot, self.arm)
 
-    def test_the_routines_world_is_the_table_and_its_floor_spares_the_stand(self):
+    def test_the_routines_world_is_the_table_then_the_stand_and_its_floor_spares_the_stand(self):
+        """Before a meal's bowl is read: the table (its near edge clear of the arm's base); once the stand is found
+        (the utensil's state), its block too, its top at the rim and turned with the opening."""
         from rammp_feeding import fork
         at = np.asarray(self.sc.hole_at, float)
-        self.assertEqual([o["name"] for o in fork.world()["obstacles"]], ["pedestal", "table"])
-        floor = float(cfg.workspace.table_height_m) + float(cfg.motion.free_space.min_tip_above_table_m)
-        table = fork.world()["obstacles"][1]
-        self.assertAlmostEqual(table["position"][2] + table["dims"][2] / 2, floor)
-        self.assertAlmostEqual(table["position"][0] - table["dims"][0] / 2,     # its near edge clear of the arm's base
-                               max(float(cfg.workspace.table_extent_m.x[0]) + float(cfg.scene_camera.error_m),
-                                   float(cfg.motion.free_space.table_clear_of_base_m)))
+        f = state_dir() / "scene_state.json"
+        kept = f.read_text() if f.exists() else None
+        f.unlink(missing_ok=True)
+        scene.measured_mouth(None)                       # (no user measured in this command)
+        try:
+            fork.save_state({})
+            self.assertEqual([o["name"] for o in scene.world()["obstacles"]], ["pedestal", "table"])
+            floor = float(cfg.workspace.table_height_m) + float(cfg.motion.free_space.min_tip_above_table_m)
+            table = scene.world()["obstacles"][1]
+            self.assertAlmostEqual(table["position"][2] + table["dims"][2] / 2, floor)
+            self.assertAlmostEqual(table["position"][0] - table["dims"][0] / 2,     # its near edge clear of the base
+                                   max(float(cfg.workspace.table_extent_m.x[0]) + float(cfg.scene_camera.error_m),
+                                       float(cfg.motion.free_space.table_clear_of_base_m)))
+            a = math.radians(self.sc.hole_yaw_deg)
+            fork.save_state(dict(holding=False, stand=fork.Hole(at, np.array([math.cos(a), math.sin(a), 0.0]),
+                                                                (0.024, 0.058)).to_json()))
+            st = next(o for o in scene.world()["obstacles"] if o["name"] == "fork_stand")
+            self.assertAlmostEqual(st["position"][2] + st["dims"][2] / 2, at[2])
+            self.assertAlmostEqual(st["rpy_deg"][2], self.sc.hole_yaw_deg)
+        finally:
+            fork.save_state({})
+            if kept is not None:
+                f.write_text(kept)
         self.assertAlmostEqual(fork.AtStand(at).floor(0.5, -0.2), floor)
         self.assertEqual(fork.AtStand(at).floor(at[0] + 0.02, at[1]), -math.inf)
         self.assertAlmostEqual(fork.AtStand().floor(at[0] + 0.02, at[1]), floor)
+
+
+class Fakes(unittest.TestCase):
+    """The stand-ins (rammp_feeding/fakes.py), chosen in config, through sensing: the arm moves to them as to the real
+    things."""
+
+    def setUp(self):
+        from rammp_feeding import fakes
+        self.sc = Scene()
+        site(self.sc)
+        self.robot = FakeRobot(self.sc, scene.captured("home"))
+        self.arm = Arm(self.robot)
+        fakes.refill()
+
+    def tearDown(self):
+        from rammp_feeding import fakes, sensing
+        fakes.refill()
+        sensing.use(None)
+
+    def fake(self, **kinds):
+        from unittest import mock
+        return mock.patch.dict(cfg["fakes"], kinds)
+
+    def test_fake_food_is_targeted_measured_and_taken_in_turn(self):
+        """Two fake pieces: the one nearer the bowl's centre first, the tool's goal the level slide that puts the tip
+        over it, its top read under the tip there (the floor beside it); once taken, the other; then the bowl is empty
+        (exit 3)."""
+        from rammp_feeding import fakes, sensing
+        from rammp_feeding.perception import NoTarget
+        bx, by = self.sc.bowl_xy
+        near, far = [bx + 0.01, by], [bx - 0.02, by + 0.02]
+        with self.fake(food={"pieces_m": [far, near]}):
+            self.robot.raw = np.radians(scene.overlook_joints(self.arm))
+            S = sensing.now()
+            self.assertIs(S.target, fakes.perceive)
+            t = S.target(self.robot, self.arm, None)
+            np.testing.assert_allclose(t["piece"]["xy"], near)
+            T, R = self.arm.tool()
+            self.robot.raw = np.radians(self.arm.ik(np.array(t["tool_goal"]), R, self.arm.q()))
+            np.testing.assert_allclose(self.arm.tip()[:2], near, atol=1e-3)
+            u = S.under(self.robot, self.arm, None, "over")
+            floor = self.sc.table_z + float(cfg.bowl.floor_above_table_m)
+            self.assertAlmostEqual(u["floor_z"], floor)
+            self.assertAlmostEqual(u["height"], float(cfg.fakes.piece_height_m))
+            fakes.taken(near)
+            self.robot.raw = np.radians(scene.overlook_joints(self.arm))
+            np.testing.assert_allclose(S.target(self.robot, self.arm, None)["piece"]["xy"], far)
+            fakes.taken(far)
+            with self.assertRaises(NoTarget) as e:
+                S.target(self.robot, self.arm, None)
+            self.assertEqual(e.exception.rc, 3)
+
+    def test_a_fake_mouth_is_measured_where_it_is(self):
+        """From the delivery look, the mouth found where the scene puts it, through the camera's pose as a real one is
+        (deliver.measure_mouth); out of the image, no face."""
+        from rammp_feeding import sensing
+        from rammp_feeding.deliver import measure_mouth
+        self.robot.raw = np.radians(scene.captured("deliver"))
+        with self.fake(mouth={"at_m": list(self.sc.mouth)}):
+            face = sensing.now().face(self.arm)
+            self.assertTrue(face.find(None, 1.0))
+            m = measure_mouth(self.robot, self.arm, face, time.time(), None, None, 1)
+            np.testing.assert_allclose(m, self.sc.mouth, atol=1e-6)
+        with self.fake(mouth={"at_m": list(self.sc.mouth)}, bite_after_s=0.05):
+            self.assertEqual(sensing.now().bite(self.robot, self.arm, 1.0), 0)      # felt
+            self.assertEqual(sensing.now().bite(self.robot, self.arm, 0.01), 4)     # none in time
+        with self.fake(mouth={"at_m": [3.0, 3.0, 0.5]}):
+            self.assertFalse(sensing.now().face(self.arm).find(None, 1.0))
+
+    def test_a_fake_holder_is_found_and_in_the_world(self):
+        """The fake holder's opening (its size the ruler's), and its block in the collision world."""
+        from rammp_feeding import fakes, fork, sensing
+        at = [0.42, 0.02, 0.21]
+        with self.fake(holder={"centre_m": at, "long_deg": 30.0}):
+            h = sensing.now().opening(self.robot, self.arm, None)
+            self.assertIs(sensing.now().opening, fakes.find)
+            np.testing.assert_allclose(h.centre, at)
+            self.assertAlmostEqual(math.degrees(math.atan2(h.long_axis[1], h.long_axis[0])), 30.0)
+            st = next(o for o in scene.world()["obstacles"] if o["name"] == "fork_stand")
+            self.assertAlmostEqual(st["position"][2] + st["dims"][2] / 2, at[2])
+            E, a = sensing.now().strip(self.robot, self.arm)
+            rec = fork.seat_record(h, np.eye(3), E, a)
+            h2, _, _ = fork.seat_now(rec, E, a)                  # (the seat from the strip: back where it was)
+            np.testing.assert_allclose(h2.centre, at, atol=1e-9)
+
+    def test_any_sensing_can_be_put_in_place(self):
+        from rammp_feeding import sensing
+        from dataclasses import replace
+        mine = replace(sensing.configured(), target=lambda robot, arm, out: {"mine": True})
+        sensing.use(mine)
+        self.assertEqual(sensing.now().target(None, None, None), {"mine": True})
+        sensing.use(None)
+        self.assertIsNot(sensing.now().target, mine.target)
+
+
+class OurPathsChecked(unittest.TestCase):
+    """Our own paths against the world a planned path is checked against (Arm.check_world), but for what the move goes
+    into; a planned path sweeping a joint round is planned again."""
+
+    def setUp(self):
+        self.sc = Scene()
+        site(self.sc)
+        self.robot = FakeRobot(self.sc, scene.captured("home"))
+        self.arm = Arm(self.robot)
+        self.robot.raw = np.radians(scene.overlook_joints(self.arm))
+
+    def test_a_straight_line_into_the_bowl_only_where_it_goes_in(self):
+        T, R = self.arm.tool()
+        down = self.arm.tip()[2] - (self.sc.table_z + self.sc.rim_height - 0.02)    # the tip 2 cm under the rim
+        n = len(self.robot.moves)
+        with self.assertRaisesRegex(MoveError, "REFUSED.*under the floor"):
+            self.arm.straight(T - [0, 0, down], R, 0.05, "down")
+        self.assertEqual(len(self.robot.moves), n)                 # nothing moved
+        self.arm.straight(T - [0, 0, down], R, 0.05, "down", inside=("bowl",))
+        self.assertEqual(len(self.robot.moves), n + 1)
+
+    def test_the_held_utensil_is_kept_off_the_user(self):
+        """With the user measured in front of the delivery look, a line from the look into their head is refused; the
+        approach (inside the user's boxes: its own guards) is not."""
+        self.robot.raw = np.radians(scene.captured("deliver"))
+        T, R = self.arm.tool()
+        tip = self.arm.tip()
+        scene.measured_mouth(tip + R[:, 2] * 0.15)                # a mouth 15 cm ahead of the tip, along the fork
+        try:
+            with self.assertRaisesRegex(MoveError, "REFUSED.*user_"):
+                self.arm.straight(T + R[:, 2] * 0.18, R, 0.05, "at the user")      # (the tip 3 cm past the mouth)
+            self.arm.check_world([self.arm.q()], "approach", inside=("user",), carrying=True)
+        finally:
+            scene.measured_mouth(None)
+
+    def test_a_planned_path_sweeping_a_joint_round_is_planned_again(self):
+        from unittest import mock
+        q0 = np.array(scene.captured("home"))                   # (from home: its wrist turned round and back)
+        self.robot.raw = np.radians(q0)
+        goal = list(q0 + [0, 0, 0, 0, 0, 0, 10.0])
+        swing = [list(q0 + [0, 0, 0, 0, 0, 0, 10.0 * k / 30 + 130.0 * math.sin(math.pi * k / 30)]) for k in range(31)]
+        with mock.patch.object(self.robot, "plan_joints", lambda *a, **k: (np.array(swing), np.linspace(0, 3, 31))):
+            with self.assertRaisesRegex(MoveError, "turns joint 7 260 deg in all"):
+                self.arm.travel(goal, "home", go=False)
 
 
 class Setup(unittest.TestCase):

@@ -51,6 +51,23 @@ def capture(arm, name: str) -> list[float]:
     return q
 
 
+def shift_tip(arm, shift_m) -> tuple[float, float]:
+    """rammp tip: the utensil's tip seen shift_m [dx, dy] (base frame) from where its model puts it at the arm's pose
+    now -> tip_px moved to match in state_dir/wrist_mount.json (the earlier file kept as wrist_mount.json.bak). The
+    ruler's camera_to_tip stays; a re-seated utensil is measured again by rammp calibrate-wrist."""
+    f = state_dir() / "wrist_mount.json"
+    if not f.exists():
+        raise FileNotFoundError("no %s -- rammp calibrate-wrist first" % f)
+    m = json.loads(f.read_text())
+    was = [float(v) for v in cfg.utensil.tip_px]
+    u, v = scene.shifted_tip_px(arm, shift_m)
+    (state_dir() / "wrist_mount.json.bak").write_text(f.read_text())
+    f.write_text(json.dumps(dict(m, tip_px=[round(u, 1), round(v, 1)]), indent=1))
+    log.info("  tip_px (%.1f, %.1f) -> (%.1f, %.1f): the tip model moved %+.0f, %+.0f mm (%s; the old file %s)",
+             *was, u, v, 1000 * float(shift_m[0]), 1000 * float(shift_m[1]), f, f.name + ".bak")
+    return u, v
+
+
 def write_bowl_centre(xy) -> bool:
     """workspace.bowl_centre_m in local.yaml set to xy, in place (the line must exist: the template has it)."""
     p = state_dir() / "local.yaml"
@@ -100,8 +117,8 @@ def run(robot, arm, steps=STEPS, ask: Callable[[str], str] = input, face=None) -
             posed(step)
             if step == "deliver" and (state_dir() / "deliver.json").exists():
                 if face is None:
-                    from rammp_feeding.face import Face
-                    face = Face()
+                    from rammp_feeding import sensing
+                    face = sensing.now().face(arm)
                 face.orient(scene.camera_pose(arm)[1])
                 seen = face.find(robot.cameras["camera"], float(cfg.delivery.face_find_s))
                 log.info("  the wrist camera %s from the delivery look", "sees a face" if seen else

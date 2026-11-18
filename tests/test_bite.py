@@ -2,8 +2,10 @@
 food_detect_start, perceive, acquire (OVER, plunge, then the scoop and the lift on their own from the plunge's
 record), deliver (swing, present, bite, retract), home.
 
-    python3 tests/test_bite.py [--user-offset dx,dy,dz] [--piece dx,dy] [--expect 8] [--planner curobo]
+    python3 tests/test_bite.py [--user-offset dx,dy,dz] [--piece dx,dy] [--expect 8] [--planner curobo] [--fakes]
         (--planner curobo: CUROBO_CONFIG=<a robot's curobo/planner.yaml>)
+        --fakes: the food and the mouth the module's own stand-ins (rammp_feeding/fakes.py, as a robot run with
+        fakes.* set), not the fake robot's rendered depth, SAM3 boxes and face
         curobo: RAMMP-CuRobo's real planner (a CUDA box) as the deployment shares it: its default config, our world
         pushed before each planned move
 
@@ -23,11 +25,11 @@ import fixture  # (the test site: before rammp_feeding is imported)
 import numpy as np  # noqa: E402
 
 from fake_robot import FakeFace, FakeRobot, Scene  # noqa: E402
-from rammp_feeding import record, scene, scene_camera  # noqa: E402
+from rammp_feeding import fakes, record, scene, scene_camera, sensing  # noqa: E402
 from rammp_feeding.acquire import acquire  # noqa: E402
 from rammp_feeding.arm import Arm  # noqa: E402
 from rammp_feeding.cli import _target, detect, home, perceive  # noqa: E402
-from rammp_feeding.config import state_dir  # noqa: E402
+from rammp_feeding.config import cfg, state_dir  # noqa: E402
 from rammp_feeding.deliver import deliver  # noqa: E402
 
 
@@ -40,6 +42,9 @@ def main() -> int:
     sc.mouth = tuple(np.array(sc.mouth) + arg("--user-offset", [0, 0, 0]))
     sc.piece_xy = tuple(np.array(sc.piece_xy) + arg("--piece", [0, 0]))
     robot = FakeRobot(sc, scene.captured("home"))
+    if "--fakes" in sys.argv:                        # the module's stand-ins where the fake robot's piece and user are
+        cfg["fakes"].update(food={"pieces_m": [list(sc.piece_xy)]}, mouth={"at_m": list(sc.mouth)}, open_after_s=0.0)
+        fakes.refill()
     if scene_camera.in_use():                        # the scene camera's reading: the fake scene's
         (state_dir() / "scene_state.json").write_text(json.dumps(dict(
             bowl_xy=list(sc.bowl_xy), table_z=sc.table_z, bowl_top_z=sc.table_z + sc.rim_height,
@@ -53,6 +58,7 @@ def main() -> int:
         robot.plan_joints = real.plan_joints
         robot.set_world = lambda path: (fake_world(path), real.set_world(path))   # recorded, and to the planner
     arm = Arm(robot)
+    face = sensing.now().face(arm) if "--fakes" in sys.argv else FakeFace(robot)
     record.setup_logging()
     record.session("test")
     t0 = time.time()
@@ -74,7 +80,7 @@ def main() -> int:
     assert abs(R[2, 2]) < 0.2 and side * R[:, 2][1] > 0.95, "the scoop did not end level, pointing at the user: axis %s" % R[:, 2]
     top = scene.overlook_goal(arm)[0][2]
     assert abs(T[2] - top) < 0.004, "the lift ended at tool z %.3f, not food_detect_start's %.3f" % (T[2], top)
-    rc = deliver(robot, arm, FakeFace(robot), record.stage("deliver"), stop_after="present")
+    rc = deliver(robot, arm, face, record.stage("deliver"), stop_after="present")
     expect = int(arg("--expect", [0])[0])
     if expect:                                       # refused (out of reach): retracted to food_detect_start
         assert rc == expect, "present: %d, expected %d" % (rc, expect)
@@ -92,11 +98,11 @@ def main() -> int:
               "short of the mouth; the planned retract and home: the real planner's, tests/test_e2e.sh)"
               % (len(robot.moves), time.time() - t0, 1000 * off, 1000 * gap))    # fake's straight lines cannot
         return 0
-    rc = deliver(robot, arm, FakeFace(robot), record.stage("deliver"), start_at="retract")
+    rc = deliver(robot, arm, face, record.stage("deliver"), start_at="retract")
     assert rc == 0
     home(robot, arm)
-    print("THE BITE GOES THROUGH (%d moves, %.1f s; OVER %.1f mm off the piece; the tip %.0f mm short of the mouth)"
-          % (len(robot.moves), time.time() - t0, 1000 * off, 1000 * gap))
+    print("THE BITE GOES THROUGH (%d moves, %.1f s; OVER %.1f mm off the piece; the tip %.0f mm short of the mouth%s)"
+          % (len(robot.moves), time.time() - t0, 1000 * off, 1000 * gap, "; fakes" if "--fakes" in sys.argv else ""))
     return 0
 
 

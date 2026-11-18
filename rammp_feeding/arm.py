@@ -8,7 +8,10 @@ here, executed by the driver (/execute_joint_trajectory, position or impedance),
   CHECKS    a move's own (the plunge's depth zone, the scoop's food path)
   DRIVER    its path tolerance (the arm diverging from the path) and its own refusals
 Any of them cancels the goal (the driver halts the arm) and raises MoveError. Free-space moves are cuRobo's paths
-(travel), checked against our tip floor and, for the utensil, our boxes before they run.
+(travel): the arm's links checked by the planner against our world (scene.world), and the path, before it runs,
+against our tip floor and, for the utensil, our boxes -- the same check every path of ours gets (check_world: the
+straight lines, the plunge, the scoop, the approach), but for what that move goes into; a planned path that sweeps a
+joint round further than max_joint_travel_deg is planned again.
 """
 
 from __future__ import annotations
@@ -357,9 +360,11 @@ class Arm:
                                         float(M.trajectory_sample_s))
         self.run(path, label, durations=durations, **kw)
 
-    def straight(self, Tg, Rg, mps: float, label: str, step_m: float = 0.005, **kw) -> list[Joints]:
-        """A straight tool line to (Tg, Rg) at mps, the orientation turned evenly on the way (a continuous IK path);
-        nothing to do within motion.arrived_m of it."""
+    def straight(self, Tg, Rg, mps: float, label: str, step_m: float = 0.005, inside: Sequence[str] = (),
+                 carrying: bool = False, **kw) -> list[Joints]:
+        """A straight tool line to (Tg, Rg) at mps, the orientation turned evenly on the way (a continuous IK path),
+        checked against the world before it runs (check_world: inside, what it goes into); nothing to do within
+        motion.arrived_m of it."""
         q0 = self.q()
         T0, R0 = self.tool(q0)
         from rammp_feeding.geometry import rodrigues, rot_log
@@ -372,17 +377,51 @@ class Arm:
         path, err = self.homotopy(q0, lambda s: (T0 + (np.asarray(Tg) - T0) * s, rodrigues(w * s) @ R0), n)
         if path is None:
             raise MoveError("%s: %s -- not moving" % (label, err))
+        self.check_world(path, label, inside, carrying, kw.get("tilt_cap"))
         self.run(path, label, dps=dps_for(path, max(L, 1e-4), mps), **kw)
         return path
 
+    def check_world(self, path, label: str, inside: Sequence[str] = (), carrying: bool = False,
+                    tilt_cap: float | None = None) -> None:
+        """One of our own paths (a straight line, the plunge, the scoop, the approach) against the world a planned path
+        is checked against (check_path: our tip floor, and what the gripper holds against our boxes) -- but for what
+        the move goes into (inside: "bowl", "stand", "user"): there neither the floor nor those boxes apply, its own
+        guards do. The planner checks the arm's links on its paths; on ours they are not checked. MoveError: refused,
+        nothing moved."""
+        from rammp_feeding import scene
+        floor, spheres, boxes = self._checks(carrying)
+        cols = []                                       # (x, y, radius): columns where the floor is the move's own
+        if "bowl" in inside:
+            try:
+                ws = scene.workspace()
+                cols.append((*ws["bowl_xy"], ws["bowl_radius"] + float(M.free_space.bowl_margin_m) + ws["error_m"]))
+            except FileNotFoundError:
+                pass
+        if "stand" in inside:
+            st = scene.stand_box()
+            if st is not None:
+                cols.append((st["position"][0], st["position"][1], float(cfg.utensil.pick.stand_radius_m)))
+        skip = tuple({"bowl": "bowl_", "stand": "fork_stand", "user": "user_"}[k] for k in inside)
+        if boxes is not None and len(boxes[0]) and skip:
+            keep = [i for i, n in enumerate(boxes[3]) if not n.startswith(skip)]
+            boxes = (boxes[0][keep], boxes[1][keep], boxes[2][keep], [boxes[3][i] for i in keep])
+
+        def fl(x: float, y: float) -> float:
+            return -math.inf if any(math.hypot(x - cx, y - cy) < r for cx, cy, r in cols) else floor(x, y)
+        try:
+            self.check_path(path, fl, None, spheres, boxes, tilt_cap, spare_goal=False)
+        except MoveError as e:
+            raise MoveError("%s REFUSED: %s -- not moving" % (label, e))
+
     # ------------------------------------------------------------------ free space: cuRobo
     def check_path(self, path, floor: Callable[[float, float], float], max_reach_m: float | None = None,
-                   spheres=None, boxes=None, tilt_cap: float | None = None) -> tuple[float, float]:
+                   spheres=None, boxes=None, tilt_cap: float | None = None,
+                   spare_goal: bool = True) -> tuple[float, float]:
         """(lowest, highest) utensil tip z along the path as it runs (sampled every check_step_deg); MoveError if a joint
         passes our limits, the tip dips under floor(x, y) or reaches past max_reach_m, the utensil tilts past
         tilt_limit, or a sphere ([x, y, z, r], tool frame) comes nearer a box (scene.utensil_boxes) than
-        utensil_clearance_m -- or than it already is at the start or will be at the goal, where that is nearer
-        (feeding_start parks the utensil beside the table): the planner knows the arm, not what it holds."""
+        utensil_clearance_m -- or than it already is at the start or (spare_goal) will be at the goal, where that is
+        nearer (feeding_start parks the utensil beside the table): the planner knows the arm, not what it holds."""
         FS = M.free_space
         qs = densify(path, float(FS.check_step_deg))
         near = min(qs, key=self.margin)
@@ -405,7 +444,7 @@ class Arm:
             sp = np.asarray(spheres, float)
             centres = np.array([T + sp[:, :3] @ R.T for T, R in poses])                 # (samples, spheres, 3)
             gap = sphere_box_clearance(centres, sp[:, 3], *boxes[:3])               # (samples, spheres, boxes)
-            need = np.minimum(float(FS.utensil_clearance_m), np.minimum(gap[0], gap[-1]))
+            need = np.minimum(float(FS.utensil_clearance_m), np.minimum(gap[0], gap[-1]) if spare_goal else gap[0])
             short = gap - need + 1e-6
             k, s, b = np.unravel_index(int(np.argmin(short)), short.shape)
             if short[k, s, b] < 0:
@@ -468,6 +507,13 @@ class Arm:
             if short_way and not self._short_way(pos, goal):
                 why = "every path round the far side"
                 log.info("    %-28s re-planning (%d): round the far side", label, k + 1)
+                continue
+            swept = sweep(pos)
+            j = int(swept.argmax())
+            if swept[j] > float(FS.max_joint_travel_deg):
+                why = "every path turns joint %d %.0f deg in all (at most %.0f)" % (j + 1, swept[j],
+                                                                                  float(FS.max_joint_travel_deg))
+                log.info("    %-28s re-planning (%d): joint %d turns %.0f deg in all", label, k + 1, j + 1, swept[j])
                 continue
             best = (pos, times, path, lo, hi)
             break
@@ -534,6 +580,13 @@ class Arm:
         tool frame, where Kortex's own estimate was, which delivery.bite_n is tuned against."""
         J = self.kin.jacobian(self.q() if q is None else q)[:3]
         return np.linalg.lstsq(J.T, np.asarray(tau, float), rcond=None)[0]
+
+
+def sweep(path) -> np.ndarray:
+    """How far each joint turns along a path in all (deg), its turns either way summed."""
+    if len(path) < 2:
+        return np.zeros(7)
+    return np.abs(np.array([joint_delta(p, q) for p, q in zip(path, path[1:])])).sum(0)
 
 
 def dps_for(path, metres: float, mps: float) -> float:

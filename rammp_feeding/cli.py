@@ -33,6 +33,8 @@
                                    seat, on it, or the fingers closed)
     rammp find-fork                at fork_look: the opening on the fork's block, and whether the way in is reachable.
                                    Never moves.
+    rammp tip DX DY                the utensil's tip seen DX, DY m (base frame) from where the tip model puts it, at the
+                                   arm's pose now: tip_px moved to match (state_dir/wrist_mount.json). Never moves.
     rammp gripper open|close       setting up: open with the fork's block hung on the closed fingers by hand (the fork
                                    held: calibrate-wrist before a fork_look exists), close to take it off (not held)
     rammp setup [step ...]         after the arm moved against the table, the bowl or the user: each step in turn
@@ -119,10 +121,11 @@ def home(robot, arm, direct: bool = False, dps: float | None = None) -> None:
 
 def perceive_target(robot, arm) -> tuple[int, dict | None]:
     """A new bite's target: (0, the target), or (NoTarget's code, None)."""
-    from rammp_feeding.perception import NoTarget, perceive as run
+    from rammp_feeding import sensing
+    from rammp_feeding.perception import NoTarget
     record.bite()
     try:
-        return 0, run(robot, arm, record.stage("perceive"))
+        return 0, sensing.now().target(robot, arm, record.stage("perceive"))
     except NoTarget as e:
         log.info("  %s", e)
         return e.rc, None
@@ -238,9 +241,9 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="rammp", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", choices=["check", "state", "home", "detect", "perceive", "acquire", "rise", "deliver",
                                         "retract", "feed", "locate-scene", "calibrate-scene", "calibrate-wrist",
-                                        "capture", "setup", "pick-fork", "put-fork", "find-fork", "gripper"])
+                                        "capture", "setup", "pick-fork", "put-fork", "find-fork", "gripper", "tip"])
     ap.add_argument("name", nargs="*", help="capture: " + " | ".join(POSES) + "; setup: its steps (default: all); "
-                    "gripper: open | close")
+                    "gripper: open | close; tip: DX DY (m)")
     ap.add_argument("--plan", action="store_true")
     ap.add_argument("--stop-after", default="", help="acquire: over | hover30 | hover10 | plunge; deliver: swing | "
                     "present | bite; pick-fork: above | insert | open; put-fork: above | insert | release")
@@ -262,6 +265,13 @@ def main(argv=None) -> int:
         ap.error("rammp setup [%s ...]" % " | ".join(STEPS))
     if a.command == "gripper" and (len(a.name) != 1 or a.name[0] not in ("open", "close")):
         ap.error("rammp gripper open | close")
+    if a.command == "tip":
+        try:
+            shift = [float(v) for v in a.name]
+        except ValueError:
+            shift = []
+        if len(shift) != 2:
+            ap.error("rammp tip DX DY (m, base frame: where the tip is seen, less where the model puts it)")
     import signal
 
     def _stop(*_):
@@ -307,8 +317,8 @@ def main(argv=None) -> int:
             rise(arm)
         elif c in ("deliver", "retract", "feed"):
             from rammp_feeding.deliver import deliver
-            from rammp_feeding.face import Face
-            face = Face() if c != "retract" else None
+            from rammp_feeding import sensing
+            face = sensing.now().face(arm) if c != "retract" else None
             if c == "feed":
                 rc = feed(robot, arm, face, a.bites)
             else:
@@ -329,6 +339,9 @@ def main(argv=None) -> int:
         elif c == "setup":
             from rammp_feeding.setup_steps import run
             rc = run(robot, arm, a.name or STEPS)
+        elif c == "tip":
+            from rammp_feeding.setup_steps import shift_tip
+            shift_tip(arm, shift)
         elif c in ("pick-fork", "put-fork", "find-fork", "gripper"):
             from rammp_feeding import fork
             if c != "gripper" and not fork.used():

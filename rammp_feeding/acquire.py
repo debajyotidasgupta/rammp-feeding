@@ -8,9 +8,10 @@
            are in it; the wrist camera's view where it stops saved (acquire/plunge_end.jpg)
   scoop    the piece rises while the utensil turns from vertical to level about it (acquisition.scoop.turn_deg about the
            base's x axis: its sign is the user's side), to acquisition.scoop.lift_m over the free-space floor above the
-           bowl's centre; stopped if the food point leaves its path or drops
+           bowl's centre (end_over plunge: above where it went in); stopped if the food point leaves its path or drops
   lift     then straight up, the utensil level, to food_detect_start's height: the whole arm clear of the planner's
            world, where the swing starts
+  measure  what is under the tip (sensing.under: the wrist camera's depth, or the fake food's)
   pick     over -> a fresh depth reading from there -> plunge -> scoop, planned before the plunge starts (no pause);
            a plunge that ran keeps the piece's height and where it ended with the bite (acquire/food.json): a scoop
            run on its own (--start-at scoop) starts from there
@@ -32,11 +33,10 @@ from pathlib import Path
 
 import numpy as np
 
-from rammp_feeding import record, scene
+from rammp_feeding import fakes, record, scene, sensing
 from rammp_feeding.arm import Arm, MoveError, TorqueGuard
 from rammp_feeding.config import cfg
 from rammp_feeding.geometry import max_step, rot
-from rammp_feeding.perception import under_tip
 
 log = logging.getLogger("rammp")
 A = cfg.acquisition
@@ -51,14 +51,9 @@ class Food:
 
 
 def measure(robot, arm: Arm, out: Path | None, name: str) -> dict:
-    """What is under the tip, from depth frames that arrived after the arm stopped here."""
-    D = robot.cameras["camera"].depth_median(int(cfg.perception.depth_frames), time.time(),
-                                             wait_s=float(cfg.perception.depth_wait_s))
-    record.save_npy(out, "depth_%s.npy" % name, D)
-    try:
-        u = under_tip(D, arm)
-    except ValueError as e:
-        raise MoveError(str(e))
+    """What is under the tip, from depth frames that arrived after the arm stopped here (sensing.under: the real reading
+    or the fake food's)."""
+    u = sensing.now().under(robot, arm, out, name)
     record.save_json(out, "under_%s.json" % name, u)
     log.info("  under the tip: the top %.0f mm down%s", 1000 * u["gap_top"],
              ", the floor %.0f mm down, the food %.0f mm tall" % (1000 * u["gap_floor"], 1000 * u["height"])
@@ -127,6 +122,7 @@ def plunge(arm: Arm, u: dict, out: Path | None, scoop_after: bool = True) -> Foo
         guard.limit = float(G.plunge_in_food) if inside else float(G.default)
         hit = guard.update(tau)
         return ("joint %d torque step %s" % (hit[0] + 1, "in the food" if inside else "above the food")) if hit else None
+    arm.check_world(path, "plunge", inside=("bowl",))
     arm.run(path, "plunge", durations=durations, torque_stop=False, check=contact)
     record.save_json(out, "food.json", dict(height=food.height, floor_m=food.floor_m, joints_deg=arm.q()))
     if out is not None:
@@ -142,8 +138,8 @@ def plan_scoop(arm: Arm, q0, T0, R0, food: Food) -> dict:
     """From a given state (here, or where the plunge will end): the food point -- the piece's centre on the tines --
     rises while the utensil turns turn_deg about it (the turn = turn_deg * s**rot_exp), to lift_m over the
     free-space tip floor above the bowl's centre (scene.tip_floor: the bowl's top + min_tip_above_bowl_m + the scene
-    camera's error_m), moving across to that centre once past steep (backoff_from); the arm's shape follows on from where it
-    starts."""
+    camera's error_m), moving across to that centre once past steep (backoff_from) -- or, end_over plunge, staying over
+    where the tines went in; the arm's shape follows on from where it starts."""
     S = A.scoop
     tip = arm.tip_tool
     o_piv = tip - np.array([0, 0, max(0.0, food.height / 2.0 - food.floor_m)])
@@ -151,6 +147,8 @@ def plan_scoop(arm: Arm, q0, T0, R0, food: Food) -> dict:
     ws = scene.workspace()
     cx, cy = ws["bowl_xy"]                              # ends lift_m over the free-space floor there: where the swing
     pivE = np.array([cx, cy, scene.tip_floor(cx, cy) + float(S.lift_m)])   # that follows may start from
+    if str(S.get("end_over", "bowl_centre")) == "plunge":   # (or straight above where the tines went in)
+        pivE[:2] = piv0[:2]
     back = pivE - piv0
     rise = back[2]
     back[2] = 0.0
@@ -174,6 +172,7 @@ def plan_scoop(arm: Arm, q0, T0, R0, food: Food) -> dict:
 
 def run_scoop(arm: Arm, plan: dict) -> None:
     path = [arm.q()] + plan["path"][1:]
+    arm.check_world(path, "scoop", inside=("bowl",), carrying=True)
     guard, worst, food_log = TorqueGuard(float(G.scoop)), [0.0], []
 
     def food_on_path(q, tau, t):
@@ -206,7 +205,7 @@ def descend(arm: Arm, u: dict, to_above: float) -> None:
     if down <= 0:
         return
     T, R = arm.tool()
-    arm.straight(T - np.array([0, 0, down]), R, float(S.descend_mps), "descend")
+    arm.straight(T - np.array([0, 0, down]), R, float(S.descend_mps), "descend", inside=("bowl",))
 
 
 def back_over(arm: Arm) -> bool:
@@ -220,7 +219,7 @@ def back_over(arm: Arm) -> bool:
         cfg.motion.free_space.bowl_margin_m)
     if not over or T[2] < T1[2] - float(cfg.motion.arrived_m) or arm.tilt(R) > float(cfg.motion.max_tilt_deg):
         return False
-    arm.straight(T1, R1, float(A.over_speed_mps), "back to food_detect_start")
+    arm.straight(T1, R1, float(A.over_speed_mps), "back to food_detect_start", inside=("bowl",))
     return True
 
 
@@ -230,7 +229,8 @@ def rise(arm: Arm, label: str = "rise") -> None:
     T, R = arm.tool()
     top = scene.overlook_goal(arm)[0][2]
     if top - T[2] > float(cfg.motion.arrived_m):
-        arm.straight(np.array([T[0], T[1], top]), R, float(A.stepped.rise_mps), label)
+        arm.straight(np.array([T[0], T[1], top]), R, float(A.stepped.rise_mps), label, inside=("bowl",),
+                     carrying=label == "lift")
 
 
 def acquire(robot, arm: Arm, target: dict, out: Path | None, stop_after: str = "", start_at: str = "over") -> int:
@@ -260,4 +260,6 @@ def acquire(robot, arm: Arm, target: dict, out: Path | None, stop_after: str = "
         return 0
     u = measure(robot, arm, out, "over")
     plunge(arm, u, out, scoop_after=stop_after != "plunge")
+    if stop_after != "plunge" and fakes.on("food"):     # (the fake piece on the fork: gone from the bowl)
+        fakes.taken(target["piece"]["xy"])
     return 0

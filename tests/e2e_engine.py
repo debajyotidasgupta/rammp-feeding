@@ -63,7 +63,8 @@ def fake_locate(robot, out):
 def main() -> int:
     rclpy.init(args=["--ros-args", "-p", "use_orchestrator:=false", "-p", "state_dir:=%s" % fixture.STATE,
                      "-p", "runs_dir:=%s" % (fixture.WORK / "runs"), "-p", "record:=true"])
-    from rammp_feeding import deliver as deliver_mod, scene, scene_camera
+    from dataclasses import replace
+    from rammp_feeding import deliver as deliver_mod, scene, scene_camera, sensing
     from rammp_feeding.engine import Feeding
     from rammp_feeding.ros import Robot
     real_locate = scene_camera.locate                   # (no scene camera: the site's own bowl, as deployed)
@@ -82,6 +83,7 @@ def main() -> int:
         finally:
             robot.effort_fn = None
     deliver_mod.bite = bite
+    sensing.use(replace(sensing.configured(), face=lambda arm: FakeFace(TestFeeding.sim), bite=bite))   # the user
 
     class TestFeeding(Feeding):
         sim = None
@@ -91,7 +93,6 @@ def main() -> int:
                         reset=self._reset, token=self._token)
             if TestFeeding.sim is None:                 # one fake arm across actions: it stays where it stopped
                 TestFeeding.sim = SimArmRobot(SC, ros, scene.captured("home"))
-                self._face = FakeFace(TestFeeding.sim)
             TestFeeding.sim.ros = ros
             return TestFeeding.sim
 

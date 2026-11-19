@@ -1271,7 +1271,7 @@ class ForkPick(unittest.TestCase):
         self.assertLess(g.max_step(self.arm.q(), scene.captured("fork_look")), 0.5)
         self.sc.move_stand(-float(self.P.max_stand_move_m) + 0.02, 0.0, 0.0)     # (3 cm from the pick's: in reach)
         in_hole = np.asarray(self.sc.hole_at) - [0.0, 0.0, float(self.P.insert_m)]
-        out = fork.put_down(self.robot, self.arm, self.g, stop_after="above")    # over the seat, then on down from there
+        out = fork.put_down(self.robot, self.arm, self.g, stop_after="back")    # over the seat, then on down from there
         self.assertLess(np.linalg.norm(np.subtract(out["opening_m"], self.sc.hole_at)), 0.004)
         n = len(self.robot.moves)
         fork.put_down(self.robot, self.arm, self.g)
@@ -1407,30 +1407,85 @@ class ForkPick(unittest.TestCase):
         self.robot.fingers = None                                   # the arm node serves no position
         fork.pick_up(self.robot, self.arm, fork.Gripper(self.robot.gripper, self.robot.gripper_position))
         self.assertTrue(fork.holding())
+        fork.put_down(self.robot, self.arm, fork.Gripper(self.robot.gripper, self.robot.gripper_position))
         self.robot.fingers = 0.0
-        with self.assertRaisesRegex(MoveError, "did not close"):
+        fork.pick_up(self.robot, self.arm, fork.Gripper(self.robot.gripper, self.robot.gripper_position))
+        with self.assertRaisesRegex(MoveError, "did not close"):     # (held at 0.32 by the walls, still there)
             fork.put_down(self.robot, self.arm, fork.Gripper(self.robot.gripper, lambda: 0.3))
         self.assertTrue(fork.state()["holding"] and fork.state()["in_holder"])
+        fork.put_down(self.robot, self.arm, fork.Gripper(self.robot.gripper, lambda: 0.8), start_at="release")
+        self.assertFalse(fork.holding())                            # (stopped short of closed, but let go: moved)
 
-    def test_a_first_try_stops_at_each_stage(self):
-        """--stop-after above: over the opening, the state unchanged; insert: in it, closed; open: opened in it, the
-        fork held but not lifted. The next pick or put comes back up first."""
+    def test_each_step_stops_and_the_next_goes_on_from_it(self):
+        """--stop-after hover: over the opening, its place kept, not in it; then step by step (--start-at): in, closed;
+        hold, opened in it; from lift on: lifted, out, home. A put-back stopped after release: on the seat, let go. A
+        pick from its first step comes back up out of the opening first; a stop before the start is refused."""
         from rammp_feeding import fork
-        out = fork.pick_up(self.robot, self.arm, self.g, stop_after="above")
-        self.assertEqual(out["stopped_after"], "above")
-        self.assertEqual(fork.state(), {"holding": False, "t": fork.state()["t"]})
+        out = fork.pick_up(self.robot, self.arm, self.g, stop_after="hover")
+        self.assertEqual(out["stopped_after"], "hover")
+        s = fork.state()
+        self.assertFalse(s["holding"] or s["in_holder"])
+        self.assertLess(np.linalg.norm(np.subtract(s["hole"]["centre"], self.sc.hole_at)), 0.003)
         self.assertAlmostEqual(self.arm.tip()[2] - self.sc.hole_at[2], float(self.P.above_m), delta=0.002)
-        fork.pick_up(self.robot, self.arm, self.g, stop_after="insert")
+        fork.pick_up(self.robot, self.arm, self.g, start_at="in", stop_after="in")
         s = fork.state()
         self.assertTrue(s["in_holder"] and not s["holding"])
         self.assertLess(np.linalg.norm(self.arm.tip() - self.in_hole), 0.003)
-        fork.pick_up(self.robot, self.arm, self.g, stop_after="open")      # (up out of it first, then in again)
+        fork.pick_up(self.robot, self.arm, self.g, start_at="hold", stop_after="hold")
         s = fork.state()
         self.assertTrue(s["in_holder"] and s["holding"])
-        fork.put_down(self.robot, self.arm, self.g, stop_after="release")  # (the lift finished first)
+        out = fork.pick_up(self.robot, self.arm, self.g, start_at="lift")
+        self.assertTrue(out["holding"] and fork.holding() and not fork.state()["in_holder"] and "seat" in fork.state())
+        self.assertLess(g.max_step(self.arm.q(), scene.captured("home")), 0.1)
+        out = fork.put_down(self.robot, self.arm, self.g, stop_after="release")
+        self.assertEqual(out["stopped_after"], "release")
         s = fork.state()
         self.assertTrue(s["in_holder"] and not s["holding"])
-        self.assertLess(np.linalg.norm(self.arm.tip() - self.in_hole), 0.003)
+        self.assertLess(np.linalg.norm(self.arm.tip() - self.in_hole), 0.004)
+        fork.pick_up(self.robot, self.arm, self.g, stop_after="in")      # (up out of it first, then in again)
+        self.assertTrue(fork.state()["in_holder"])
+        with self.assertRaisesRegex(ValueError, "comes before"):
+            fork.pick_up(self.robot, self.arm, self.g, start_at="lift", stop_after="in")
+
+    def test_the_gripper_by_hand_in_the_opening_is_that_step(self):
+        """rammp gripper open with the fingers in the opening: the hold, its place kept -- the pick goes on from lift;
+        rammp gripper close there after a put-back's lower: the release."""
+        from rammp_feeding import fork
+        fork.pick_up(self.robot, self.arm, self.g, stop_after="in")
+        fork.by_hand(self.g, True)
+        s = fork.state()
+        self.assertTrue(s["holding"] and s["in_holder"] and "hole" in s)
+        self.assertAlmostEqual(s["held_at"], self.robot.fingers)
+        fork.pick_up(self.robot, self.arm, self.g, start_at="lift", stop_after="lift")
+        fork.put_down(self.robot, self.arm, self.g, stop_after="lower")
+        fork.by_hand(self.g, False)
+        self.assertTrue(fork.state()["in_holder"] and not fork.holding())
+        fork.put_down(self.robot, self.arm, self.g, start_at="up")
+        self.assertFalse(fork.state().get("in_holder"))
+        self.assertLess(g.max_step(self.arm.q(), scene.captured("home")), 0.1)
+
+    def test_a_top_holder_straight_up_and_straight_back_down(self):
+        """utensil.pick.holder top: lifted straight up, no way out sideways and no strip, then home; put back by a
+        planned path to where the lift ended, straight down onto the seat, let go, up, home. No open_side needed."""
+        from unittest import mock
+        from rammp_feeding import fork
+        with mock.patch.dict(cfg["utensil"]["pick"], {"holder": "top", "open_side": None}):
+            fork.pick_up(self.robot, self.arm, self.g)
+            s = fork.state()
+            self.assertTrue(s["holding"] and not s["in_holder"] and "seat" not in s)
+            T, R = self.arm.tool(s["lifted_joints"])
+            lifted = T + R @ fork.fingertips_in_tool()
+            np.testing.assert_allclose(lifted[:2], self.in_hole[:2], atol=0.003)       # (straight up from the hold)
+            self.assertAlmostEqual(lifted[2] - self.in_hole[2], float(self.P.lift_m), delta=0.003)
+            self.assertLess(g.max_step(self.arm.q(), scene.captured("home")), 0.1)
+            self.robot.grips.clear()
+            fork.put_down(self.robot, self.arm, self.g)
+            (soft, at_soft), (closed, at) = self.robot.grips
+            self.assertEqual((soft, closed), (float(self.P.gripper_open), float(self.P.gripper_closed)))
+            self.assertLess(np.linalg.norm(at_soft - lifted), 0.003)                   # (back where the lift ended)
+            self.assertLess(np.linalg.norm(at - self.in_hole), 0.004)
+            self.assertFalse(fork.holding())
+            self.assertLess(g.max_step(self.arm.q(), scene.captured("home")), 0.1)
 
     def test_a_push_on_the_stand_stops_the_move(self):
         """Our contact guard at guards.torque_step_nm.fork on the way in (a site raising the others leaves it): a 4 N.m
@@ -1615,6 +1670,85 @@ class Settle(unittest.TestCase):
         arm.settle(goal, "onto the goal")                        # a small gap: settled onto its joints
         self.assertEqual(len(robot.moves), n + 1)
         self.assertLess(g.max_step(arm.q(), goal), 0.1)
+
+
+class SettlePose(unittest.TestCase):
+    def test_a_planned_path_to_a_pose_ends_on_it(self):
+        """Ended within settle_max_m of the goal's pose: a straight line onto it; further: stopped there."""
+        sc = Scene()
+        site(sc)
+        robot = FakeRobot(sc, scene.captured("home"))
+        arm = Arm(robot)
+        goal = scene.overlook_joints(arm)
+        T, R = arm.tool(goal)
+        robot.raw = np.radians(arm.ik(T + [0.0, 0.0, 0.012], R, goal))
+        arm.settle_pose(goal, "over the bowl")
+        self.assertLess(np.linalg.norm(arm.tool()[0] - T), 0.001)
+        robot.raw = np.radians(arm.ik(T + [0.0, 0.0, float(cfg.motion.settle_max_m) + 0.01], R, goal))
+        with self.assertRaisesRegex(MoveError, "ended 40 mm"):
+            arm.settle_pose(goal, "over the bowl")
+
+
+class Jog(unittest.TestCase):
+    """rammp move / up / down / turn / point-down / joint (rammp_feeding/jog.py): one small move, checked."""
+
+    def setUp(self):
+        self.sc = Scene()
+        site(self.sc)
+        self.robot = FakeRobot(self.sc, scene.captured("home"))
+        self.arm = Arm(self.robot)
+        self.robot.raw = np.radians(scene.overlook_joints(self.arm))
+
+    def test_a_line_moves_the_tool_and_is_checked(self):
+        from unittest import mock
+        from rammp_feeding import jog
+        T, R = self.arm.tool()
+        jog.run(self.arm, "up", [0.03])
+        jog.run(self.arm, "move", [0.01, -0.02, 0.0])
+        np.testing.assert_allclose(self.arm.tool()[0], T + [0.01, -0.02, 0.03], atol=0.001)
+        np.testing.assert_allclose(self.arm.tool()[1], R, atol=1e-3)
+        n = len(self.robot.moves)
+        with self.assertRaisesRegex(MoveError, "metres, not centimetres"):
+            jog.run(self.arm, "down", [3.0])
+        down = self.arm.tip()[2] - (self.sc.table_z + self.sc.rim_height - 0.02)    # the tip 2 cm under the rim
+        with mock.patch.dict(cfg["motion"]["jog"], {"max_m": 0.5}):
+            with self.assertRaisesRegex(MoveError, "REFUSED.*under the floor"):
+                jog.run(self.arm, "down", [down])
+            self.assertEqual(len(self.robot.moves), n)             # nothing moved
+            jog.run(self.arm, "down", [down], into=("bowl",))
+        self.assertEqual(len(self.robot.moves), n + 1)
+
+    def test_turns_keep_the_tip_where_it_is(self):
+        from rammp_feeding import jog
+        from rammp_feeding.geometry import rot
+        tip, R = self.arm.tip(), self.arm.tool()[1]
+        jog.run(self.arm, "turn", [30.0])
+        np.testing.assert_allclose(self.arm.tip(), tip, atol=0.001)
+        np.testing.assert_allclose(self.arm.tool()[1], rot("z", 30.0) @ R, atol=1e-3)
+        jog.turn_to(self.arm, rot("x", 10.0) @ self.arm.tool()[1], "tilted")
+        jog.run(self.arm, "point-down", [])
+        np.testing.assert_allclose(self.arm.tool()[1][:, 2], [0.0, 0.0, -1.0], atol=1e-3)
+        np.testing.assert_allclose(self.arm.tip(), tip, atol=0.001)
+        q = self.arm.q()
+        jog.run(self.arm, "joint", [7, -10.0])
+        self.assertAlmostEqual(g.joint_delta(q, self.arm.q())[6], -10.0, delta=0.1)
+        with self.assertRaisesRegex(MoveError, "at most"):
+            jog.run(self.arm, "turn", [120.0])
+
+    def test_what_the_gripper_holds(self):
+        """The fork when held (or with no stand), else the empty gripper in the stand's column."""
+        from unittest import mock
+        from rammp_feeding import fork, jog
+        try:
+            with mock.patch.dict(cfg["utensil"]["pick"], {"use": True}):
+                fork.save_state(dict(holding=True))
+                self.assertIsNone(jog.held())
+                fork.save_state(dict(holding=False))
+                self.assertIsInstance(jog.held(), fork.AtStand)
+            with mock.patch.dict(cfg["utensil"]["pick"], {"use": False}):
+                self.assertIsNone(jog.held())
+        finally:
+            fork.save_state(dict(holding=False))
 
 
 class OurPathsChecked(unittest.TestCase):

@@ -16,6 +16,9 @@ pick:                           # a stand to pick the fork from (rammp_feeding/f
   use: false                    # SITE: true -- the arm picks the fork up from its stand and hangs it back (needs
                                 # workspace.table_height_m, glass_to_fingertips_m and a captured fork_look); false: the
                                 # fork is put in by hand
+  holder: side                  # SITE: side -- the fork leaves its holder and comes back through an open side
+                                # (open_side, slide_m), its seat kept against the stand's taped strip; top -- straight
+                                # up out of it and straight back down into the opening it was picked from
   prompts: [rectangular hole, hole, slot]   # SAM3's words for the opening (whatever colour the block is): the
                                 # best-scored mask with a rim round it is taken
   score_threshold: 0.3
@@ -31,8 +34,13 @@ pick:                           # a stand to pick the fork from (rammp_feeding/f
   look_offset_m: [0.0, 0.0, 0.0]  # SITE: added to what is found from fork_look (the opening, the strip's end), base
                                 # frame: the wrist camera's mount as seen from that one pose, set where the fingers are
                                 # seen to go in off the opening's centre
+  look_turn_deg: 0.0            # SITE: added to the opening's long side as found from fork_look (deg, counter-
+                                # clockwise seen from above): the wrist camera's turn on the gripper, set where the
+                                # fingers are seen lined up with the opening
   max_turn_deg: 20.0            # the fingers turned at most this far from fork_look's to line up with the opening
                                 # (more: the stand turned, or not the holder's opening)
+  min_room_deg: 2.0             # the straight lines in and up, from the arm's own joints over the opening, keep every
+                                # joint this far from its limit (else not going in)
   near_shape_deg: 90.0          # over the opening: an arm shape within this (every joint) of fork_look's taken first
   glass_to_fingertips_m: null   # SITE (with use): a ruler from the wrist camera's front glass straight out to the closed
                                 # fingers' ends (glass_to_tip_m's ruler); they are on the tool's axis
@@ -44,7 +52,7 @@ pick:                           # a stand to pick the fork from (rammp_feeding/f
                                 # takes the fork's weight); higher: on something else, stopped
   lift_m: 0.10                  # the fork straight up this far from the opening, off its stand
   lift_mps: 0.02                # over the opening, and the lift
-  open_side: null               # SITE (with use): [x, y], base frame: the way the holder's open side faces (away from the
+  open_side: null               # SITE (a side holder): [x, y], base frame: the way its open side faces (away from the
                                 # stand's post); the fork leaves and comes back across the opening's long side, this way
   slide_m: 0.08                 # lifted, the fork this far out through the holder's open side, and back in
   stand_prompts: [white strip]  # SAM3's words for the stand's marker: the tape along its arm to the seat (the site names
@@ -71,8 +79,10 @@ pick:                           # a stand to pick the fork from (rammp_feeding/f
                                 # inside): opened hard against the walls they would push the light stand over
   lock_margin: 0.05             # where the arm node serves the fingers' position: opened in the opening they stop at least
                                 # this short of fully open (its end walls hold them; else they are not in it), and closed
-                                # to let go they end within this of closed
+                                # to let go they move at least this from where the walls held them
   settle_s: 0.5                 # after the fingers open or close, before the arm moves
+  impedance: null               # a motion.impedance entry: the moves into the opening and down onto the seat run
+                                # compliant (the arm gives a little to the walls); null: position control
   opening_m: null               # [short, long, deep] by ruler, where the wrist camera's depth cannot read the block
                                 # (too near for its stereo): the rim's height from the opening's size in the image
   hold_force: 0.5               # the fork clear of the holder after the pick: the fingers' ceiling for the meal (the

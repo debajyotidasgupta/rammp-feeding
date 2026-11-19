@@ -418,14 +418,15 @@ class Arm:
                    spheres=None, boxes=None, tilt_cap: float | None = None,
                    spare_goal: bool = True) -> tuple[float, float]:
         """(lowest, highest) utensil tip z along the path as it runs (sampled every check_step_deg); MoveError if a joint
-        passes our limits, the tip dips under floor(x, y) or reaches past max_reach_m, the utensil tilts past
-        tilt_limit, or a sphere ([x, y, z, r], tool frame) comes nearer a box (scene.utensil_boxes) than
-        utensil_clearance_m -- or than it already is at the start or (spare_goal) will be at the goal, where that is
-        nearer (feeding_start parks the utensil beside the table): the planner knows the arm, not what it holds."""
+        passes our limits (from a start already past one: goes further past it), the tip dips under floor(x, y) or
+        reaches past max_reach_m, the utensil tilts past tilt_limit, or a sphere ([x, y, z, r], tool frame) comes
+        nearer a box (scene.utensil_boxes) than utensil_clearance_m -- or than it already is at the start or
+        (spare_goal) will be at the goal, where that is nearer (feeding_start parks the utensil beside the table): the
+        planner knows the arm, not what it holds."""
         FS = M.free_space
         qs = densify(path, float(FS.check_step_deg))
         near = min(qs, key=self.margin)
-        if self.margin(near) < 0:
+        if self.margin(near) < min(0.0, self.margin(qs[0])) - 1e-6:   # (a start already past one: no further past it)
             raise MoveError("the path takes a joint %.1f deg past its limit (the arm's model): %s"
                             % (-self.margin(near), np.round(near, 1).tolist()))
         poses = [self.tool(q) for q in qs]
@@ -530,7 +531,9 @@ class Arm:
                      torque_limit=kw.pop("torque_limit", float(cfg.guards.torque_step_nm.free_space)), **kw)
             self.last_run = ([[float(v) for v in p] for p in timed], [float(d) for d in durations], kw.get("tilt_cap"),
                              carrying)
-            if not (level or pose):                   # (a plan to the pose ends there, maybe in other joints: kept)
+            if level or pose:                         # (a plan to the pose ends there, maybe in other joints: kept)
+                self.settle_pose(goal, label, kw.get("tilt_cap"))
+            else:
                 self.settle(goal, label)
         return path
 
@@ -550,6 +553,19 @@ class Arm:
             return
         raise MoveError("%s: the planned path ended %.0f mm, %.1f deg from the goal (%.0f deg from its joints) -- "
                         "stopped there" % (label, 1000 * m, deg, off))
+
+    def settle_pose(self, goal: Sequence[float], label: str, tilt_cap: float | None = None) -> None:
+        """After a planned path to goal's tool pose: a straight line onto it where it ended within settle_max_m and
+        settle_max_deg of it (checked against the world); further, MoveError (stopped where it is)."""
+        (T, R), (Tg, Rg) = self.tool(), self.tool(goal)
+        m, deg = float(np.linalg.norm(Tg - T)), math.degrees(float(np.linalg.norm(rot_log(Rg @ R.T))))
+        if m <= float(M.near_pose_m) and deg <= float(M.near_pose_deg):
+            return
+        if m > float(M.settle_max_m) or deg > float(M.settle_max_deg):
+            raise MoveError("%s: the planned path ended %.0f mm, %.1f deg from the goal's pose -- stopped there"
+                            % (label, 1000 * m, deg))
+        log.info("    %-28s ended %.1f mm, %.1f deg from its pose: straight onto it", label, 1000 * m, deg)
+        self.straight(Tg, Rg, float(M.settle_mps), "settle " + label, tilt_cap=tilt_cap)
 
     def _short_way(self, pos, goal) -> bool:
         """Whether a path takes the tool round the arm's base the short way (its bearing from the base)."""

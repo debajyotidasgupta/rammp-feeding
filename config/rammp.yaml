@@ -82,6 +82,10 @@ motion:
   settle_dps: 10.0              # a short joint move onto a goal (after a planned path) ...
   settle_max_deg: 5.0           # ... where the path ended at most this far from its joints (further, at the goal's pose
                                 # in another arm shape: kept; elsewhere: stopped)
+  settle_max_m: 0.03            # a planned path to a tool pose that ended at most this far from it (and
+                                # settle_max_deg): a straight line onto it at settle_mps (cuRobo stops within its own
+                                # tolerance); further: stopped
+  settle_mps: 0.01
   direct_dps: 20.0              # rammp home --direct: one joint move to feeding_start, no planner
   path_tolerance_deg: 20.0      # the driver aborts a move the arm diverges from by this much on any joint
   goal_tolerance_deg: 1.0
@@ -107,6 +111,12 @@ motion:
                                 # site's table edge and the camera's error (its padded box off the arm's own links)
     max_joint_travel_deg: 200.0 # a planned path turning any joint further than this in all (its turns summed): planned
                                 # again -- a sweep round the workspace for a goal nearby
+
+  jog:                          # rammp move / up / down / turn / point-down / joint: one small move by hand
+    mps: 0.01                   # the tool's line (move, up, down)
+    dps: 5.0                    # the furthest joint (turn, point-down, joint)
+    max_m: 0.20                 # one move at most this far (a typo in metres refused, not run) ...
+    max_deg: 90.0               # ... and turned at most this far
 
 guards:                         # the contact guard: a joint-torque step this big against recent history = stop
   torque_window: {span: 6, gap: 3}    # samples (/joint_states at 50 Hz): the baseline window, and the gap before the

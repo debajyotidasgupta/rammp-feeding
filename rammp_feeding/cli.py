@@ -24,19 +24,24 @@
                                    feeding_start, the wrist camera's route over it and back; after calibrate-wrist)
     rammp capture home|overlook|deliver|fork_look   the arm's joints now as feeding_start / food_detect_start's arm
                                    shape / the delivery look / over the fork's stand (state_dir). Never moves.
-    rammp pick-fork [--stop-after above|insert|open]   from feeding_start: the fork picked up from its stand
-                                   (utensil.pick), out through the holder's open side, its seat kept against the
-                                   stand's taped strip, back home (--stop-after: over the opening, in it, or the
-                                   fingers opened in it)
-    rammp put-fork [--stop-after above|insert|release]   the strip found again, wherever the stand is now; the fork in
-                                   through the open side and hung back on its seat, then home (--stop-after: over the
-                                   seat, on it, or the fingers closed)
+    rammp pick-fork [--start-at S] [--stop-after S]   from feeding_start: the fork picked up from its stand
+                                   (utensil.pick), then home; its steps look, hover, in, hold, lift, out
+                                   (rammp_feeding/fork.py)
+    rammp put-fork [--start-at S] [--stop-after S]    the fork back on its stand, then home; its steps back, lower,
+                                   release, up
     rammp find-fork                at fork_look: the opening on the fork's block, and whether the way in is reachable.
                                    Never moves.
+    rammp move DX DY DZ [--into W] the tool straight by (DX, DY, DZ) m, base frame (rammp_feeding/jog.py: one slow move,
+                                   checked against the world; --into bowl,stand,user: what it goes into)
+    rammp up D | down D [--into W] straight up / down D m
+    rammp turn DEG                 turned DEG about the vertical through the tip (counter-clockwise seen from above)
+    rammp point-down               turned about the tip until the tool points straight down
+    rammp joint J DEG              joint J (1..7) alone by DEG
     rammp tip DX DY                the utensil's tip seen DX, DY m (base frame) from where the tip model puts it, at the
                                    arm's pose now: tip_px moved to match (state_dir/wrist_mount.json). Never moves.
-    rammp gripper open|close       setting up: open with the fork's block hung on the closed fingers by hand (the fork
-                                   held: calibrate-wrist before a fork_look exists), close to take it off (not held)
+    rammp gripper open|close       open: the fork held; close: not held (in the opening after a stopped step: that step
+                                   by hand; else setting up -- the block hung on the closed fingers by hand, or taken
+                                   off)
     rammp setup [step ...]         after the arm moved against the table, the bowl or the user: each step in turn
                                    (site, home, scene, overlook, bowl, deliver); Enter runs it, s skips it
 
@@ -56,14 +61,16 @@ import time
 
 import numpy as np
 
-from rammp_feeding import record, scene
+from rammp_feeding import jog, record, scene
 from rammp_feeding.config import CAPTURES, cfg, state_dir
+from rammp_feeding.fork import PICK_STEPS, PUT_STEPS
+from rammp_feeding.jog import ARGS as JOG_ARGS
 
 log = logging.getLogger("rammp")
 # --stop-after / --start-at per command (empty: the whole command / from its first stage)
 STAGES = dict(acquire=(("over", "hover30", "hover10", "plunge"), ("over", "scoop")),
               deliver=(("swing", "present", "bite"), ("swing", "present", "bite", "retract")))
-STAGES.update({"pick-fork": (("above", "insert", "open"), ()), "put-fork": (("above", "insert", "release"), ())})
+STAGES.update({"pick-fork": (PICK_STEPS, PICK_STEPS), "put-fork": (PUT_STEPS, PUT_STEPS)})
 TIP_FREE = ("check", "state", "capture", "calibrate-wrist", "gripper")   # (and home --direct): no tip model, no wrist
                                                                           # camera
 POSES = CAPTURES + ("fork_look",)                   # rammp capture: the site's poses, and over the fork's stand
@@ -241,13 +248,18 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="rammp", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", choices=["check", "state", "home", "detect", "perceive", "acquire", "rise", "deliver",
                                         "retract", "feed", "locate-scene", "calibrate-scene", "calibrate-wrist",
-                                        "capture", "setup", "pick-fork", "put-fork", "find-fork", "gripper", "tip"])
+                                        "capture", "setup", "pick-fork", "put-fork", "find-fork", "gripper", "tip",
+                                        *JOG_ARGS])
     ap.add_argument("name", nargs="*", help="capture: " + " | ".join(POSES) + "; setup: its steps (default: all); "
-                    "gripper: open | close; tip: DX DY (m)")
+                    "gripper: open | close; tip: DX DY (m); move: DX DY DZ (m); up, down: D (m); turn: DEG; "
+                    "joint: J DEG")
     ap.add_argument("--plan", action="store_true")
     ap.add_argument("--stop-after", default="", help="acquire: over | hover30 | hover10 | plunge; deliver: swing | "
-                    "present | bite; pick-fork: above | insert | open; put-fork: above | insert | release")
-    ap.add_argument("--start-at", default="", help="acquire: over | scoop; deliver: swing | present | bite | retract")
+                    "present | bite; pick-fork, put-fork: a step")
+    ap.add_argument("--start-at", default="", help="acquire: over | scoop; deliver: swing | present | bite | retract; "
+                    "pick-fork, put-fork: a step")
+    ap.add_argument("--into", default="", help="move, up, down, turn, point-down, joint: what the move goes into "
+                    "(bowl,stand,user)")
     ap.add_argument("--no-wait-open", action="store_true")
     ap.add_argument("--bites", type=int, default=99)
     ap.add_argument("--direct", action="store_true")
@@ -265,13 +277,18 @@ def main(argv=None) -> int:
         ap.error("rammp setup [%s ...]" % " | ".join(STEPS))
     if a.command == "gripper" and (len(a.name) != 1 or a.name[0] not in ("open", "close")):
         ap.error("rammp gripper open | close")
-    if a.command == "tip":
+    if a.command in ("tip", *JOG_ARGS):
         try:
-            shift = [float(v) for v in a.name]
+            nums = [float(v) for v in a.name]
         except ValueError:
-            shift = []
-        if len(shift) != 2:
+            nums = []
+        if a.command == "tip" and len(nums) != 2:
             ap.error("rammp tip DX DY (m, base frame: where the tip is seen, less where the model puts it)")
+        if a.command in JOG_ARGS and len(nums) != JOG_ARGS[a.command]:
+            ap.error("rammp move DX DY DZ | up D | down D | turn DEG | point-down | joint J DEG (m, deg)")
+    into = tuple(w for w in a.into.split(",") if w)
+    if not set(into) <= {"bowl", "stand", "user"}:
+        ap.error("--into: bowl, stand, user (comma-separated)")
     import signal
 
     def _stop(*_):
@@ -294,6 +311,8 @@ def main(argv=None) -> int:
         if a.command == "find-fork":                 # (the wrist camera, without the fork's measurements)
             from rammp_feeding.fork import AtStand
             arm = Arm(robot, held=AtStand())
+        elif a.command in JOG_ARGS:                  # (what the gripper holds: the fork, or the empty gripper)
+            arm = Arm(robot, held=jog.held())
         else:
             arm = Arm(robot, measured=not (a.command in TIP_FREE or a.command == "home" and a.direct))
         from rammp_feeding.scene_camera import publish
@@ -341,21 +360,24 @@ def main(argv=None) -> int:
             rc = run(robot, arm, a.name or STEPS)
         elif c == "tip":
             from rammp_feeding.setup_steps import shift_tip
-            shift_tip(arm, shift)
+            shift_tip(arm, nums)
+        elif c in JOG_ARGS:
+            jog.run(arm, c, nums, into)
         elif c in ("pick-fork", "put-fork", "find-fork", "gripper"):
             from rammp_feeding import fork
             if c != "gripper" and not fork.used():
                 raise RuntimeError("no stand to pick the fork from here (utensil.pick.use false)")
             g = fork.Gripper(robot.gripper, robot.gripper_position)
             if c == "pick-fork":
-                log.info("  %s", fork.pick_up(robot, arm, g, out=fork.record_dir("pick_fork"), stop_after=a.stop_after))
+                log.info("  %s", fork.pick_up(robot, arm, g, out=fork.record_dir("pick_fork"), stop_after=a.stop_after,
+                                              start_at=a.start_at))
             elif c == "put-fork":
-                log.info("  %s", fork.put_down(robot, arm, g, stop_after=a.stop_after))
+                log.info("  %s", fork.put_down(robot, arm, g, stop_after=a.stop_after, start_at=a.start_at))
             elif c == "gripper":
                 fork.by_hand(g, a.name[0] == "open")
             else:
                 fork.look(robot, arm, fork.record_dir("find_fork"))
-        if c in ("home", "detect", "rise", "retract", "acquire", "deliver", "pick-fork", "put-fork"):
+        if c in ("home", "detect", "rise", "retract", "acquire", "deliver", "pick-fork", "put-fork", *JOG_ARGS):
             report(arm, "now")
     except (MoveError, RuntimeError, OSError, ValueError) as e:      # (FileNotFoundError is an OSError)
         log.error("\n  STOPPED: %s", e)

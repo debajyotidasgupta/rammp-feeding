@@ -1,56 +1,58 @@
-"""The fork on its stand (utensil.pick): it hangs tines down, a block on its handle with a rectangular hole on top. The
-fingers go into the hole closed and open there, holding the block from inside; lifting it lifts the fork off the
-stand. The gripper is commanded here and nowhere else.
+"""The fork on its stand (utensil.pick): it hangs tines down, a block on its handle with a rectangular opening on top.
+The fingers go into the opening closed and open there, holding the block from inside; lifting it lifts the fork off
+the stand. The gripper is commanded here and nowhere else. Two kinds of holder (utensil.pick.holder): side -- the fork
+leaves and comes back through an open side, its seat kept against a taped strip on the stand; top -- straight up out of
+it and straight back down into the same opening.
 
-  find      from fork_look (the wrist camera over the stand, the gripper empty and pointing down): one colour frame and a
-            depth median from frames after the arm stopped; SAM3 on utensil.pick.prompts (the opening, whatever colour
-            the block is); for the best-scored mask, the rim -- the block's top: the median height of the depth points in
-            a ring just outside the mask (rim_ring_px), those within inlier_m of it (the opening's own depth is its
-            floor) -- then the mask's pixels laid on the rim's height: their centroid the opening's centre, their
-            principal axis its long side, their extent its size (refused outside min_opening_m .. max_opening_m); its
-            floor the median height of the depth inside the mask (refused when the finger ends, insert_m under the
-            rim, would come within floor_clear_m of it); the centre shifted by look_offset_m (the site's correction
-            for what the camera sees from fork_look, where every find is made; the strip's end too)
-  pick_up   from feeding_start, the gripper empty: the fingers closed; a planned path to fork_look; the opening found;
-            the fingers pointing straight down, the axis they open along (fingers_open_along_tool) along the opening's
-            long side (refused when that turns them more than max_turn_deg from fork_look's; of the two ways round, the
-            one whose way in keeps the joints furthest from their limits); straight over the opening (above_m),
-            straight down into it (insert_m under the rim);
-            the fingers open (the hold) -- where the arm node serves their position, refused unless the opening's end
-            walls stopped them short of open (lock_margin: else they are not in it), closed again first; straight up
-            (lift_m), the block off its seat; straight out through the holder's open side (slide_m across the
-            opening's long side, the way open_side points: away from the stand's post); the fingers opened again at
-            hold_force (a firm hold for the meal); a planned path to fork_look, the holder now empty, and the stand's
-            strip found there (strip): the seat -- the opening's centre and the fingers' turn -- kept in the strip's
-            frame, and where the fork hangs in the camera's frame (fork_px: SAM3's fork); a planned path to
-            feeding_start
-  strip     the stand's marker, from fork_look: SAM3 on stand_prompts (the tape along the stand's arm to its seat); its
-            depth points between the table and the fingers' ends, outside the utensil's image region; the best-scored
-            with stand_min_points: its post end (the tape's clean cut, on its centreline) and its direction toward
-            the seat, on the base's level; the median of stand_reads readings (looked at again while they spread)
-  put_down  from feeding_start holding the fork: a planned path to fork_look; the strip found and the seat placed from
-            it (refused when the stand moved more than max_stand_move_m or turned more than max_stand_turn_deg since the
-            pick, or no strip: put the fork back by hand; refused, too, when the fork hangs more than grip_shift_tol_m
-            (at its tines' depth) from where it hung at the pick: it moved in the fingers); a planned path beside the open
-            side at the lift's height, the fingers back to gripper_force;
-            straight in through it; straight down onto the seat (the guard's stop within seat_tol_m of it: seated, the
-            holder taking the fork's weight); the fingers close (they let go; refused unless they
-            closed); straight up out of the opening (above_m over the rim); a planned path to feeding_start
-  stop_after  rammp pick-fork / put-fork stop at a stage for a first try: above (over the opening), insert (in it),
-            open / release (the fingers moved; the lift, or the way out, not yet)
-  recover   after a stop with the fingers in the opening: straight up out of it (holding the fork: to where the lift
-            ends; empty: above_m over the rim)
+The pick (rammp pick-fork), from feeding_start with the gripper empty, step by step (--stop-after / --start-at):
+  look      the fingers closed; a planned path to fork_look (the wrist camera over the stand, pointing down)
+  hover     the opening found (find); the fingers pointing straight down, the axis they open along
+            (fingers_open_along_tool) along the opening's long side (refused past max_turn_deg from fork_look's; of the
+            two ways round, the one whose way in keeps the joints furthest from their limits); a planned path to that
+            pose above_m over the rim, the way in and up checked from the arm shape it ends in (min_room_deg)
+  in        straight down into the opening, insert_m under the rim
+  hold      the fingers opened: where the arm node serves their position, refused unless the opening's end walls stopped
+            them lock_margin short of open (else not in it: closed again)
+  lift      straight up lift_m, the block off its seat
+  out       a side holder: straight out through its open side (slide_m, the way open_side points), then fork_look again,
+            the empty stand's strip found (strip) and the seat kept in its frame, with where the fork hangs in the
+            camera's frame (fork_px). Both: the fingers' firm hold for the meal (hold_force). Then a planned path home
+The put-back (rammp put-fork), holding the fork:
+  back      the fingers soft again. A top holder: a planned path back to the joints the lift ended at. A side holder: a
+            planned path to fork_look, the strip found and the seat placed from it (refused when the stand moved more
+            than max_stand_move_m or turned more than max_stand_turn_deg, or the fork hangs more than grip_shift_tol_m
+            from where it hung at the pick), a planned path beside the open side, straight in through it
+  lower     straight down onto the seat (the guard's stop within seat_tol_m of its depth: seated, the holder taking the
+            fork's weight)
+  release   the fingers closed: refused unless they moved lock_margin from where the walls held them
+  up        straight up out of the opening, above_m over the rim. Then a planned path home
+recover   after a stop with the fingers in the opening: straight up out of it (holding the fork: to where the lift ends;
+          empty: above_m over the rim) -- the first thing a pick or put-back from its first step does
+
+find      from fork_look: one colour frame and a depth median from frames after the arm stopped; SAM3 on
+          utensil.pick.prompts (the opening, whatever colour the block is); for the best-scored mask, the rim -- the
+          block's top: the median height of the depth points in a ring just outside the mask (rim_ring_px), those within
+          inlier_m of it -- or, where the depth cannot read the block, the height that gives the mask the opening's
+          ruler size (opening_m); the mask's pixels laid on the rim's height: their centroid the opening's centre, their
+          principal axis its long side, their extent its size (outside min_opening_m .. max_opening_m: the next mask);
+          refused when the finger ends, insert_m under the rim, would come within floor_clear_m of the opening's floor.
+          The centre shifted by look_offset_m and the long side turned by look_turn_deg: the site's correction for the
+          camera's mount as seen from fork_look, where every find is made
+strip     the stand's marker, from fork_look: SAM3 on stand_prompts (the tape along the stand's arm to its seat); its
+          depth points between the table and the fingers' ends, outside the utensil's image region; the best-scored
+          with stand_min_points: its post end and its direction toward the seat, on the base's level; the median of
+          stand_reads readings (looked at again while they spread)
 
 The utensil's state (state_dir/utensil_state.json): holding (the fork in the gripper), in_holder (the fingers in the
-opening: written before going in, cleared once out), where it was picked up (the opening, the fingers' orientation, the
-joints where the lift ended: what recover needs) and the seat in the stand's strip's frame (what put_down places it by,
-wherever the stand is then). The place is cleared once the fork is back: the next pick finds it anew. With
-utensil.pick.use false the fork is put in by hand and is always held.
+opening: written before going in, cleared once out), the opening and the fingers' orientation (hole, R: what a later
+step and recover need), where the walls held the fingers (held_at), the joints where the lift ended (lifted_joints),
+the seat in the strip's frame (seat) and where the stand was last seen (stand: the collision world keeps its block).
+With utensil.pick.use false the fork is put in by hand and is always held.
 
 While the routine runs the arm holds AtStand: the empty gripper (its fingertips the tip) or the fork (its measured
-tip), checked against the table (workspace.table_height_m) and kept above it but in the stand's own column. The
-planner's world is the meal's (scene.world), the stand's block in it once found (and kept: utensil_state.json's
-stand, where it was last seen): the planner keeps the arm off it; the moves into and out of it are ours.
+tip), kept above the table but in the stand's own column. The planner's world is the meal's without the stand's block
+and with the table at its own height (the gripper goes down to the stand: our checks keep the fingertips and the fork
+over the table); the moves into and out of the holder are ours.
 """
 
 from __future__ import annotations
@@ -84,6 +86,11 @@ def used() -> bool:
     return bool(cfg.get("utensil.pick.use", False))
 
 
+def top() -> bool:
+    """The holder lets the fork out straight up (utensil.pick.holder top), not through an open side (side)."""
+    return str(P().get("holder", "side")) == "top"
+
+
 # ------------------------------------------------------------------ the utensil's state
 def _state_file() -> Path:
     return state_dir() / "utensil_state.json"
@@ -107,8 +114,8 @@ def holding() -> bool:
 def need() -> None:
     """The routine's own values set (RuntimeError naming what is not): a stand (utensil.pick.use), the table it keeps
     above (workspace.table_height_m), the finger ends' ruler and the wrist camera's mount (fingertips_in_tool)."""
-    missing = [k for k in ("workspace.table_height_m", "utensil.pick.glass_to_fingertips_m", "utensil.pick.open_side")
-               if cfg.get(k, None) is None]
+    missing = [k for k in ("workspace.table_height_m", "utensil.pick.glass_to_fingertips_m") +
+               (() if top() else ("utensil.pick.open_side",)) if cfg.get(k, None) is None]
     if not used():
         missing.insert(0, "utensil.pick.use (no stand to pick the fork from here)")
     if scene.CAM_IN_TOOL is None:
@@ -133,7 +140,8 @@ class AtStand(Held):
     """The empty gripper (tip None: the closed fingertips lead, any tilt) or the fork (tip: its measured tip in the tool
     frame; its tilt the fork's rule) during the stand routine: kept above the table (motion.free_space's floor over
     workspace.table_extent_m) but in the stand's own column round the opening (at), where the fingers go in and the fork
-    hangs; the planner's world the meal's (scene.world: the table, the bowl once read, the stand once known)."""
+    hangs; the planner's world the meal's but the stand, the table at its own height (the gripper goes down to the
+    stand: these checks keep its fingertips and the fork above the table)."""
     camera = True
 
     def __init__(self, at=None, tip=None):
@@ -152,7 +160,7 @@ class AtStand(Held):
         return -math.inf
 
     def push_world(self, robot) -> None:
-        scene.push_world(robot)
+        scene.write_world(robot, scene.world(stand=False, raise_table=False))
 
 
 def _fork(arm: Arm, at) -> AtStand:
@@ -178,18 +186,20 @@ def _grip(g: Gripper, position: float, force: float | None = None) -> Optional[f
     return g.position()
 
 
-def _straight(arm: Arm, T, R, mps: float, label: str, check: str) -> None:
+def _straight(arm: Arm, T, R, mps: float, label: str, check: str, away: bool = False,
+              impedance: str | None = None) -> None:
     """A straight move at the stand, slow, our contact guard at guards.torque_step_nm.fork (low: the stand is light);
     a stop says what to check. Its IK steps short enough that a turn about the vertical (the fingers' other way round)
-    stays a continuous path."""
+    stays a continuous path. away: backing out after a stop, the guard off -- the press a stop leaves on the stand
+    lets go as it rises, and reads as a new contact. impedance: a motion.impedance entry, the move run compliant."""
     from rammp_feeding.geometry import rot_log
     T0, R0 = arm.tool()
     turn = math.degrees(float(np.linalg.norm(rot_log(np.asarray(R) @ R0.T))))
     L = float(np.linalg.norm(np.asarray(T) - T0))
     step = max(1e-4, min(0.005, L / max(1, math.ceil(turn / 6.0))))
     try:
-        arm.straight(T, R, mps, label, step_m=step, inside=("stand",),
-                     torque_limit=float(cfg.guards.torque_step_nm.fork))
+        arm.straight(T, R, mps, label, step_m=step, inside=("stand",), torque_stop=not away,
+                     torque_limit=float(cfg.guards.torque_step_nm.fork), impedance=impedance)
     except MoveError as e:
         if "torque" in str(e):
             raise MoveError("%s -- %s; nothing else moved" % (e, check))
@@ -260,6 +270,7 @@ def find(robot, arm: Arm, out: Path | None = None) -> Hole:
             o = scene.camera_pose(arm, q)[0]
             h = opening(d.mask, float(o[2] - (o[2] - h.centre[2]) * float(known[1]) / h.size_m[1]), arm.cam, arm, q)
         h.centre = h.centre + np.asarray(p.look_offset_m, float)
+        h.long_axis = _turn(h.long_axis, float(p.get("look_turn_deg", 0.0)))
         inside = W[_in(d.mask, uv), 2]
         h.depth_m = (float(known[2]) if known is not None else
                      float(h.centre[2] - np.median(inside)) if len(inside) >= int(p.min_points) else float("nan"))
@@ -270,9 +281,10 @@ def find(robot, arm: Arm, out: Path | None = None) -> Hole:
                  math.degrees(math.atan2(h.long_axis[1], h.long_axis[0])), len(z), d.score, d.label)
         lo_m, hi_m = (np.asarray(v, float) for v in (p.min_opening_m, p.max_opening_m))
         if np.any(np.asarray(h.size_m) < lo_m) or np.any(np.asarray(h.size_m) > hi_m):
-            raise MoveError("the opening reads %.1f x %.1f mm, not within %.0f x %.0f .. %.0f x %.0f mm "
-                            "(utensil.pick.min_opening_m .. max_opening_m): not the holder's, or the closed fingers do "
-                            "not fit" % (*(1000 * np.array(h.size_m)), *(1000 * lo_m), *(1000 * hi_m)))
+            why = ("the opening reads %.1f x %.1f mm, not within %.0f x %.0f .. %.0f x %.0f mm (utensil.pick."
+                   "min_opening_m .. max_opening_m): not the holder's, or the closed fingers do not fit"
+                   % (*(1000 * np.array(h.size_m)), *(1000 * lo_m), *(1000 * hi_m)))
+            continue                                    # (a mask of the whole block: the next one)
         need = float(p.insert_m) + float(p.floor_clear_m)
         if not h.depth_m >= need:
             deep = "no depth inside it: not known how" if math.isnan(h.depth_m) else "%.0f mm" % (1000 * h.depth_m)
@@ -325,6 +337,23 @@ def insertion(arm: Arm, R_look: np.ndarray, h: Hole) -> tuple[np.ndarray, list]:
     if best is None:
         raise MoveError(why)
     return best[1], best[2]
+
+
+def room_in(arm: Arm, h: Hole, R: np.ndarray) -> None:
+    """From the arm's own joints over the opening (the planner may end in its own shape there): the straight lines in
+    and up as they will run keep every joint min_room_deg from its limit, else MoveError (nothing moved): a line run to
+    a joint's limit leaves the arm where the driver refuses any move."""
+    q, worst = arm.q(), math.inf
+    for a_, b_ in ((P().above_m, -P().insert_m), (-P().insert_m, P().lift_m - P().insert_m)):
+        A_, B_ = tool_at(h, R, float(a_)), tool_at(h, R, float(b_))
+        n = max(4, int(math.ceil(float(np.linalg.norm(B_ - A_)) / 0.005)))
+        path, why = arm.homotopy(q, lambda s, A_=A_, B_=B_: (A_ + (B_ - A_) * s, R), n)
+        if path is None:
+            raise MoveError("the way into the opening from this arm shape: %s -- not going in" % why)
+        q, worst = path[-1], min(worst, min(arm.margin(p) for p in path))
+    if worst < float(P().min_room_deg):
+        raise MoveError("the way into the opening from this arm shape takes a joint %.1f deg from its limit (at least "
+                        "%.1f) -- not going in" % (worst, float(P().min_room_deg)))
 
 
 def _level(v) -> np.ndarray:
@@ -505,7 +534,11 @@ def tool_at(h: Hole, R: np.ndarray, dz: float) -> np.ndarray:
     return h.centre + np.array([0.0, 0.0, dz]) - R @ fingertips_in_tool()
 
 
-# ------------------------------------------------------------------ the routine
+# ------------------------------------------------------------------ the routine, step by step
+PICK_STEPS = ("look", "hover", "in", "hold", "lift", "out")   # rammp pick-fork [--start-at S] [--stop-after S]
+PUT_STEPS = ("back", "lower", "release", "up")                # rammp put-fork [--start-at S] [--stop-after S]
+
+
 def _no_step(name: str, fraction: float, message: str) -> None:
     log.info("  [%s] %s", name, message)
 
@@ -525,161 +558,277 @@ def record_dir(name: str) -> Path | None:
 
 
 def by_hand(g: Gripper, hold: bool) -> None:
-    """rammp gripper open|close, for setting up: open, the block hung on the closed fingers by hand -- the fork held
-    (calibrate-wrist can run before a fork_look exists); close, the fork taken off -- not held. Where it stood is not
+    """rammp gripper open|close: open -- the fork held; close -- not held. With the fingers in the opening (in_holder:
+    a pick or put-back stopped there) a step taken by hand, its place kept (pick-fork / put-fork --start-at go on from
+    it); elsewhere, for setting up (the block hung on the closed fingers by hand, or taken off), where it stood is not
     known: put-fork refuses it."""
-    _grip(g, float(P().gripper_open if hold else P().gripper_closed))
+    at = _grip(g, float(P().gripper_open if hold else P().gripper_closed))
+    log.info("    the fingers %s: at %s", "opened" if hold else "closed", "?" if at is None else "%.2f" % at)
     s = state()
+    if s.get("in_holder"):
+        save_state(dict(s, holding=hold, **({"held_at": at} if hold else {})))
+        return
     stand = s.get("stand") or s.get("hole")             # (where the stand was last seen: the world keeps it)
     save_state(dict(holding=hold, **({"stand": stand} if stand else {})))
 
 
-def pick_up(robot, arm: Arm, g: Gripper, step: Step = _no_step, out: Path | None = None, stop_after: str = "") -> dict:
-    p = P()
-    need()
-    if holding():
-        raise MoveError("the gripper already holds the fork -- rammp put-fork, or rammp gripper close to take it off")
-    recover(robot, arm)
-    arm.hold(AtStand())
-    step("look", 0.05, "Looking for the fork")
-    _grip(g, float(p.gripper_closed))                  # closed: they go into the opening
-    arm.travel(scene.captured("fork_look"), "to fork_look")
-    step("find", 0.2, "Finding the fork's holder")
-    h = sensing.now().opening(robot, arm, out)
-    R, over = insertion(arm, arm.tool()[1], h)
-    arm.hold(AtStand(h.centre))
-    step("grasp", 0.35, "Picking up the fork")
-    arm.travel(over, "over the fork")
-    tips = arm.tool()[0] + R @ fingertips_in_tool()
+@dataclass
+class Run:
+    """What the steps share: the robot, the arm, the gripper, the record, the progress callback, and the opening and
+    the fingers' orientation once found (from the utensil's state when a run starts at a later step)."""
+    robot: object
+    arm: Arm
+    g: Gripper
+    out: Optional[Path]
+    step: Step
+    h: Optional[Hole] = None
+    R: Optional[np.ndarray] = None
+
+    def load(self) -> None:
+        s = state()
+        if not s.get("hole") or s.get("R") is None:
+            raise MoveError("no opening found yet in this pick -- start at look (or hover)")
+        self.h, self.R = Hole.from_json(s["hole"]), np.asarray(s["R"], float)
+
+    def save(self, **kw) -> None:
+        save_state(dict(state(), hole=self.h.to_json(), R=self.R.round(6).tolist(), stand=self.h.to_json(), **kw))
+
+
+def look_step(r: Run) -> None:
+    """The fingers closed (they go into the opening closed); a planned path to fork_look."""
+    r.arm.hold(AtStand())
+    r.step("look", 0.05, "Looking for the fork")
+    _grip(r.g, float(P().gripper_closed))
+    r.arm.travel(scene.captured("fork_look"), "to fork_look")
+
+
+def hover_step(r: Run) -> None:
+    """The opening found from here; a planned path to its pose above_m over it (the planner's arm shape, inside its
+    margins), the way in checked from the shape it ends in (room_in)."""
+    r.step("find", 0.2, "Finding the fork's holder")
+    r.h = sensing.now().opening(r.robot, r.arm, r.out)
+    r.R, over = insertion(r.arm, r.arm.tool()[1], r.h)
+    r.arm.hold(AtStand(r.h.centre))
+    r.step("grasp", 0.35, "Over the fork")
+    r.arm.travel(over, "over the fork", pose=True)
+    room_in(r.arm, r.h, r.R)
+    tips = r.arm.tool()[0] + r.R @ fingertips_in_tool()
     log.info("    the opening's centre (%.4f %.4f %.4f); the finger ends at (%.4f %.4f %.4f), %.1f mm off it across, "
-             "going in %.0f mm under the rim", *h.centre, *tips, 1000 * math.hypot(*(tips[:2] - h.centre[:2])),
-             1000 * float(p.insert_m))
-    if stop_after == "above":
-        return dict(stopped_after="above", opening_m=[round(float(v), 4) for v in h.centre],
-                    finger_ends_m=[round(float(v), 4) for v in tips])
-    s = dict(holding=False, in_holder=True, hole=h.to_json(), R=R.round(6).tolist())
-    save_state(s)                                      # (the fingers going in: a stop from here comes back out)
-    _straight(arm, tool_at(h, R, -float(p.insert_m)), R, float(p.insert_mps), "into the opening",
-              "the fingers met the block: off its opening? check the stand and the opening's centre (find-fork)")
-    if stop_after == "insert":
-        return dict(stopped_after="insert")
-    at = _grip(g, float(p.gripper_open))               # open in the opening: its end walls stop them, the hold
+             "going in %.0f mm under the rim", *r.h.centre, *tips, 1000 * math.hypot(*(tips[:2] - r.h.centre[:2])),
+             1000 * float(P().insert_m))
+    save_state(dict(holding=False, in_holder=False, hole=r.h.to_json(), R=r.R.round(6).tolist(), stand=r.h.to_json()))
+
+
+def in_step(r: Run) -> None:
+    """Straight down into the opening, insert_m under its rim (written first: a stop from here comes back out)."""
+    r.save(in_holder=True)
+    _straight(r.arm, tool_at(r.h, r.R, -float(P().insert_m)), r.R, float(P().insert_mps), "into the opening",
+              "the fingers met the block: off its opening? check the stand and the opening's centre (find-fork)",
+              impedance=P().get("impedance", None))
+
+
+def hold_step(r: Run) -> None:
+    """The fingers opened in the opening: its walls stop them -- the hold (where the arm node serves their position,
+    refused unless they stopped lock_margin short of open: else nothing held them, closed again first)."""
+    p = P()
+    at = _grip(r.g, float(p.gripper_open))
     if at is None:
         log.info("    the arm node serves no gripper position: the hold is not checked")
     elif at < float(p.gripper_open) + float(p.lock_margin):
-        _grip(g, float(p.gripper_closed))
+        _grip(r.g, float(p.gripper_closed))
         raise MoveError("the fingers opened fully (%.2f): nothing held them -- not in the opening; closed again, the "
                         "arm where it is (the next pick or put comes straight back up first)" % at)
     else:
         log.info("    the fingers stopped at %.2f (open: %.2f): held by the opening's walls", at, float(p.gripper_open))
-    save_state(dict(s, holding=True))
-    if stop_after == "open":
-        return dict(stopped_after="open")
-    arm.hold(_fork(arm, h.centre))
-    _straight(arm, tool_at(h, R, float(p.lift_m) - float(p.insert_m)), R, float(p.lift_mps), "lift the fork",
+    save_state(dict(state(), holding=True, held_at=at))
+
+
+def lift_step(r: Run) -> None:
+    """Straight up lift_m from where the fingers held it: the block off its seat."""
+    p = P()
+    r.arm.hold(_fork(r.arm, r.h.centre))
+    _straight(r.arm, tool_at(r.h, r.R, float(p.lift_m) - float(p.insert_m)), r.R, float(p.lift_mps), "lift the fork",
               "the block snug in the stand, or the lift dragging the stand: check it")
-    s = dict(s, holding=True, in_holder=False, lifted_joints=[float(v) for v in arm.q()])
-    save_state(s)
-    _straight(arm, arm.tool()[0] + float(p.slide_m) * open_side(h), R, float(p.lift_mps),
-              "out of the holder's open side", "the fork caught on the holder: check the stand")
-    _grip(g, float(p.gripper_open), float(p.hold_force))   # clear of the stand: a firm hold, the meal's moves don't shift it
-    step("seat", 0.7, "Looking at the empty holder")
-    arm.travel(scene.captured("fork_look"), "to fork_look")
-    E, a = sensing.now().strip(robot, arm, out, toward=h.centre)
-    rec = seat_record(h, R, E, a)
+    save_state(dict(state(), holding=True, in_holder=False, lifted_joints=[float(v) for v in r.arm.q()]))
+
+
+def out_step(r: Run) -> None:
+    """Clear of the holder, a firm hold for the meal (hold_force). A side holder: first straight out through its open
+    side (slide_m), then fork_look again and the seat kept in its strip's frame (and where the fork hangs in the
+    camera's frame), for the put-back to find wherever the stand is then. A top holder keeps the opening it was
+    picked from as its seat."""
+    p = P()
+    if not top():
+        _straight(r.arm, r.arm.tool()[0] + float(p.slide_m) * open_side(r.h), r.R, float(p.lift_mps),
+                  "out of the holder's open side", "the fork caught on the holder: check the stand")
+    _grip(r.g, float(p.gripper_open), float(p.hold_force))   # a firm hold: the meal's moves don't shift it
+    if top():
+        return
+    r.step("seat", 0.7, "Looking at the empty holder")
+    r.arm.travel(scene.captured("fork_look"), "to fork_look")
+    E, a = sensing.now().strip(r.robot, r.arm, r.out, toward=r.h.centre)
+    rec = seat_record(r.h, r.R, E, a)
     log.info("    the seat from the strip's post end: along %.1f, across %.1f, up %.1f mm (as utensil.pick."
              "seat_in_strip_m)", *(1000 * np.array([rec["along"], rec["across"], rec["up"]])))
-    px = sensing.now().fork_px(robot)
+    px = sensing.now().fork_px(r.robot)
     if px is None:
         log.info("    the fork in the fingers: not seen (%s) -- the put-back cannot check it", ", ".join(P().fork_prompts))
-    save_state(dict(s, seat=dict(rec, fork_px=px)))
-    record.event("fork_picked_up", hole=h.to_json())
-    step("home", 0.8, "Going home with the fork")
-    _home(robot, arm)                                  # (the arm holding AtStand's fork: a fresh Arm is the meal's)
-    return dict(holding=True, opening_m=[round(float(v), 3) for v in h.centre])
+    save_state(dict(state(), seat=dict(rec, fork_px=px)))
 
 
-def put_down(robot, arm: Arm, g: Gripper, step: Step = _no_step, stop_after: str = "") -> dict:
-    p = P()
-    need()
-    if not state().get("holding"):
-        raise MoveError("the fork is not in the gripper")
-    recover(robot, arm)                                # (a pick stopped in the opening: its lift finished first)
-    s = state()
-    if s.get("lifted_joints") and max_step(arm.q(), s["lifted_joints"]) <= float(cfg.motion.near_pose_deg):
-        h, R = Hole.from_json(s["hole"]), np.asarray(s["R"], float)    # lifted, never out: straight back down
-        arm.hold(_fork(arm, h.centre))
-        return _lower(robot, arm, g, s, h, R, step, stop_after)
+def back_step(r: Run) -> None:
+    """Over the seat at the lift's height, the fingers soft again (a firm hold drags the holder). A top holder: the
+    planned path back to where the lift ended over the opening it was picked from. A side holder: fork_look, the
+    strip found and the seat placed from it (refused when the stand moved or turned past max_stand_move_m /
+    max_stand_turn_deg, or the fork hangs more than grip_shift_tol_m from where it hung at the pick), a planned path
+    beside the open side, straight in through it."""
+    p, s = P(), state()
+    if s.get("lifted_joints") and max_step(r.arm.q(), s["lifted_joints"]) <= float(cfg.motion.near_pose_deg):
+        r.load()                                       # (lifted, never moved on: straight back down)
+        r.arm.hold(_fork(r.arm, r.h.centre))
+        _grip(r.g, float(p.gripper_open))
+        return
+    if top():
+        if not s.get("lifted_joints"):
+            raise MoveError("where the fork was picked from is not known -- put it back by hand (rammp gripper close)")
+        r.load()
+        r.arm.hold(_fork(r.arm, r.h.centre))
+        r.step("place", 0.2, "Taking the fork back to its holder")
+        r.arm.travel(s["lifted_joints"], "back over the holder")
+        _grip(r.g, float(p.gripper_open))
+        return
     if not s.get("seat"):
         raise MoveError("where the fork's seat is on its stand is not known -- put it back by hand "
                         "(rammp gripper close)")
-    arm.hold(_fork(arm, Hole.from_json(s["seat"]["hole"]).centre))
-    step("place", 0.1, "Finding the fork's stand")
+    r.arm.hold(_fork(r.arm, Hole.from_json(s["seat"]["hole"]).centre))
+    r.step("place", 0.1, "Finding the fork's stand")
     from rammp_feeding.cli import home_tilt_cap
-    arm.travel(scene.captured("fork_look"), "to fork_look", tilt_cap=home_tilt_cap(arm.q()))
-    E, a = sensing.now().strip(robot, arm, record_dir("put_fork"), like=s["seat"]["a"])
-    then, now = s["seat"].get("fork_px"), sensing.now().fork_px(robot)
+    r.arm.travel(scene.captured("fork_look"), "to fork_look", tilt_cap=home_tilt_cap(r.arm.q()))
+    E, a = sensing.now().strip(r.robot, r.arm, record_dir("put_fork"), like=s["seat"]["a"])
+    then, now = s["seat"].get("fork_px"), sensing.now().fork_px(r.robot)
     if then is None or now is None:
         log.info("    the fork in the fingers: not seen %s -- not checked", "at the pick" if then is None else "now")
     else:
         moved = (math.hypot(now[0] - then[0], now[1] - then[1])               # (pixels, at the tines' depth)
-                 * float(cfg.utensil.glass_to_tip_m) / float(arm.cam.colour.fx))
+                 * float(cfg.utensil.glass_to_tip_m) / float(r.arm.cam.colour.fx))
         log.info("    the fork in the fingers: %.1f mm from where it hung at the pick (its tines' depth)", 1000 * moved)
         if moved > float(p.grip_shift_tol_m):
             raise MoveError("the fork has moved %.1f mm in the fingers since the pick (its tines, at most %.1f): the "
                             "block would land off its seat -- seat the fork in the fingers by hand, or put it back by "
                             "hand (rammp gripper close)" % (1000 * moved, 1000 * float(p.grip_shift_tol_m)))
-    h, R, open_dir = seat_now(s["seat"], E, a)
-    arm.hold(_fork(arm, h.centre))
-    over = tool_at(h, R, float(p.lift_m) - float(p.insert_m))
-    q0 = arm.q()
+    r.h, r.R, open_dir = seat_now(s["seat"], E, a)
+    r.arm.hold(_fork(r.arm, r.h.centre))
+    over = tool_at(r.h, r.R, float(p.lift_m) - float(p.insert_m))
+    q0 = r.arm.q()
     seeds = [s.get("lifted_joints", q0), q0] + [list(np.asarray(q0) + [0, 0, 0, 0, 0, 0, t]) for t in (180.0, -180.0)]
-    q_in = max((v for v in (arm.ik(over + float(p.slide_m) * open_dir, R, sd) for sd in seeds) if v is not None),
-               key=arm.margin, default=None)
+    q_in = max((v for v in (r.arm.ik(over + float(p.slide_m) * open_dir, r.R, sd) for sd in seeds) if v is not None),
+               key=r.arm.margin, default=None)
     if q_in is None:
         raise MoveError("beside the holder's open side is out of the arm's reach -- put the fork back by hand")
-    step("place", 0.3, "Taking the fork back to its stand")
-    arm.travel(q_in, "beside the holder's open side")
-    _grip(g, float(p.gripper_open))                    # soft again before the stand: a firm hold drags the holder
-    _straight(arm, over, R, float(p.lift_mps), "in through the open side", "the fork met the holder: check the stand")
-    log.info("    over the seat: the opening's centre (%.4f %.4f %.4f)", *h.centre)
-    if stop_after == "above":                         # (over the seat: the next put-back goes straight down)
-        save_state(dict(s, hole=h.to_json(), R=R.round(6).tolist(), lifted_joints=[float(v) for v in arm.q()]))
-        return dict(stopped_after="above", opening_m=[round(float(v), 4) for v in h.centre])
-    return _lower(robot, arm, g, dict(s, hole=h.to_json(), R=R.round(6).tolist()), h, R, step, stop_after)
+    r.step("place", 0.3, "Taking the fork back to its stand")
+    r.arm.travel(q_in, "beside the holder's open side")
+    _grip(r.g, float(p.gripper_open))
+    _straight(r.arm, over, r.R, float(p.lift_mps), "in through the open side",
+              "the fork met the holder: check the stand")
+    log.info("    over the seat: the opening's centre (%.4f %.4f %.4f)", *r.h.centre)
+    r.save(lifted_joints=[float(v) for v in r.arm.q()])
 
 
-def _lower(robot, arm: Arm, g: Gripper, s: dict, h: Hole, R: np.ndarray, step: Step, stop_after: str) -> dict:
-    """From over the seat (the lift's height): down onto it, the fingers closed (it lets go), up out, home."""
+def lower_step(r: Run) -> None:
+    """Straight down onto the seat: the guard's stop within seat_tol_m of the seat's depth is the holder taking the
+    fork's weight (seated); higher, the block is on something else."""
     p = P()
-    s = dict(s, in_holder=True)
-    save_state(s)
-    seat = tool_at(h, R, -float(p.insert_m))
+    r.save(in_holder=True)
+    seat = tool_at(r.h, r.R, -float(p.insert_m))
     try:
-        _straight(arm, seat, R, float(p.insert_mps), "into the stand",
-                  "the block met the stand: off its place? check the stand")
-    except MoveError as e:                             # the holder taking the fork's weight trips the guard: seated
-        short = float(arm.tool()[0][2] - seat[2])      # within seat_tol_m of the seat's depth, else the block is on
-        if "torque" not in str(e) or short > float(p.seat_tol_m):    # something above it
+        _straight(r.arm, seat, r.R, float(p.insert_mps), "into the stand",
+                  "the block met the stand: off its place? check the stand", impedance=p.get("impedance", None))
+    except MoveError as e:
+        short = float(r.arm.tool()[0][2] - seat[2])
+        if "torque" not in str(e) or short > float(p.seat_tol_m):
             raise
         log.info("    seated %.0f mm above the seat's depth (the holder took the fork's weight)", 1000 * short)
-    if stop_after == "insert":
-        return dict(stopped_after="insert")
-    at = _grip(g, float(p.gripper_closed))             # closed: it lets go
+
+
+def release_step(r: Run) -> None:
+    """The fingers closed: they let go -- refused unless they closed at least lock_margin from where the walls held
+    them (held_at; or from open): in some blocks the fork's handle between them stops them short of closed."""
+    p = P()
+    at = _grip(r.g, float(p.gripper_closed))
+    held_at = state().get("held_at")
+    least = (float(p.gripper_open) if held_at is None else float(held_at)) + float(p.lock_margin)
     if at is None:
         log.info("    the arm node serves no gripper position: the release is not checked")
-    elif at < float(p.gripper_closed) - float(p.lock_margin):
-        raise MoveError("the fingers did not close (%.2f, closed: %.2f): still in the block -- the arm where it is"
-                        % (at, float(p.gripper_closed)))
-    save_state(dict(s, holding=False))
-    arm.hold(AtStand(h.centre))
-    if stop_after == "release":
-        return dict(stopped_after="release")
-    _straight(arm, tool_at(h, R, float(p.above_m)), R, float(p.lift_mps), "out of the opening",
-              "the fingers caught the block: check the stand")
-    save_state(dict(holding=False, stand=h.to_json()))   # (back on its stand: the next pick finds it anew; the world
-                                                         # keeps the stand where it was seen)
-    record.event("fork_put_down", hole=h.to_json())
+    elif at < least:
+        raise MoveError("the fingers did not close (%.2f, at least %.2f): still in the block -- the arm where it is"
+                        % (at, least))
+    else:
+        log.info("    the fingers closed to %.2f: let go", at)
+    save_state(dict(state(), holding=False))
+    r.arm.hold(AtStand(r.h.centre))
+
+
+def up_step(r: Run) -> None:
+    """Straight up out of the opening, above_m over the rim (the guard off: away from the stand)."""
+    _straight(r.arm, tool_at(r.h, r.R, float(P().above_m)), r.R, float(P().lift_mps), "out of the opening",
+              "the fingers caught the block: check the stand", away=True)
+    save_state(dict(holding=False, stand=r.h.to_json()))   # (back on its stand: the next pick finds it anew; the
+    record.event("fork_put_down", hole=r.h.to_json())     # world keeps the stand where it was seen)
+
+
+PICK = dict(look=look_step, hover=hover_step, **{"in": in_step}, hold=hold_step, lift=lift_step, out=out_step)
+PUT = dict(back=back_step, lower=lower_step, release=release_step, up=up_step)
+
+
+def _steps(r: Run, steps: dict, order: tuple, start_at: str, stop_after: str) -> str:
+    """Run order's steps from start_at, up to and including stop_after: the last one run."""
+    run = order[order.index(start_at or order[0]):]
+    if stop_after and stop_after not in run:
+        raise ValueError("--stop-after %s comes before --start-at %s" % (stop_after, start_at))
+    for name in run:
+        steps[name](r)
+        if name == stop_after:
+            return name
+    return run[-1]
+
+
+def pick_up(robot, arm: Arm, g: Gripper, step: Step = _no_step, out: Path | None = None, stop_after: str = "",
+            start_at: str = "") -> dict:
+    """The fork picked up: PICK_STEPS from start_at to stop_after (the whole routine: then home)."""
+    need()
+    r = Run(robot, arm, g, out, step)
+    if start_at in ("", "look", "hover"):
+        if holding():
+            raise MoveError("the gripper already holds the fork -- rammp put-fork, or rammp gripper close to take it "
+                            "off")
+        recover(robot, arm)
+        arm.hold(AtStand())
+    else:                                              # (on from a step that stopped: its opening and orientation)
+        r.load()
+        arm.hold(_fork(arm, r.h.centre) if holding() else AtStand(r.h.centre))
+    last = _steps(r, PICK, PICK_STEPS, start_at, stop_after)
+    if stop_after:
+        return dict(stopped_after=last, **({"opening_m": [round(float(v), 4) for v in r.h.centre]} if r.h else {}))
+    record.event("fork_picked_up", hole=r.h.to_json())
+    step("home", 0.8, "Going home with the fork")
+    _home(robot, arm)                                  # (the arm holding AtStand's fork: a fresh Arm is the meal's)
+    return dict(holding=True, opening_m=[round(float(v), 3) for v in r.h.centre])
+
+
+def put_down(robot, arm: Arm, g: Gripper, step: Step = _no_step, stop_after: str = "", start_at: str = "") -> dict:
+    """The fork hung back on its stand: PUT_STEPS from start_at to stop_after (the whole routine: then home)."""
+    need()
+    r = Run(robot, arm, g, None, step)
+    if start_at in ("", "back"):
+        if not holding():
+            raise MoveError("the fork is not in the gripper")
+        recover(robot, arm)                            # (a pick stopped in the opening: its lift finished first)
+    else:                                              # (on from a step that stopped: its opening and orientation)
+        r.load()
+        arm.hold(_fork(arm, r.h.centre) if holding() else AtStand(r.h.centre))
+    last = _steps(r, PUT, PUT_STEPS, start_at, stop_after)
+    if stop_after:
+        return dict(stopped_after=last, opening_m=[round(float(v), 4) for v in r.h.centre])
     step("home", 0.8, "Going home")
     _home(robot, arm)
     return dict(put_down=True)
@@ -687,7 +836,7 @@ def _lower(robot, arm: Arm, g: Gripper, s: dict, h: Hole, R: np.ndarray, step: S
 
 def recover(robot, arm: Arm) -> None:
     """The fingers in the opening after a stop (in_holder): straight up out of it, holding the fork to where the lift
-    ends, empty to above_m over the rim."""
+    ends, empty to above_m over the rim (the guard off: away from the stand)."""
     s = state()
     if not s.get("in_holder"):
         return
@@ -699,6 +848,6 @@ def recover(robot, arm: Arm) -> None:
     up = tool_at(h, R, float(p.lift_m) - float(p.insert_m) if held else float(p.above_m))
     if up[2] - T[2] > float(cfg.motion.arrived_m):
         _straight(arm, np.array([T[0], T[1], up[2]]), Rn, float(p.lift_mps), "lift the fork" if held else
-                  "out of the opening", "check the stand")
+                  "out of the opening", "check the stand", away=True)
     save_state(dict(s, in_holder=False, **({"lifted_joints": [float(v) for v in arm.q()]} if held else {})))
     arm.hold(_fork(arm, h.centre) if held else AtStand(h.centre))

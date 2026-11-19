@@ -41,12 +41,49 @@ actions (`start_meal`, `feed` for one bite, `finish_meal`) and nothing moves oth
 | `calibrate-wrist [--board]` | The wrist camera's mount and the fork's pixels, from the ChArUco board (`--board`: the sheet to print). |
 | `calibrate-scene` | The scene camera's pose through the board. |
 | `capture home\|overlook\|deliver\|fork_look` | The arm's joints now as that pose. Never moves. |
-| `pick-fork [--stop-after above\|insert\|open]` | The fork picked up from its stand (`above`: stop over the opening to check the fingers). |
-| `put-fork [--stop-after above\|insert\|release]` | The fork hung back on its stand. |
+| `pick-fork [--start-at S] [--stop-after S]` | The fork picked up from its stand, then home. Steps: `look`, `hover`, `in`, `hold`, `lift`, `out`. |
+| `put-fork [--start-at S] [--stop-after S]` | The fork hung back on its stand, then home. Steps: `back`, `lower`, `release`, `up`. |
 | `find-fork` | At fork_look: the opening, and whether the way in is reachable. Never moves. |
+| `gripper open\|close` | The fingers opened (the fork held) or closed (not held). In the opening after a stopped step, that step by hand. |
 | `tip DX DY` | The tip seen DX, DY m (base frame) off where the model puts it: the model moved to match. Never moves. |
 
 A command that cannot proceed refuses with the reason and leaves the arm still. Every command can be run again.
+Ctrl-C (or `docker kill --signal=SIGINT` on the command's container) cancels the move in flight.
+
+### The fork's steps
+| Step | Pick (`pick-fork`) |
+| --- | --- |
+| `look` | Fingers closed; to fork_look over the stand |
+| `hover` | The opening found; over it, `above_m` above the rim, the fingers along its long side |
+| `in` | Straight down, `insert_m` under the rim |
+| `hold` | Fingers opened until the opening's walls stop them |
+| `lift` | Straight up `lift_m` |
+| `out` | A side holder: out through its open side, the empty stand's strip read. Then a firm hold |
+
+| Step | Put-back (`put-fork`) |
+| --- | --- |
+| `back` | A top holder: back to where the lift ended. A side holder: the strip found, in through the open side over the seat |
+| `lower` | Straight down onto the seat |
+| `release` | Fingers closed: the fork let go |
+| `up` | Straight up out of the opening |
+
+`utensil.pick.holder` is `side` (the fork leaves through an open side, the lab's stand) or `top` (straight up and
+down, a box holder). A first try at a new or moved stand: `rammp pick-fork --stop-after hover`, check the fingers
+are centred over the opening, then `rammp pick-fork --start-at in`.
+
+### Small moves by hand
+One slow move each, from wherever the arm is, checked against the world like the module's own moves (a move into the
+bowl, the stand or the user names it with `--into bowl,stand,user`). Distances in metres, angles in degrees.
+
+| Command | What it does |
+| --- | --- |
+| `move DX DY DZ` | The tool straight by (DX, DY, DZ), base frame (x away from the base, z up), its orientation kept |
+| `up D` / `down D` | Straight up / down by D |
+| `turn DEG` | Turned about the vertical through the tip, counter-clockwise seen from above |
+| `point-down` | Turned about the tip until the tool points straight down |
+| `joint J DEG` | Joint J (1-7) alone by DEG |
+
+A move longer than `motion.jog.max_m` (0.20 m) or a turn past `motion.jog.max_deg` (90) is refused.
 
 ## Fakes
 Any sensing can be a stand-in, set in `local.yaml` under `fakes:`; the arm, the planner and the gripper stay real, so

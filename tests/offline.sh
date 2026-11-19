@@ -2,7 +2,7 @@
 # Everything that runs without the arm or ROS (any machine with numpy, scipy, Pillow, PyYAML): the unit tests, the fork
 # finder on real frames, the whole bite against tests/fake_robot.py for several piece and user positions, on both
 # test sites (tests/fixture.py: level, and tilt30), and the fork picked up from its stand and hung back round a bite
-# (both sites); a bite and the fork's round with the module's own fakes in place of the sensing (rammp_feeding/fakes.py).
+# (both sites; a top holder on tilt30); a bite and the fork's round with the module's own fakes in place of the sensing (rammp_feeding/fakes.py).
 # The ROS wiring: tests/test_ros.sh.
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -23,6 +23,8 @@ printf "== bite with the module's fakes (food, mouth)          "
 $PY tests/test_bite.py --fakes 2>&1 | tail -1 | tee /dev/stderr | grep -q "GOES THROUGH" || fail=1
 printf "== tilt30: the fork picked up, a bite, the fork hung back "   # the stand on the 30 deg arm, the user to its right
 RAMMP_TEST_SITE=tilt30 $PY tests/test_fork.py 2>&1 | tail -1 | tee /dev/stderr | grep -q "GOES THROUGH" || fail=1
+printf "== tilt30, a top holder (straight up, straight back down) "
+RAMMP_TEST_SITE=tilt30 $PY tests/test_fork.py --top 2>&1 | tail -1 | tee /dev/stderr | grep -q "GOES THROUGH" || fail=1
 for a in "" "--piece 0.012,0.01" "--user-offset 0,-0.04,0.03"; do   # the arm leaning 30 deg, the user to its right
   printf "== tilt30 bite %-31s " "$a"
   RAMMP_TEST_SITE=tilt30 $PY tests/test_bite.py $a 2>&1 | tail -1 | tee /dev/stderr | grep -qE "GOES THROUGH|AS EXPECTED" || fail=1

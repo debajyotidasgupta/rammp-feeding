@@ -224,20 +224,22 @@ def stand_box() -> dict | None:
                 dims=[along, across, down], rpy_deg=[0.0, 0.0, yaw])
 
 
-def world() -> dict:
+def world(stand: bool = True, raise_table: bool = True) -> dict:
     """RAMMP-CuRobo's world (arm.base_frame): the table raised to our tip floor, a hollow bowl (a floor up to
     bowl.floor_above_table_m and 12 wall boxes: a solid box would put the utensil over its opening inside it), the
     user's head and torso round the measured mouth (once measured), the fork's stand (once known: stand_box), the
     pedestal. The bowl grows by the workspace's error_m and its top by scene_error_m; the table's top rises by error_m,
     and its near edge (toward the arm) moves back by scene_error_m, at least table_clear_of_base_m from the base
     (table_x). With no reading of the bowl yet (the fork's routine before a meal): the site's table, its edge moved back
-    as a meal's first look has it, and no bowl."""
+    as a meal's first look has it, and no bowl. The fork's stand routine (AtStand) takes it without the stand and with
+    the table at its own height (stand, raise_table False): the gripper goes down to the stand, and our checks keep
+    its fingertips and the fork above the table but in the stand's column."""
     from rammp_feeding.scene_camera import in_use
     try:
         ws = workspace()
     except FileNotFoundError:
         ws = None
-    floor = float(cfg.motion.free_space.min_tip_above_table_m)
+    floor = float(cfg.motion.free_space.min_tip_above_table_m) if raise_table else 0.0
     ty = [float(v) for v in cfg.workspace.table_extent_m.y]
     obs = [dict(name="pedestal", position=[0.0, 0.0, -0.05], dims=[0.14, 0.14, 0.04])]   # (the planner's own: unpadded)
     if ws is None:
@@ -265,9 +267,9 @@ def world() -> dict:
     m = user_mouth()
     if m is not None:
         obs += user_obstacles(m)
-    stand = stand_box()
-    if stand is not None:
-        obs.append(stand)
+    box = stand_box() if stand else None
+    if box is not None:
+        obs.append(box)
     for o in obs:
         o["position"], o["dims"] = [float(v) for v in o["position"]], [float(v) for v in o["dims"]]
         o["rpy_deg"] = [float(v) for v in o.get("rpy_deg", [0.0, 0.0, 0.0])]

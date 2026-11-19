@@ -120,26 +120,28 @@ To pose the arm by hand: stop the arm node, move the arm with the Kinova Web App
    Then it goes home and runs `rammp check`.
 4. `rammp check`: every row OK.
 
-**A stand to pick the fork from** (the fork hangs tines down, a block on its handle with a rectangular opening on top,
-the holder taped along its arm to the seat; else skip this). In `local.yaml`: `utensil.pick.use: true`,
-`workspace.table_height_m`, `utensil.pick.glass_to_fingertips_m` (a ruler from the wrist camera's glass to the closed
-fingers' ends) and `utensil.pick.open_side` (`[x, y]`, base frame: the way the holder opens, along its tape, away from
-its post). Then:
+**A stand to pick the fork from** (the fork hangs tines down, a block on its handle with a rectangular opening on top;
+else skip this). In `local.yaml`: `utensil.pick.use: true`, `workspace.table_height_m`,
+`utensil.pick.glass_to_fingertips_m` (a ruler from the wrist camera's glass to the closed fingers' ends) and
+`utensil.pick.holder`: `side` for a holder the fork leaves through an open side (taped along its arm to the seat; then
+`utensil.pick.open_side`, `[x, y]` base frame: the way it opens, along its tape, away from its post), `top` for one it
+leaves straight up (a box). Where the wrist camera's depth cannot read the block (too near), `utensil.pick.opening_m`:
+the opening's `[short, long, deep]` by ruler. Then:
 1. Before a fork_look exists, for `rammp calibrate-wrist`: `rammp gripper close`, hang the block on the closed fingers
    by hand, `rammp gripper open` (the fork held); `rammp gripper close` takes it off.
 2. The fork on its stand, the gripper empty: pose the arm over it, pointing straight down, the fingers' opening axis
    (`utensil.pick.fingers_open_along_tool`) along the opening's long side, the opening and the tape in view: `rammp
    capture fork_look`.
 3. `rammp find-fork`: the opening's centre, size and depth, and whether the way in is reachable.
-4. `rammp pick-fork --stop-after above`, watching: the fingers must be over the opening's middle (a millimetre or two
-   off lands them on its border). If they are off, seat the fork with the fingers centring it (in it, `rammp gripper
-   open`), note the gripper's position (`rammp state`), go to fork_look and `rammp find-fork`, and set
-   `utensil.pick.look_offset_m` to the difference; never set it from misses seen afterwards.
-5. `rammp pick-fork` (in, open: the opening's walls must stop the fingers short of fully open; up; out through the open
-   side; the empty holder's tape found and the seat kept against it), then `rammp put-fork --stop-after above` (the tape
-   found again, wherever the stand is now; in through the open side; over the seat), then `rammp put-fork`. The fingers
-   are slow and soft and every move at the stand keeps the low `guards.torque_step_nm.fork`: the stand is light.
-6. The pick logs the seat from the strip's post end (`along, across, up`). Once a few picks agree, set
+4. `rammp pick-fork --stop-after hover`, watching: the fingers must be over the opening's middle (a millimetre or two
+   off lands them on its border). If they are off, move them over it by hand (`rammp move DX DY 0`, `rammp turn DEG`)
+   and add what it took to `utensil.pick.look_offset_m` (and `look_turn_deg`); then `rammp home` and step 4 again.
+5. `rammp pick-fork --start-at in --stop-after hold` (in, the fingers opened: the opening's walls must stop them short
+   of fully open), then `rammp pick-fork --start-at lift` (up, out; a side holder's empty tape found and the seat kept
+   against it; home). Then `rammp put-fork --stop-after back` (over the seat), then `rammp put-fork --start-at lower`.
+   The fingers are slow and soft and every move at the stand keeps the low `guards.torque_step_nm.fork`: the stand is
+   light. Too deep or too shallow in the opening: `utensil.pick.insert_m`; the fork not clear of the holder: `lift_m`.
+6. A side holder: the pick logs the seat from the strip's post end (`along, across, up`). Once a few picks agree, set
    `utensil.pick.seat_in_strip_m` to it: the stand is rigid, so the put-back then rests on its own geometry and that
    look's reading of the strip, not on the pick's.
 
@@ -169,7 +171,7 @@ If the setup was calibrated elsewhere, write the two files instead of running th
 | The scene camera moved | `rammp setup scene` |
 | The fork changed or re-seated, or the arm power-cycled | Check the 10 mm hover. If it is off, `glass_to_tip_m` and `calibrate-wrist` |
 | The fork's tip seen a few mm off at the hover, `glass_to_tip_m` right | `rammp tip DX DY` (where it is, less where it should be, base frame) |
-| The fork's stand moved | `rammp capture fork_look` over it, then `rammp pick-fork --stop-after above` and check the fingers are centred |
+| The fork's stand moved | `rammp capture fork_look` over it, then `rammp pick-fork --stop-after hover` and check the fingers are centred |
 | The wrist camera moved | `calibrate-wrist`, then `rammp setup scene` |
 
 ## Entering an existing calibration

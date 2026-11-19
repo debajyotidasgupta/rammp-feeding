@@ -3,9 +3,11 @@ against tests/fake_robot.py (the level test site: its stand beside the bowl): ra
 food_detect_start, perceive, acquire, the presentation, retract, home: tests/test_bite.py's), the stand nudged,
 rammp put-fork (the stand found again by its strip).
 
-    python3 tests/test_fork.py [--fakes]
+    python3 tests/test_fork.py [--fakes] [--top]
         --fakes: the stand, the food and the mouth the module's own stand-ins (rammp_feeding/fakes.py), where the fake
         robot has them
+        --top: a holder the fork leaves straight up (utensil.pick.holder top): put back where it was picked from, the
+        stand not nudged
 
 What it checks: the order of the gripper's commands and where the fingers are at each, the moves' refusals and
 geometry, the fork's state across the three. What it cannot: the opening's fit, contact (the block is rendered).
@@ -36,7 +38,9 @@ def main() -> int:
     sc = Scene()
     robot = FakeRobot(sc, scene.captured("home"))
     fork.save_state(dict(holding=False))
-    faked = "--fakes" in sys.argv
+    faked, top = "--fakes" in sys.argv, "--top" in sys.argv
+    if top:
+        cfg["utensil"]["pick"].update(holder="top", open_side=None)
     if faked:                                        # the module's stand-ins where the fake robot has the things
         cfg["fakes"].update(holder={"centre_m": list(sc.hole_at), "long_deg": sc.hole_yaw_deg},
                             food={"pieces_m": [list(sc.piece_xy)]}, mouth={"at_m": list(sc.mouth)}, open_after_s=0.0)
@@ -73,7 +77,8 @@ def main() -> int:
     assert g_at(arm, scene.captured("home")), "the bite did not end home"
     fed = len(robot.moves) - picked
 
-    sc.move_stand(0.012, 0.009, -6.0)                # (bumped during the meal: the put-back finds it again)
+    if not top:
+        sc.move_stand(0.012, 0.009, -6.0)            # (bumped during the meal: the put-back finds it again)
     if faked:
         cfg["fakes"]["holder"] = {"centre_m": list(sc.hole_at), "long_deg": sc.hole_yaw_deg}
     in_hole = np.asarray(sc.hole_at) - [0.0, 0.0, float(P.insert_m)]
@@ -85,9 +90,9 @@ def main() -> int:
     assert not fork.holding() and "hole" not in fork.state()
     assert any(o["name"] == "fork_stand" for o in scene.world()["obstacles"]), "the stand not kept in the world"
     assert g_at(arm, scene.captured("home")), "the put-back did not end home"
-    print("THE FORK GOES THROUGH (picked up at %s, %d moves; a bite, %d moves; hung back, %d moves; %.1f s%s)"
+    print("THE FORK GOES THROUGH (picked up at %s, %d moves; a bite, %d moves; hung back, %d moves; %.1f s%s%s)"
           % (out["opening_m"], picked, fed, len(robot.moves) - picked - fed, time.time() - t0,
-             "; fakes" if faked else ""))
+             "; fakes" if faked else "", "; a top holder" if top else ""))
     return 0
 
 

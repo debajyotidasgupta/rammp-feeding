@@ -79,7 +79,9 @@ motion:
   near_pose_deg: 1.0            # within this of a pose's joints = "at" that pose (a tool pose: its orientation) ...
   near_pose_m: 0.003            # ... and a tool pose within this of its position
   arrived_m: 0.002              # a straight move this short is no move
-  settle_dps: 10.0              # a short joint move onto a goal (after a planned path)
+  settle_dps: 10.0              # a short joint move onto a goal (after a planned path) ...
+  settle_max_deg: 5.0           # ... where the path ended at most this far from its joints (further, at the goal's pose
+                                # in another arm shape: kept; elsewhere: stopped)
   direct_dps: 20.0              # rammp home --direct: one joint move to feeding_start, no planner
   path_tolerance_deg: 20.0      # the driver aborts a move the arm diverges from by this much on any joint
   goal_tolerance_deg: 1.0

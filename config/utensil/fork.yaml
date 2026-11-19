@@ -33,6 +33,7 @@ pick:                           # a stand to pick the fork from (rammp_feeding/f
                                 # seen to go in off the opening's centre
   max_turn_deg: 20.0            # the fingers turned at most this far from fork_look's to line up with the opening
                                 # (more: the stand turned, or not the holder's opening)
+  near_shape_deg: 90.0          # over the opening: an arm shape within this (every joint) of fork_look's taken first
   glass_to_fingertips_m: null   # SITE (with use): a ruler from the wrist camera's front glass straight out to the closed
                                 # fingers' ends (glass_to_tip_m's ruler); they are on the tool's axis
   above_m: 0.10                 # over the opening: the finger ends this far above the rim, pointing straight down

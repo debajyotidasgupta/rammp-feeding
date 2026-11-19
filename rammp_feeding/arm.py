@@ -531,8 +531,25 @@ class Arm:
             self.last_run = ([[float(v) for v in p] for p in timed], [float(d) for d in durations], kw.get("tilt_cap"),
                              carrying)
             if not (level or pose):                   # (a plan to the pose ends there, maybe in other joints: kept)
-                self.goto(goal, "settle " + label)
+                self.settle(goal, label)
         return path
+
+    def settle(self, goal: Sequence[float], label: str) -> None:
+        """After a planned path to goal's joints: a short joint move onto them where it ended within settle_max_deg;
+        ended at goal's tool pose in another arm shape (the planner's own pick), kept as it is -- a joint move between
+        two shapes swings the wrist round where the tool is; ended anywhere else, MoveError (stopped where it is)."""
+        q = self.q()
+        off = max_step(q, goal)
+        if off <= float(M.settle_max_deg):
+            self.goto(goal, "settle " + label)
+            return
+        (T, R), (Tg, Rg) = self.tool(q), self.tool(goal)
+        m, deg = float(np.linalg.norm(Tg - T)), math.degrees(float(np.linalg.norm(rot_log(Rg @ R.T))))
+        if m <= float(M.near_pose_m) and deg <= float(M.near_pose_deg):
+            log.info("    %-28s at its pose in another arm shape (%.0f deg from the goal's joints): kept", label, off)
+            return
+        raise MoveError("%s: the planned path ended %.0f mm, %.1f deg from the goal (%.0f deg from its joints) -- "
+                        "stopped there" % (label, 1000 * m, deg, off))
 
     def _short_way(self, pos, goal) -> bool:
         """Whether a path takes the tool round the arm's base the short way (its bearing from the base)."""

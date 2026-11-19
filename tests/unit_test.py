@@ -1206,7 +1206,7 @@ class ForkPick(unittest.TestCase):
                 m = min(m, self.arm.margin(q))
             return m
         other = R @ np.diag([-1.0, -1.0, 1.0])                   # (turned 180 deg about its axis)
-        self.assertGreaterEqual(margin(R), margin(other))
+        self.assertGreaterEqual(margin(R) + 1e-6, margin(other))   # (a tie either way)
         h.long_axis = -h.long_axis                               # (the same opening, its axis the other way)
         np.testing.assert_allclose(fork.insertion(self.arm, R_look, h)[0], R, atol=1e-9)
         b = a + math.radians(float(self.P.max_turn_deg) + 5.0)
@@ -1581,6 +1581,40 @@ class Fakes(unittest.TestCase):
         self.assertEqual(sensing.now().target(None, None, None), {"mine": True})
         sensing.use(None)
         self.assertIsNot(sensing.now().target, mine.target)
+
+
+class Settle(unittest.TestCase):
+    def test_a_planned_path_ending_in_another_arm_shape_is_not_swung_round(self):
+        """After a planned path: within settle_max_deg of the goal's joints, settled onto them; at the goal's pose in
+        another arm shape, kept (a joint move between the two shapes swings the wrist round where the tool is);
+        anywhere else, stopped there."""
+        sc = Scene()
+        site(sc)
+        robot = FakeRobot(sc, scene.captured("home"))
+        arm = Arm(robot)
+        goal = scene.overlook_joints(arm)
+        T, R = arm.tool(goal)
+        other = None
+        for seed in np.random.default_rng(1).uniform(-170, 170, (300, 7)):
+            q = arm.ik(T, R, list(seed))
+            if q is not None and g.max_step(q, goal) > 60:
+                other = q
+                break
+        self.assertIsNotNone(other)
+        robot.raw = np.radians(other)
+        n = len(robot.moves)
+        arm.settle(goal, "onto the goal")
+        self.assertEqual(len(robot.moves), n)                    # kept: no joint move between the shapes
+        far = arm.ik(T + [0.10, 0, 0], R, goal)                  # (a 3 cm miss is a few degrees: settled)
+        self.assertGreater(g.max_step(far, goal), float(cfg.motion.settle_max_deg))
+        robot.raw = np.radians(far)
+        with self.assertRaisesRegex(MoveError, "ended 100 mm"):
+            arm.settle(goal, "onto the goal")
+        robot.raw = np.radians(np.asarray(goal) + [0, 0, 0, 0, 0, 0, 2.0])
+        n = len(robot.moves)
+        arm.settle(goal, "onto the goal")                        # a small gap: settled onto its joints
+        self.assertEqual(len(robot.moves), n + 1)
+        self.assertLess(g.max_step(arm.q(), goal), 0.1)
 
 
 class OurPathsChecked(unittest.TestCase):

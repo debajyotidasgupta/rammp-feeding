@@ -68,6 +68,7 @@ import numpy as np
 from rammp_feeding import record, scene, sensing
 from rammp_feeding.arm import Arm, Held, MoveError
 from rammp_feeding.config import cfg, read_json, state_dir
+from rammp_feeding.geometry import max_step
 
 log = logging.getLogger("rammp")
 Step = Callable[[str, float, str], None]
@@ -288,8 +289,9 @@ def insertion(arm: Arm, R_look: np.ndarray, h: Hole) -> tuple[np.ndarray, list]:
     """(R, the joints over the opening): the fingers pointing straight down (tool z down), the tool axis they open along
     (fingers_open_along_tool, x or y) along the opening's long side; MoveError when that turns them more than
     max_turn_deg from fork_look's (R_look), either way round. The gripper is the same turned 180 deg about its axis: of
-    the two, the one whose way in (over the opening, in it, the lift, by IK from the arm's joints, home's and a fixed
-    spread) keeps every joint furthest from its limit; the arm is planned to it over the opening (a stand beside the
+    the two, the one whose way in (over the opening -- by IK from the arm's joints, home's and a fixed spread -- then
+    the straight lines in and up, as they run) keeps every joint furthest from its limit, of the arm shapes within
+    near_shape_deg of the arm's own where there is one (the planner has no wrist to turn over on the way); the arm is planned to it over the opening (a stand beside the
     table can be out of a straight line's reach from fork_look)."""
     k = {"x": 0, "y": 1}[str(P().fingers_open_along_tool)]
     a = np.array([R_look[0, k], R_look[1, k], 0.0])
@@ -308,15 +310,18 @@ def insertion(arm: Arm, R_look: np.ndarray, h: Hole) -> tuple[np.ndarray, list]:
             seeds += [list(q0)] + [list(np.asarray(q0) + [0, 0, 0, 0, 0, 0, t]) for t in (180.0, -180.0)]
         seeds += [list(v) for v in np.random.default_rng(0).uniform(-170.0, 170.0, (60, 7))]
         for over in (v for v in (arm.ik(tool_at(h, R, float(P().above_m)), R, sd) for sd in seeds) if v is not None):
-            q, m = over, arm.margin(over)              # (each arm shape over it: in and up from there by IK)
-            for dz in (-float(P().insert_m), float(P().lift_m) - float(P().insert_m)):
-                q = arm.ik(tool_at(h, R, dz), R, q)
-                if q is None:
+            q, m = over, arm.margin(over)              # (each arm shape over it: in and up from there along the
+            for a_, b_ in ((P().above_m, -P().insert_m), (-P().insert_m, P().lift_m - P().insert_m)):   # straight
+                A_, B_ = tool_at(h, R, float(a_)), tool_at(h, R, float(b_))                           # lines run)
+                n = max(4, int(math.ceil(float(np.linalg.norm(B_ - A_)) / 0.005)))
+                path, _ = arm.homotopy(q, lambda s, A_=A_, B_=B_: (A_ + (B_ - A_) * s, R), n)
+                if path is None:
                     break
-                m = min(m, arm.margin(q))
+                q, m = path[-1], min(m, min(arm.margin(p) for p in path))
             else:
-                if best is None or m > best[0]:
-                    best = (m, R, over)
+                near = max_step(over, arm.q()) <= float(P().near_shape_deg)
+                if best is None or (near, m) > (best[3], best[0]):
+                    best = (m, R, over, near)
     if best is None:
         raise MoveError(why)
     return best[1], best[2]
@@ -601,7 +606,6 @@ def put_down(robot, arm: Arm, g: Gripper, step: Step = _no_step, stop_after: str
         raise MoveError("the fork is not in the gripper")
     recover(robot, arm)                                # (a pick stopped in the opening: its lift finished first)
     s = state()
-    from rammp_feeding.geometry import max_step
     if s.get("lifted_joints") and max_step(arm.q(), s["lifted_joints"]) <= float(cfg.motion.near_pose_deg):
         h, R = Hole.from_json(s["hole"]), np.asarray(s["R"], float)    # lifted, never out: straight back down
         arm.hold(_fork(arm, h.centre))

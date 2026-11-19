@@ -84,7 +84,8 @@ class Kinematics(unittest.TestCase):
         J = self.kin.jacobian(q)
         p0, R0 = self.kin.fk(q)
         for i in range(7):
-            dq = np.zeros(7); dq[i] = 1e-4
+            dq = np.zeros(7)
+            dq[i] = 1e-4
             p1, R1 = self.kin.fk(np.asarray(q) + dq)
             num = np.concatenate([(p1 - p0), g.rot_log(R1 @ R0.T)]) / np.radians(1e-4)
             self.assertTrue(np.allclose(J[:, i], num, atol=1e-4), "joint %d" % (i + 1))

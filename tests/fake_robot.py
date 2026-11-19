@@ -244,7 +244,7 @@ class FakeRobot:
         block, hole, t_rim, t_floor = self._block()
         z = np.where(block & ~hole, t_rim, z)
         z = np.where(hole, t_floor, z)
-        return np.nan_to_num(1000 * z, nan=0.0).astype(np.uint16)
+        return np.clip(np.nan_to_num(1000 * z, nan=0.0, posinf=0.0, neginf=0.0), 0, 65535).astype(np.uint16)  # 0: none
 
     def _block(self):
         """The fork's block seen from the camera: (its top's pixels, the opening's, the depth along each ray to its top,

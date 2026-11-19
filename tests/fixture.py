@@ -22,7 +22,8 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "tests"))
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "tests"))
 SITE = os.environ.get("RAMMP_TEST_SITE", "level")
 WORK = Path(tempfile.mkdtemp(prefix="rammp_test_"))
 STATE = WORK / "state"

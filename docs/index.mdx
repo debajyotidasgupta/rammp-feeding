@@ -48,7 +48,7 @@ actions (`start_meal`, `feed` for one bite, `finish_meal`) and nothing moves oth
 | `tip DX DY` | The tip seen DX, DY m (base frame) off where the model puts it: the model moved to match. Never moves. |
 
 A command that cannot proceed refuses with the reason and leaves the arm still. Every command can be run again.
-Ctrl-C (or `docker kill --signal=SIGINT` on the command's container) cancels the move in flight.
+Ctrl-C, or `rammp-stop` from another terminal ([porting](porting.md)), cancels the move in flight.
 
 ### The fork's steps
 | Step | Pick (`pick-fork`) |

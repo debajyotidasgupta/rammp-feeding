@@ -38,7 +38,7 @@ From a new Jetson to `rammp feed`, in order.
 ```bash
 uv tool install "sheppy @ git+https://github.com/rammp-org/sheppy@dev"
 git clone https://github.com/rammp-org/rammp-deployments.git
-docker pull debajyotidasgupta/rammp-feeding:0.6.3
+docker pull debajyotidasgupta/rammp-feeding:0.7.0
 sudo mkdir -p /srv/rammp_feeding/config /srv/rammp_feeding/runs && sudo chown -R 1000:1000 /srv/rammp_feeding
 ```
 - SAM3's weights are gated: accept the `facebook/sam3` licence on Hugging Face and download the snapshot to the Jetson.
@@ -46,9 +46,16 @@ sudo mkdir -p /srv/rammp_feeding/config /srv/rammp_feeding/runs && sudo chown -R
   ```bash
   #!/usr/bin/env bash
   tty=-i; [ -t 0 ] && tty=-it
-  exec docker run --rm $tty --network host --ipc host --user 1000:1000 -e ROS_DOMAIN_ID=0 -e HOME=/tmp \
-    -v /srv/rammp_feeding/config:/config -v /srv/rammp_feeding/runs:/runs \
-    debajyotidasgupta/rammp-feeding:0.6.3 ros2 run rammp_feeding rammp "$@"
+  exec docker run --rm $tty --label rammp-cli=1 --network host --ipc host --user 1000:1000 -e ROS_DOMAIN_ID=0 \
+    -e HOME=/tmp -e RAMMP_SET -v /srv/rammp_feeding/config:/config -v /srv/rammp_feeding/runs:/runs \
+    debajyotidasgupta/rammp-feeding:0.7.0 /module_ws/install/rammp_feeding/lib/rammp_feeding/rammp "$@"
+  ```
+  and this as `/usr/local/bin/rammp-stop`, run from another terminal to cancel the move in flight (the arm halts where
+  it is, powered and held):
+  ```bash
+  #!/usr/bin/env bash
+  ids=$(docker ps -q --filter label=rammp-cli=1)
+  [ -n "$ids" ] && docker kill --signal=SIGINT $ids >/dev/null && echo "stopped" || echo "nothing running"
   ```
 
 ## 4. The deployment manifest

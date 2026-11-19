@@ -312,7 +312,9 @@ class Arm:
                     continue
                 last = ts
                 q = [float(v) for v in fold(np.degrees(raw_q))]
-                tel["t"].append(ts - t0); tel["q"].append(q); tel["tau"].append(list(tau))
+                tel["t"].append(ts - t0)
+                tel["q"].append(q)
+                tel["tau"].append(list(tau))
                 hit = guard.update(tau)
                 tilt = self.tilt(self.kin.fk(q)[1])
                 if hit and torque_stop:
@@ -569,7 +571,8 @@ class Arm:
 
     def _short_way(self, pos, goal) -> bool:
         """Whether a path takes the tool round the arm's base the short way (its bearing from the base)."""
-        bearing = lambda q: math.atan2(*self.tool(q)[0][1::-1])
+        def bearing(q):
+            return math.atan2(*self.tool(q)[0][1::-1])
         a = np.unwrap([bearing(p) for p in pos[::4]] + [bearing(goal)])
         short = (bearing(goal) - bearing(pos[0]) + math.pi) % (2 * math.pi) - math.pi
         return abs(a[-1] - a[0] - short) <= math.radians(float(M.free_space.short_way_slack_deg))
